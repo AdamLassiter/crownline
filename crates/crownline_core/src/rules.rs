@@ -1144,12 +1144,12 @@ const KNIGHT_OFFSETS: [(i8, i8); 8] = [
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use crate::{
         scenario::{
-            BoardSize, CastlingRoute, Deployment, Edge, EdgeKind, SCENARIO_SCHEMA_VERSION,
-            ScenarioMetadata, ScenarioRules, SettlementSite, TileTerrain,
+            BoardSize, CastlingRoute, Deployment, Edge, EdgeKind, Fortification, KeepDefinition,
+            SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules, SettlementSite, TileTerrain,
         },
         state::PieceOrigin,
     };
@@ -1211,6 +1211,24 @@ mod tests {
             .find(|piece| piece.at == at)
             .map(|piece| piece.id)
             .expect("fixture piece exists")
+    }
+
+    fn add_south_fortification(scenario: &mut ScenarioDefinition, tower: Coord, outside: Coord) {
+        let wall = Edge::new(tower, outside);
+        scenario.edges.insert(wall, EdgeKind::Wall);
+        scenario.fortifications.push(Fortification {
+            id: "south-tower".to_owned(),
+            owner: Player::South,
+            tower,
+            projected_wall: wall,
+        });
+        scenario.keeps.push(KeepDefinition {
+            id: "south-keep".to_owned(),
+            owner: Player::South,
+            tiles: BTreeSet::from([tower]),
+            gates: BTreeSet::new(),
+            fortification_ids: BTreeSet::from(["south-tower".to_owned()]),
+        });
     }
 
     #[test]
@@ -1419,6 +1437,150 @@ mod tests {
                 .iter()
                 .any(|mv| mv.piece == knight && mv.to == Coord::new(2, 4))
         );
+    }
+
+    #[test]
+    fn friendly_rook_projects_through_only_its_linked_wall() {
+        let tower = Coord::new(0, 7);
+        let outside = Coord::new(0, 6);
+        let target = Coord::new(0, 5);
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Rook, 0, 7)]);
+        add_south_fortification(&mut scenario, tower, outside);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let rook = piece_id_at(&state, tower);
+
+        assert!(
+            legal_moves(&scenario, &state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == rook && mv.to == target)
+        );
+        assert!(
+            attack_lines_on(&scenario, &state, target, Player::South)
+                .unwrap()
+                .iter()
+                .any(|attack| attack.attacker == rook)
+        );
+
+        let mut wrong_piece = state.clone();
+        wrong_piece.pieces.get_mut(&rook).unwrap().kind = PieceKind::Queen;
+        assert!(
+            attack_lines_on(&scenario, &wrong_piece, target, Player::South)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut wrong_owner = state.clone();
+        wrong_owner.pieces.get_mut(&rook).unwrap().owner = Player::North;
+        assert!(
+            attack_lines_on(&scenario, &wrong_owner, target, Player::North)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn projection_disappears_after_leaving_or_capture() {
+        let tower = Coord::new(0, 7);
+        let outside = Coord::new(0, 6);
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Rook, 0, 7)]);
+        add_south_fortification(&mut scenario, tower, outside);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let rook = piece_id_at(&state, tower);
+        let moved = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: rook,
+                to: outside,
+            },
+        )
+        .unwrap()
+        .state;
+        assert!(
+            attack_lines_on(&scenario, &moved, tower, Player::South)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut captured = state;
+        captured.pieces.remove(&rook);
+        assert!(
+            attack_lines_on(&scenario, &captured, Coord::new(0, 5), Player::South)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn projection_respects_downstream_forest_blockers_and_check() {
+        let tower = Coord::new(0, 7);
+        let outside = Coord::new(0, 6);
+        let mut forest_scenario =
+            scenario_with(vec![deployment(Player::South, PieceKind::Rook, 0, 7)]);
+        add_south_fortification(&mut forest_scenario, tower, outside);
+        forest_scenario
+            .terrain
+            .insert(Coord::new(0, 5), TileTerrain::Forest);
+        let forest_state = MatchState::from_scenario(&forest_scenario).unwrap();
+        assert_eq!(
+            attack_lines_on(
+                &forest_scenario,
+                &forest_state,
+                Coord::new(0, 5),
+                Player::South
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        assert!(
+            attack_lines_on(
+                &forest_scenario,
+                &forest_state,
+                Coord::new(0, 4),
+                Player::South
+            )
+            .unwrap()
+            .is_empty()
+        );
+
+        let mut blocker_scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Rook, 0, 7),
+            deployment(Player::South, PieceKind::Pawn, 0, 5),
+        ]);
+        add_south_fortification(&mut blocker_scenario, tower, outside);
+        let blocker_state = MatchState::from_scenario(&blocker_scenario).unwrap();
+        assert_eq!(
+            attack_lines_on(
+                &blocker_scenario,
+                &blocker_state,
+                Coord::new(0, 5),
+                Player::South
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        assert!(
+            attack_lines_on(
+                &blocker_scenario,
+                &blocker_state,
+                Coord::new(0, 4),
+                Player::South
+            )
+            .unwrap()
+            .is_empty()
+        );
+
+        let mut check_scenario = scenario_with(vec![
+            deployment(Player::North, PieceKind::King, 0, 5),
+            deployment(Player::South, PieceKind::Rook, 0, 7),
+        ]);
+        add_south_fortification(&mut check_scenario, tower, outside);
+        let check_state = MatchState::from_scenario(&check_scenario).unwrap();
+        assert!(is_in_check(&check_scenario, &check_state, Player::North).unwrap());
     }
 
     #[test]
