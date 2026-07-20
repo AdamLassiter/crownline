@@ -28,6 +28,13 @@ pub struct LegalMove {
     pub kind: MoveKind,
 }
 
+/// One geometric attack, with a path containing both attacker and target.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct AttackLine {
+    pub attacker: PieceId,
+    pub path: Vec<Coord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub state: MatchState,
@@ -123,6 +130,47 @@ pub fn is_in_check(
         .find(|piece| piece.owner == player && piece.kind == PieceKind::King)
         .ok_or(TransitionError::MissingKing(player))?;
     Ok(Board::new(scenario, state).is_square_attacked(king.at, player.opponent()))
+}
+
+/// Returns geometric attackers and their unblocked paths in stable piece order.
+///
+/// Friendly-occupied targets are included because they are protected even
+/// though the attacker cannot land there. King-safety filtering is not applied.
+///
+/// # Errors
+///
+/// Returns typed scenario, state, scenario-identity, or target-bound errors.
+pub fn attack_lines_on(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    target: Coord,
+    by: Player,
+) -> Result<Vec<AttackLine>, TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    state.validate_invariants()?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+    if !target.is_within(scenario.board) {
+        return Err(TransitionError::CoordinateOutOfBounds(target));
+    }
+    let board = Board::new(scenario, state);
+    Ok(state
+        .pieces
+        .values()
+        .filter(|piece| piece.owner == by)
+        .filter_map(|piece| {
+            board.attack_path_to(piece, target).map(|path| AttackLine {
+                attacker: piece.id,
+                path,
+            })
+        })
+        .collect())
 }
 
 /// Applies one action transactionally through the canonical rules engine.
@@ -728,6 +776,57 @@ impl<'a> Board<'a> {
         }
     }
 
+    fn attack_path_to(&self, piece: &Piece, target: Coord) -> Option<Vec<Coord>> {
+        let slider_directions = match piece.kind {
+            PieceKind::Queen => Some(QUEEN_DIRECTIONS.as_slice()),
+            PieceKind::Rook => Some(ROOK_DIRECTIONS.as_slice()),
+            PieceKind::Bishop => Some(BISHOP_DIRECTIONS.as_slice()),
+            PieceKind::Knight | PieceKind::King | PieceKind::Pawn => None,
+        };
+        if let Some(directions) = slider_directions {
+            for &direction in directions {
+                let mut current = piece.at;
+                let mut path = vec![piece.at];
+                while let Some(next) = offset_coord(current, direction) {
+                    if !next.is_within(self.scenario.board)
+                        || self.terrain(next) == TileTerrain::Mountain
+                        || !self.can_cross(piece, current, next)
+                    {
+                        break;
+                    }
+                    path.push(next);
+                    if next == target {
+                        return Some(path);
+                    }
+                    if self.occupancy.contains_key(&next)
+                        || self.terrain(next) == TileTerrain::Forest
+                    {
+                        break;
+                    }
+                    current = next;
+                }
+            }
+            return None;
+        }
+
+        let attacks = match piece.kind {
+            PieceKind::Knight => self.jump_attacks(piece, &KNIGHT_OFFSETS),
+            PieceKind::King => KING_OFFSETS
+                .into_iter()
+                .filter_map(|offset| self.step(piece, offset))
+                .collect(),
+            PieceKind::Pawn => {
+                let direction = self.scenario.rules.pawn_forward_y[&piece.owner];
+                [(-1, direction), (1, direction)]
+                    .into_iter()
+                    .filter_map(|offset| self.step(piece, offset))
+                    .collect()
+            }
+            PieceKind::Queen | PieceKind::Rook | PieceKind::Bishop => unreachable!(),
+        };
+        attacks.contains(&target).then(|| vec![piece.at, target])
+    }
+
     fn is_square_attacked(&self, at: Coord, by: Player) -> bool {
         self.state
             .pieces
@@ -1112,6 +1211,67 @@ mod tests {
             .find(|piece| piece.at == at)
             .map(|piece| piece.id)
             .expect("fixture piece exists")
+    }
+
+    #[test]
+    fn attack_lines_include_friendly_blocker_but_stop_behind_it() {
+        let scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Rook, 0, 7),
+            deployment(Player::South, PieceKind::Pawn, 0, 5),
+        ]);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let rook = piece_id_at(&state, Coord::new(0, 7));
+
+        assert_eq!(
+            attack_lines_on(&scenario, &state, Coord::new(0, 5), Player::South).unwrap(),
+            vec![AttackLine {
+                attacker: rook,
+                path: vec![Coord::new(0, 7), Coord::new(0, 6), Coord::new(0, 5)],
+            }]
+        );
+        assert!(
+            attack_lines_on(&scenario, &state, Coord::new(0, 4), Player::South)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn attack_queries_cover_corner_jumps_edges_and_both_pawn_orientations() {
+        let scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Knight, 0, 0),
+            deployment(Player::South, PieceKind::Pawn, 2, 6),
+            deployment(Player::North, PieceKind::Pawn, 5, 1),
+        ]);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let knight = piece_id_at(&state, Coord::new(0, 0));
+        let south_pawn = piece_id_at(&state, Coord::new(2, 6));
+        let north_pawn = piece_id_at(&state, Coord::new(5, 1));
+
+        for target in [Coord::new(1, 2), Coord::new(2, 1)] {
+            assert!(
+                attack_lines_on(&scenario, &state, target, Player::South)
+                    .unwrap()
+                    .iter()
+                    .any(|attack| attack.attacker == knight)
+            );
+        }
+        assert!(
+            attack_lines_on(&scenario, &state, Coord::new(1, 5), Player::South)
+                .unwrap()
+                .iter()
+                .any(|attack| attack.attacker == south_pawn)
+        );
+        assert!(
+            attack_lines_on(&scenario, &state, Coord::new(4, 2), Player::North)
+                .unwrap()
+                .iter()
+                .any(|attack| attack.attacker == north_pawn)
+        );
+        assert!(matches!(
+            attack_lines_on(&scenario, &state, Coord::new(8, 0), Player::South),
+            Err(TransitionError::CoordinateOutOfBounds(Coord { x: 8, y: 0 }))
+        ));
     }
 
     #[test]

@@ -412,6 +412,8 @@ pub enum TransitionError {
     SettlementCannotProduce(u16),
     #[error("piece {piece:?} cannot legally move to {to:?}")]
     IllegalMove { piece: PieceId, to: Coord },
+    #[error("coordinate {0:?} is outside the board")]
+    CoordinateOutOfBounds(Coord),
     #[error("piece {0:?} is missing")]
     MissingPiece(PieceId),
     #[error("{0:?} has no King")]
