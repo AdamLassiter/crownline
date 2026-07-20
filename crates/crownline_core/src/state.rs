@@ -465,6 +465,7 @@ mod tests {
             ],
             settlements: vec![],
             promotion_sites: vec![],
+            keeps: vec![],
             fortifications: vec![],
             castling_routes: vec![],
             rules: ScenarioRules {

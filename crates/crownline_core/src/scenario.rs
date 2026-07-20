@@ -132,6 +132,15 @@ pub struct Fortification {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeepDefinition {
+    pub id: String,
+    pub owner: Player,
+    pub tiles: BTreeSet<Coord>,
+    pub gates: BTreeSet<Edge>,
+    pub fortification_ids: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CastlingRoute {
     pub id: String,
     pub player: Player,
@@ -198,6 +207,8 @@ pub struct ScenarioDefinition {
     pub settlements: Vec<SettlementSite>,
     #[serde(default)]
     pub promotion_sites: Vec<PromotionSite>,
+    #[serde(default)]
+    pub keeps: Vec<KeepDefinition>,
     #[serde(default)]
     pub fortifications: Vec<Fortification>,
     #[serde(default)]
@@ -488,6 +499,7 @@ mod tests {
             ],
             settlements: vec![],
             promotion_sites: vec![],
+            keeps: vec![],
             fortifications: vec![],
             castling_routes: vec![],
             rules: ScenarioRules::default(),
@@ -517,5 +529,21 @@ mod tests {
         let a = Coord::new(1, 2);
         let b = Coord::new(1, 3);
         assert_eq!(Edge::new(a, b), Edge::new(b, a));
+    }
+
+    #[test]
+    fn keep_schema_round_trips_through_ron() {
+        let mut scenario = minimal_scenario();
+        scenario.rules.army_setup = ArmySetup::Custom;
+        scenario.keeps.push(KeepDefinition {
+            id: "north-keep".to_owned(),
+            owner: Player::North,
+            tiles: BTreeSet::from([Coord::new(7, 1)]),
+            gates: BTreeSet::from([Edge::new(Coord::new(7, 1), Coord::new(7, 2))]),
+            fortification_ids: BTreeSet::new(),
+        });
+        let encoded = ron::to_string(&scenario).expect("scenario serializes");
+        let decoded: ScenarioDefinition = ron::from_str(&encoded).expect("scenario deserializes");
+        assert_eq!(decoded, scenario);
     }
 }

@@ -768,6 +768,7 @@ mod tests {
             deployments,
             settlements: Vec::new(),
             promotion_sites: Vec::new(),
+            keeps: Vec::new(),
             fortifications: Vec::new(),
             castling_routes: Vec::new(),
             rules: ScenarioRules {
