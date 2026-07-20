@@ -4,7 +4,12 @@ Create the deterministic, serializable vocabulary and state transition boundary 
 
 ## Status
 
-- [ ] In progress
+- [x] Done
+
+## Implementation notes
+
+- The core crate now owns validated scenarios, canonical match state, typed deterministic action transitions, versioned save/snapshot envelopes, and bounded replayable action journals.
+- Identity allocation, ordered collections, canonical hashes, explicit migrations, integrity checks, and idempotent replay form the shared local/server authority boundary.
 
 ## Stories
 
