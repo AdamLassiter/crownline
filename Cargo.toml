@@ -1,6 +1,72 @@
 [package]
 name = "crownline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Crownlines desktop client"
+
+[workspace]
+resolver = "2"
+members = [
+    ".",
+    "crates/crownline_core",
+    "crates/crownline_protocol",
+    "crates/crownline_server",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[workspace.dependencies]
+anyhow = "1.0.98"
+axum = { version = "0.8.4", features = ["http1", "json", "tokio", "ws"] }
+bevy = { version = "0.19.0", default-features = false, features = ["2d", "wayland", "x11"] }
+directories = "6.0.0"
+rand = "0.9.1"
+ron = "0.10.1"
+rusqlite = { version = "0.37.0", features = ["bundled"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.9"
+thiserror = "2.0.12"
+tokio = { version = "1.45.1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6.6", features = ["trace"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1.16.0", features = ["serde", "v4"] }
 
 [dependencies]
+bevy.workspace = true
+crownline_core = { path = "crates/crownline_core" }
+crownline_protocol = { path = "crates/crownline_protocol" }
+directories.workspace = true
+ron.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"

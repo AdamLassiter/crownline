@@ -2,6 +2,10 @@
 
 Establish the workspace, dependency boundaries, automated checks, and licensed assets on which all later work relies.
 
+## Status
+
+- [ ] In progress
+
 ## Stories
 
 - [01.01 Workspace architecture](01.01-workspace/01.01-story.md)
@@ -22,4 +26,3 @@ Establish the workspace, dependency boundaries, automated checks, and licensed a
 ## Cross-cutting concerns
 
 - Compatibility, licensing, platform portability, build reproducibility, and observability.
-

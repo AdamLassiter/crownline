@@ -1,0 +1,16 @@
+[package]
+name = "crownline_protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Versioned Crownlines client/server protocol"
+
+[dependencies]
+crownline_core = { path = "../crownline_core" }
+serde.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
+
