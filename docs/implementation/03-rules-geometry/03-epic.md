@@ -2,6 +2,10 @@
 
 Implement legal chess movement on Crownlines' larger, terrain-shaped boards while preserving check, pins, and deterministic attack semantics.
 
+## Status
+
+- [ ] In progress
+
 ## Stories
 
 - [03.01 Movement and attacks](03.01-movement/03.01-story.md)
@@ -21,4 +25,3 @@ Implement legal chess movement on Crownlines' larger, terrain-shaped boards whil
 ## Cross-cutting concerns
 
 - Determinism, performance on 24x24 maps, explainable illegality, and property testing.
-
