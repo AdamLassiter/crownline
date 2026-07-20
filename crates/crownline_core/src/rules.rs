@@ -36,6 +36,29 @@ pub struct AttackLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernanceReport {
+    pub settlement_index: u16,
+    pub owner: Option<Player>,
+    pub governors: Vec<AttackLine>,
+    pub blocked: Vec<BlockedGovernanceLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockedGovernanceLine {
+    pub candidate: PieceId,
+    pub path: Vec<Coord>,
+    pub blocker: GovernanceBlocker,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernanceBlocker {
+    Piece { piece: PieceId, at: Coord },
+    Terrain { at: Coord, terrain: TileTerrain },
+    Edge { edge: Edge, kind: EdgeKind },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub state: MatchState,
     pub events: Vec<TransitionEvent>,
@@ -171,6 +194,72 @@ pub fn attack_lines_on(
             })
         })
         .collect())
+}
+
+/// Resolves geometric major-piece governance and blocked candidate lines for
+/// one settlement.
+///
+/// # Errors
+///
+/// Returns typed scenario, state, identity, or settlement-index errors.
+pub fn governance_report(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    settlement_index: u16,
+) -> Result<GovernanceReport, TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    state.validate_invariants()?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+    let settlement = state
+        .settlements
+        .iter()
+        .find(|settlement| settlement.site_index == settlement_index)
+        .ok_or(TransitionError::MissingSettlement(settlement_index))?;
+    let target = scenario
+        .settlements
+        .get(usize::from(settlement_index))
+        .ok_or(TransitionError::MissingSettlement(settlement_index))?
+        .at;
+    let mut report = GovernanceReport {
+        settlement_index,
+        owner: settlement.owner,
+        governors: Vec::new(),
+        blocked: Vec::new(),
+    };
+    let Some(owner) = settlement.owner else {
+        return Ok(report);
+    };
+    let board = Board::new(scenario, state);
+    for piece in state.pieces.values().filter(|piece| {
+        piece.owner == owner
+            && matches!(
+                piece.kind,
+                PieceKind::King | PieceKind::Queen | PieceKind::Rook | PieceKind::Bishop
+            )
+    }) {
+        match board.governance_trace(piece, target) {
+            Some(GovernanceTrace::Clear(path)) => report.governors.push(AttackLine {
+                attacker: piece.id,
+                path,
+            }),
+            Some(GovernanceTrace::Blocked { path, blocker }) => {
+                report.blocked.push(BlockedGovernanceLine {
+                    candidate: piece.id,
+                    path,
+                    blocker,
+                });
+            }
+            None => {}
+        }
+    }
+    Ok(report)
 }
 
 /// Applies one action transactionally through the canonical rules engine.
@@ -730,6 +819,14 @@ struct Board<'a> {
     occupancy: BTreeMap<Coord, &'a Piece>,
 }
 
+enum GovernanceTrace {
+    Clear(Vec<Coord>),
+    Blocked {
+        path: Vec<Coord>,
+        blocker: GovernanceBlocker,
+    },
+}
+
 impl<'a> Board<'a> {
     fn new(scenario: &'a ScenarioDefinition, state: &'a MatchState) -> Self {
         Self {
@@ -825,6 +922,57 @@ impl<'a> Board<'a> {
             PieceKind::Queen | PieceKind::Rook | PieceKind::Bishop => unreachable!(),
         };
         attacks.contains(&target).then(|| vec![piece.at, target])
+    }
+
+    fn governance_trace(&self, piece: &Piece, target: Coord) -> Option<GovernanceTrace> {
+        let direction = aligned_direction(piece, target)?;
+        let mut current = piece.at;
+        let mut path = vec![piece.at];
+        loop {
+            let next = offset_coord(current, direction)?;
+            if !next.is_within(self.scenario.board) {
+                return None;
+            }
+            if self.terrain(next) == TileTerrain::Mountain {
+                path.push(next);
+                return Some(GovernanceTrace::Blocked {
+                    path,
+                    blocker: GovernanceBlocker::Terrain {
+                        at: next,
+                        terrain: TileTerrain::Mountain,
+                    },
+                });
+            }
+            if let Some((edge, kind)) = self.first_blocking_edge(piece, current, next) {
+                return Some(GovernanceTrace::Blocked {
+                    path,
+                    blocker: GovernanceBlocker::Edge { edge, kind },
+                });
+            }
+            path.push(next);
+            if next == target {
+                return Some(GovernanceTrace::Clear(path));
+            }
+            if let Some(blocker) = self.occupancy.get(&next) {
+                return Some(GovernanceTrace::Blocked {
+                    path,
+                    blocker: GovernanceBlocker::Piece {
+                        piece: blocker.id,
+                        at: next,
+                    },
+                });
+            }
+            if self.terrain(next) == TileTerrain::Forest {
+                return Some(GovernanceTrace::Blocked {
+                    path,
+                    blocker: GovernanceBlocker::Terrain {
+                        at: next,
+                        terrain: TileTerrain::Forest,
+                    },
+                });
+            }
+            current = next;
+        }
     }
 
     fn is_square_attacked(&self, at: Coord, by: Player) -> bool {
@@ -1117,35 +1265,69 @@ impl<'a> Board<'a> {
     }
 
     fn can_cross(&self, piece: &Piece, from: Coord, to: Coord) -> bool {
+        self.first_blocking_edge(piece, from, to).is_none()
+    }
+
+    fn first_blocking_edge(
+        &self,
+        piece: &Piece,
+        from: Coord,
+        to: Coord,
+    ) -> Option<(Edge, EdgeKind)> {
         let dx = from.x.abs_diff(to.x);
         let dy = from.y.abs_diff(to.y);
         if dx <= 1 && dy <= 1 && dx + dy > 0 {
             if dx == 1 && dy == 1 {
                 let horizontal = Coord::new(to.x, from.y);
                 let vertical = Coord::new(from.x, to.y);
-                return self.can_cross_edge(piece, Edge::new(from, horizontal))
-                    && self.can_cross_edge(piece, Edge::new(from, vertical))
-                    && self.can_cross_edge(piece, Edge::new(horizontal, to))
-                    && self.can_cross_edge(piece, Edge::new(vertical, to));
+                return [
+                    Edge::new(from, horizontal),
+                    Edge::new(from, vertical),
+                    Edge::new(horizontal, to),
+                    Edge::new(vertical, to),
+                ]
+                .into_iter()
+                .find_map(|edge| self.blocking_edge(piece, edge));
             }
-            return self.can_cross_edge(piece, Edge::new(from, to));
+            return self.blocking_edge(piece, Edge::new(from, to));
         }
-        true
+        None
     }
 
-    fn can_cross_edge(&self, piece: &Piece, edge: Edge) -> bool {
+    fn blocking_edge(&self, piece: &Piece, edge: Edge) -> Option<(Edge, EdgeKind)> {
         match self.scenario.edges.get(&edge) {
-            None | Some(EdgeKind::Bridge | EdgeKind::Ford | EdgeKind::Gate) => true,
-            Some(EdgeKind::River) => false,
+            None | Some(EdgeKind::Bridge | EdgeKind::Ford | EdgeKind::Gate) => None,
+            Some(EdgeKind::River) => Some((edge, EdgeKind::River)),
             Some(EdgeKind::Wall) => {
-                piece.kind == PieceKind::Rook
+                let projected = piece.kind == PieceKind::Rook
                     && self.scenario.fortifications.iter().any(|fortification| {
                         fortification.owner == piece.owner
                             && fortification.tower == piece.at
                             && fortification.projected_wall == edge
-                    })
+                    });
+                (!projected).then_some((edge, EdgeKind::Wall))
             }
         }
+    }
+}
+
+fn aligned_direction(piece: &Piece, target: Coord) -> Option<(i8, i8)> {
+    let dx = i32::from(target.x) - i32::from(piece.at.x);
+    let dy = i32::from(target.y) - i32::from(piece.at.y);
+    let direction = (dx.signum() as i8, dy.signum() as i8);
+    match piece.kind {
+        PieceKind::King if dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0) => {
+            Some(direction)
+        }
+        PieceKind::Queen if dx == 0 || dy == 0 || dx.abs() == dy.abs() => Some(direction),
+        PieceKind::Rook if (dx == 0) ^ (dy == 0) => Some(direction),
+        PieceKind::Bishop if dx.abs() == dy.abs() && dx != 0 => Some(direction),
+        PieceKind::King
+        | PieceKind::Queen
+        | PieceKind::Rook
+        | PieceKind::Bishop
+        | PieceKind::Knight
+        | PieceKind::Pawn => None,
     }
 }
 
@@ -1277,6 +1459,13 @@ mod tests {
         });
     }
 
+    fn add_settlement(scenario: &mut ScenarioDefinition, at: Coord) {
+        scenario.settlements.push(SettlementSite {
+            id: "governance-test".to_owned(),
+            at,
+        });
+    }
+
     #[test]
     fn attack_lines_include_friendly_blocker_but_stop_behind_it() {
         let scenario = scenario_with(vec![
@@ -1336,6 +1525,104 @@ mod tests {
             attack_lines_on(&scenario, &state, Coord::new(8, 0), Player::South),
             Err(TransitionError::CoordinateOutOfBounds(Coord { x: 8, y: 0 }))
         ));
+    }
+
+    #[test]
+    fn governance_includes_founder_endpoint_pins_and_stable_multiple_governors() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Bishop, 0, 0),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Knight, 2, 5),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let founder = piece_id_at(&state, target);
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(founder);
+
+        let report = governance_report(&scenario, &state, 0).unwrap();
+        assert_eq!(report.governors.len(), 2);
+        assert!(report.governors.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(
+            report
+                .governors
+                .iter()
+                .all(|line| line.path.last() == Some(&target))
+        );
+        assert!(report.governors.iter().all(|line| line.attacker != founder));
+
+        let pinned_target = Coord::new(4, 4);
+        let mut pinned_scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::King, 7, 6),
+            deployment(Player::South, PieceKind::Rook, 4, 6),
+            deployment(Player::North, PieceKind::Rook, 0, 6),
+        ]);
+        add_settlement(&mut pinned_scenario, pinned_target);
+        let mut pinned_state = MatchState::from_scenario(&pinned_scenario).unwrap();
+        pinned_state.settlements[0].owner = Some(Player::South);
+        let pinned_rook = piece_id_at(&pinned_state, Coord::new(4, 6));
+        assert!(
+            governance_report(&pinned_scenario, &pinned_state, 0)
+                .unwrap()
+                .governors
+                .iter()
+                .any(|line| line.attacker == pinned_rook)
+        );
+    }
+
+    #[test]
+    fn governance_reports_piece_terrain_and_edge_blockers() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Bishop, 0, 0),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+            deployment(Player::South, PieceKind::Pawn, 3, 5),
+            deployment(Player::South, PieceKind::Queen, 7, 3),
+            deployment(Player::South, PieceKind::Bishop, 6, 0),
+        ]);
+        add_settlement(&mut scenario, target);
+        scenario
+            .terrain
+            .insert(Coord::new(1, 1), TileTerrain::Forest);
+        scenario
+            .terrain
+            .insert(Coord::new(5, 3), TileTerrain::Mountain);
+        scenario.edges.insert(
+            Edge::new(Coord::new(6, 0), Coord::new(5, 0)),
+            EdgeKind::River,
+        );
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.settlements[0].owner = Some(Player::South);
+
+        let report = governance_report(&scenario, &state, 0).unwrap();
+        assert!(report.governors.is_empty());
+        assert!(report.blocked.iter().any(|line| matches!(
+            line.blocker,
+            GovernanceBlocker::Piece { at, .. } if at == Coord::new(3, 5)
+        )));
+        assert!(report.blocked.iter().any(|line| matches!(
+            line.blocker,
+            GovernanceBlocker::Terrain {
+                at,
+                terrain: TileTerrain::Forest
+            } if at == Coord::new(1, 1)
+        )));
+        assert!(report.blocked.iter().any(|line| matches!(
+            line.blocker,
+            GovernanceBlocker::Terrain {
+                at,
+                terrain: TileTerrain::Mountain
+            } if at == Coord::new(5, 3)
+        )));
+        assert!(report.blocked.iter().any(|line| matches!(
+            line.blocker,
+            GovernanceBlocker::Edge {
+                kind: EdgeKind::River,
+                ..
+            }
+        )));
     }
 
     #[test]
