@@ -1456,6 +1456,107 @@ mod tests {
     }
 
     #[test]
+    fn capture_event_preserves_identity_and_cleans_realm_references() {
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Rook, 0, 7),
+            deployment(Player::North, PieceKind::Pawn, 0, 5),
+        ]);
+        scenario.settlements = vec![
+            SettlementSite {
+                id: "founding".to_owned(),
+                at: Coord::new(2, 2),
+            },
+            SettlementSite {
+                id: "producing".to_owned(),
+                at: Coord::new(5, 5),
+            },
+        ];
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let rook = piece_id_at(&state, Coord::new(0, 7));
+        let captured = piece_id_at(&state, Coord::new(0, 5));
+        state.settlements[0].founder = Some(captured);
+        state.settlements[1].produced_pawn = Some(captured);
+        state.pieces.get_mut(&captured).unwrap().origin = PieceOrigin::Settlement {
+            settlement_index: 1,
+        };
+
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: rook,
+                to: Coord::new(0, 5),
+            },
+        )
+        .unwrap();
+
+        assert!(!transition.state.pieces.contains_key(&captured));
+        assert_eq!(transition.state.settlements[0].founder, None);
+        assert!(transition.state.settlements[0].cycle_interrupted);
+        assert_eq!(transition.state.settlements[1].produced_pawn, None);
+        assert!(transition.events.contains(&TransitionEvent::PieceCaptured {
+            piece: captured,
+            at: Coord::new(0, 5),
+        }));
+    }
+
+    #[test]
+    fn kings_cannot_be_captured_and_rejection_leaves_source_unchanged() {
+        let scenario = scenario_with(vec![deployment(Player::South, PieceKind::Queen, 4, 1)]);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let queen = piece_id_at(&state, Coord::new(4, 1));
+        let before = state.clone();
+
+        assert!(matches!(
+            apply_action(
+                &scenario,
+                &state,
+                &Action::Move {
+                    player: Player::South,
+                    piece: queen,
+                    to: Coord::new(4, 0),
+                }
+            ),
+            Err(TransitionError::IllegalMove { .. })
+        ));
+        assert_eq!(state, before);
+    }
+
+    #[test]
+    fn an_attacked_inescapable_king_resolves_as_checkmate() {
+        let scenario = scenario_with(vec![
+            deployment(Player::North, PieceKind::King, 0, 0),
+            deployment(Player::South, PieceKind::King, 2, 2),
+            deployment(Player::South, PieceKind::Queen, 1, 2),
+        ]);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let queen = piece_id_at(&state, Coord::new(1, 2));
+
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: queen,
+                to: Coord::new(1, 1),
+            },
+        )
+        .unwrap();
+
+        let outcome = MatchOutcome {
+            winner: Some(Player::South),
+            reason: OutcomeReason::Checkmate,
+        };
+        assert_eq!(transition.state.outcome, Some(outcome));
+        assert!(
+            transition
+                .events
+                .contains(&TransitionEvent::MatchEnded { outcome })
+        );
+    }
+
+    #[test]
     fn mandatory_choice_blocks_command_without_mutating_state() {
         let scenario = scenario_with(vec![deployment(Player::South, PieceKind::Pawn, 0, 1)]);
         let mut state = MatchState::from_scenario(&scenario).unwrap();
