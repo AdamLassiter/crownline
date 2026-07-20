@@ -4,7 +4,12 @@ Implement legal chess movement on Crownlines' larger, terrain-shaped boards whil
 
 ## Status
 
-- [ ] In progress
+- [x] Done
+
+## Implementation notes
+
+- Stable chess movement, capture identity, public geometric attack lines, terrain/edge barriers, Rook projection, King safety, designated castling, double-step, and en passant share one deterministic geometry implementation.
+- Scenario validation and focused rules tests cover authored routes, canonical edges, blockers, both orientations, special-move rights, and terrain-aware check/checkmate.
 
 ## Stories
 

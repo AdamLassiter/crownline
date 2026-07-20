@@ -957,20 +957,12 @@ impl<'a> Board<'a> {
             })
             .filter(|route| {
                 self.occupancy.get(&route.rook_start).is_some_and(|rook| {
-                    rook.owner == king.owner && rook.kind == PieceKind::Rook && !rook.has_moved
+                    rook.owner == king.owner
+                        && rook.kind == PieceKind::Rook
+                        && !rook.has_moved
+                        && self.castling_king_route_clear(king, route)
+                        && self.castling_rook_route_clear(rook, route)
                 })
-            })
-            .filter(|route| {
-                route
-                    .king_path
-                    .iter()
-                    .chain([&route.king_destination, &route.rook_destination])
-                    .all(|at| {
-                        *at == route.rook_start
-                            || *at == king.at
-                            || (!self.occupancy.contains_key(at)
-                                && self.terrain(*at) != TileTerrain::Mountain)
-                    })
             })
             .filter(|route| {
                 route
@@ -981,6 +973,60 @@ impl<'a> Board<'a> {
             })
             .map(|route| Self::move_to(king, route.king_destination, MoveKind::Castle))
             .collect()
+    }
+
+    fn castling_king_route_clear(
+        &self,
+        king: &Piece,
+        route: &crate::scenario::CastlingRoute,
+    ) -> bool {
+        let mut previous = king.at;
+        for &at in &route.king_path {
+            if self.terrain(at) == TileTerrain::Mountain
+                || !self.can_cross(king, previous, at)
+                || (at != route.rook_start && self.occupancy.contains_key(&at))
+            {
+                return false;
+            }
+            previous = at;
+        }
+        true
+    }
+
+    fn castling_rook_route_clear(
+        &self,
+        rook: &Piece,
+        route: &crate::scenario::CastlingRoute,
+    ) -> bool {
+        let direction = match (
+            route.rook_start.x.cmp(&route.rook_destination.x),
+            route.rook_start.y.cmp(&route.rook_destination.y),
+        ) {
+            (std::cmp::Ordering::Less, std::cmp::Ordering::Equal) => (1, 0),
+            (std::cmp::Ordering::Greater, std::cmp::Ordering::Equal) => (-1, 0),
+            (std::cmp::Ordering::Equal, std::cmp::Ordering::Less) => (0, 1),
+            (std::cmp::Ordering::Equal, std::cmp::Ordering::Greater) => (0, -1),
+            _ => return false,
+        };
+        let mut current = route.rook_start;
+        loop {
+            let Some(next) = offset_coord(current, direction) else {
+                return false;
+            };
+            if self.terrain(next) == TileTerrain::Mountain
+                || !self.can_cross(rook, current, next)
+                || (next != route.king_start && self.occupancy.contains_key(&next))
+            {
+                return false;
+            }
+            if next == route.rook_destination {
+                return true;
+            }
+            if self.terrain(next) == TileTerrain::Forest {
+                return false;
+            }
+            current = next;
+        }
     }
 
     fn pawn_moves(&self, pawn: &Piece) -> Vec<LegalMove> {
@@ -1630,12 +1676,166 @@ mod tests {
         .unwrap();
         let state = transition.state;
         assert_eq!(transition.events.len(), 3);
+        assert!(transition.events.contains(&TransitionEvent::PieceMoved {
+            piece: king,
+            from: Coord::new(4, 7),
+            to: Coord::new(6, 7),
+        }));
+        assert!(transition.events.iter().any(|event| matches!(
+            event,
+            TransitionEvent::PieceMoved {
+                from,
+                to,
+                ..
+            } if *from == Coord::new(7, 7) && *to == Coord::new(5, 7)
+        )));
         assert_eq!(state.pieces[&king].at, Coord::new(6, 7));
         assert!(
             state
                 .pieces
                 .values()
                 .any(|piece| piece.kind == PieceKind::Rook && piece.at == Coord::new(5, 7))
+        );
+    }
+
+    #[test]
+    fn castling_checks_attacks_and_complete_rook_occupancy_route() {
+        let mut attacked = scenario_with(vec![
+            deployment(Player::South, PieceKind::Rook, 7, 7),
+            deployment(Player::North, PieceKind::Rook, 5, 0),
+        ]);
+        attacked.castling_routes.push(CastlingRoute {
+            id: "south-east".to_owned(),
+            player: Player::South,
+            king_start: Coord::new(4, 7),
+            rook_start: Coord::new(7, 7),
+            king_path: vec![Coord::new(5, 7), Coord::new(6, 7)],
+            king_destination: Coord::new(6, 7),
+            rook_destination: Coord::new(5, 7),
+        });
+        let attacked_state = MatchState::from_scenario(&attacked).unwrap();
+        let king = piece_id_at(&attacked_state, Coord::new(4, 7));
+        assert!(
+            !legal_moves(&attacked, &attacked_state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == king && mv.kind == MoveKind::Castle)
+        );
+
+        let mut blocked = scenario_with(vec![
+            deployment(Player::South, PieceKind::Rook, 7, 7),
+            deployment(Player::South, PieceKind::Knight, 6, 7),
+        ]);
+        blocked.castling_routes.push(CastlingRoute {
+            id: "south-rook-long".to_owned(),
+            player: Player::South,
+            king_start: Coord::new(4, 7),
+            rook_start: Coord::new(7, 7),
+            king_path: vec![Coord::new(3, 7)],
+            king_destination: Coord::new(3, 7),
+            rook_destination: Coord::new(4, 7),
+        });
+        let blocked_state = MatchState::from_scenario(&blocked).unwrap();
+        let king = piece_id_at(&blocked_state, Coord::new(4, 7));
+        assert!(
+            !legal_moves(&blocked, &blocked_state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == king && mv.kind == MoveKind::Castle)
+        );
+
+        let mut projected = scenario_with(vec![deployment(Player::South, PieceKind::Rook, 7, 7)]);
+        add_south_fortification(&mut projected, Coord::new(7, 7), Coord::new(6, 7));
+        projected.castling_routes.push(CastlingRoute {
+            id: "south-projected-rook".to_owned(),
+            player: Player::South,
+            king_start: Coord::new(4, 7),
+            rook_start: Coord::new(7, 7),
+            king_path: vec![Coord::new(3, 7)],
+            king_destination: Coord::new(3, 7),
+            rook_destination: Coord::new(4, 7),
+        });
+        let projected_state = MatchState::from_scenario(&projected).unwrap();
+        let king = piece_id_at(&projected_state, Coord::new(4, 7));
+        assert!(
+            legal_moves(&projected, &projected_state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == king && mv.kind == MoveKind::Castle)
+        );
+    }
+
+    #[test]
+    fn moving_or_losing_castling_participant_removes_route_right() {
+        let mut south = scenario_with(vec![deployment(Player::South, PieceKind::Rook, 7, 7)]);
+        south.castling_routes.push(CastlingRoute {
+            id: "south-east".to_owned(),
+            player: Player::South,
+            king_start: Coord::new(4, 7),
+            rook_start: Coord::new(7, 7),
+            king_path: vec![Coord::new(5, 7), Coord::new(6, 7)],
+            king_destination: Coord::new(6, 7),
+            rook_destination: Coord::new(5, 7),
+        });
+        let state = MatchState::from_scenario(&south).unwrap();
+        let rook = piece_id_at(&state, Coord::new(7, 7));
+        let moved_rook = apply_action(
+            &south,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: rook,
+                to: Coord::new(7, 6),
+            },
+        )
+        .unwrap()
+        .state;
+        assert!(!moved_rook.available_castling_routes.contains("south-east"));
+
+        let king = piece_id_at(&state, Coord::new(4, 7));
+        let moved_king = apply_action(
+            &south,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: king,
+                to: Coord::new(4, 6),
+            },
+        )
+        .unwrap()
+        .state;
+        assert!(!moved_king.available_castling_routes.contains("south-east"));
+
+        let mut north = scenario_with(vec![
+            deployment(Player::North, PieceKind::Rook, 7, 0),
+            deployment(Player::South, PieceKind::Bishop, 6, 1),
+        ]);
+        north.castling_routes.push(CastlingRoute {
+            id: "north-east".to_owned(),
+            player: Player::North,
+            king_start: Coord::new(4, 0),
+            rook_start: Coord::new(7, 0),
+            king_path: vec![Coord::new(5, 0), Coord::new(6, 0)],
+            king_destination: Coord::new(6, 0),
+            rook_destination: Coord::new(5, 0),
+        });
+        let state = MatchState::from_scenario(&north).unwrap();
+        let bishop = piece_id_at(&state, Coord::new(6, 1));
+        let captured_rook = apply_action(
+            &north,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: bishop,
+                to: Coord::new(7, 0),
+            },
+        )
+        .unwrap()
+        .state;
+        assert!(
+            !captured_rook
+                .available_castling_routes
+                .contains("north-east")
         );
     }
 

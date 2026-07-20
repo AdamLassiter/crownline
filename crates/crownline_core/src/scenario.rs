@@ -730,7 +730,7 @@ fn rook_castling_path_is_open(scenario: &ScenarioDefinition, route: &CastlingRou
         };
         if !next.is_within(scenario.board)
             || scenario.terrain.get(&next) == Some(&TileTerrain::Mountain)
-            || !castling_step_is_open(scenario, current, next)
+            || !rook_castling_step_is_open(scenario, route, current, next)
         {
             return false;
         }
@@ -741,6 +741,24 @@ fn rook_castling_path_is_open(scenario: &ScenarioDefinition, route: &CastlingRou
             return false;
         }
         current = next;
+    }
+}
+
+fn rook_castling_step_is_open(
+    scenario: &ScenarioDefinition,
+    route: &CastlingRoute,
+    from: Coord,
+    to: Coord,
+) -> bool {
+    let edge = Edge::new(from, to);
+    match scenario.edges.get(&edge) {
+        None | Some(EdgeKind::Bridge | EdgeKind::Ford | EdgeKind::Gate) => true,
+        Some(EdgeKind::River) => false,
+        Some(EdgeKind::Wall) => scenario.fortifications.iter().any(|fortification| {
+            fortification.owner == route.player
+                && fortification.tower == route.rook_start
+                && fortification.projected_wall == edge
+        }),
     }
 }
 
@@ -1190,5 +1208,45 @@ mod tests {
             error,
             ScenarioError::InvalidCastlingPath(id) if id == "north-east-castle"
         )));
+    }
+
+    #[test]
+    fn rejects_castling_rook_path_through_terrain_or_edge() {
+        let route = CastlingRoute {
+            id: "north-long-rook".to_owned(),
+            player: Player::North,
+            king_start: Coord::new(8, 0),
+            rook_start: Coord::new(11, 0),
+            king_path: vec![Coord::new(7, 0)],
+            king_destination: Coord::new(7, 0),
+            rook_destination: Coord::new(8, 0),
+        };
+
+        let mut walled = standard_scenario();
+        walled.edges.insert(
+            Edge::new(Coord::new(11, 0), Coord::new(10, 0)),
+            EdgeKind::Wall,
+        );
+        walled.castling_routes.push(route.clone());
+        assert!(walled.validate().unwrap_err().iter().any(|error| matches!(
+            error,
+            ScenarioError::InvalidCastlingPath(id) if id == "north-long-rook"
+        )));
+
+        let mut forested = standard_scenario();
+        forested
+            .terrain
+            .insert(Coord::new(10, 0), TileTerrain::Forest);
+        forested.castling_routes.push(route);
+        assert!(
+            forested
+                .validate()
+                .unwrap_err()
+                .iter()
+                .any(|error| matches!(
+                    error,
+                    ScenarioError::InvalidCastlingPath(id) if id == "north-long-rook"
+                ))
+        );
     }
 }
