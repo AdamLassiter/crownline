@@ -400,6 +400,16 @@ pub enum TransitionError {
     BoardRulesNotImplemented,
     #[error("action is not valid during the current turn phase")]
     WrongTurnPhase,
+    #[error("action does not resolve the next mandatory choice")]
+    ChoiceDoesNotMatch,
+    #[error("piece {0:?} is not an eligible promotion Pawn")]
+    InvalidPromotionPawn(PieceId),
+    #[error("{at:?} is not a legal placement for settlement {settlement_index}")]
+    IllegalPawnPlacement { settlement_index: u16, at: Coord },
+    #[error("settlement {0} is missing")]
+    MissingSettlement(u16),
+    #[error("settlement {0} cannot produce a Pawn for this action")]
+    SettlementCannotProduce(u16),
     #[error("piece {piece:?} cannot legally move to {to:?}")]
     IllegalMove { piece: PieceId, to: Coord },
     #[error("piece {0:?} is missing")]
@@ -416,6 +426,8 @@ pub enum TransitionError {
     RevisionOverflow,
     #[error("turn number overflowed")]
     TurnOverflow,
+    #[error("piece identity counter overflowed")]
+    PieceIdOverflow,
     #[error("piece map key {0:?} does not match the piece id")]
     MismatchedPieceId(PieceId),
     #[error("multiple pieces occupy {0:?}")]

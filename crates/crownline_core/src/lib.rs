@@ -7,6 +7,8 @@ pub mod rules;
 pub mod scenario;
 pub mod state;
 
-pub use rules::{LegalMove, MoveKind, apply_action, is_in_check, legal_moves};
+pub use rules::{
+    LegalMove, MoveKind, Transition, TransitionEvent, apply_action, is_in_check, legal_moves,
+};
 pub use scenario::{ScenarioDefinition, ScenarioError};
 pub use state::{Action, MatchState, TransitionError};
