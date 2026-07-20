@@ -4,7 +4,12 @@ Establish the workspace, dependency boundaries, automated checks, and licensed a
 
 ## Status
 
-- [ ] In progress
+- [x] Done
+
+## Implementation notes
+
+- Completed by Stories 01.01 through 01.03.
+- The workspace quality gate passes on the pinned Rust toolchain, and the live server health endpoint was verified during implementation.
 
 ## Stories
 
