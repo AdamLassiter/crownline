@@ -2,6 +2,8 @@
 
 This directory decomposes the [game design document](../../GDD.md) into an ordered set of epics, stories, and executable tasks. Numeric prefixes are the proposed implementation sequence. Work inside an epic may proceed in parallel only after its listed dependencies are satisfied.
 
+Development changes follow the [task and bug workflow](00-development-workflow.md). Status in an issue file is authoritative; the ordering index is not itself a completion tracker.
+
 ## Definition of done
 
 Every completed item must:
@@ -37,4 +39,3 @@ Development should be managed as:
 - Local hot-seat and private-room online play.
 - Introductory 16x16, standard 20x20, and large 24x24 maps.
 - No AI, factions, public matchmaking, ratings, chat, spectators, campaign, procedural maps, editor, mobile client, or browser client.
-
