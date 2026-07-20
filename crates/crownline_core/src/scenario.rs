@@ -1,6 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{Error as DeError, MapAccess, Visitor},
+};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const SCENARIO_SCHEMA_VERSION: u16 = 1;
@@ -80,10 +84,26 @@ pub enum EdgeKind {
     Gate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct Edge {
     pub first: Coord,
     pub second: Coord,
+}
+
+impl<'de> Deserialize<'de> for Edge {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct AuthoredEdge {
+            first: Coord,
+            second: Coord,
+        }
+
+        let edge = AuthoredEdge::deserialize(deserializer)?;
+        Ok(Self::new(edge.first, edge.second))
+    }
 }
 
 impl Edge {
@@ -204,7 +224,7 @@ pub struct ScenarioDefinition {
     pub board: BoardSize,
     #[serde(default)]
     pub terrain: BTreeMap<Coord, TileTerrain>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_edges")]
     pub edges: BTreeMap<Edge, EdgeKind>,
     pub deployments: Vec<Deployment>,
     #[serde(default)]
@@ -299,6 +319,54 @@ impl ScenarioDefinition {
             Err(errors)
         }
     }
+
+    /// Hashes the validated, canonically ordered authored scenario.
+    ///
+    /// Edge orientation is normalized during deserialization, and ordered maps
+    /// make equivalent authored edge directions serialize identically.
+    ///
+    /// # Errors
+    ///
+    /// Returns aggregate validation errors or a canonical serialization error.
+    pub fn canonical_hash(&self) -> Result<String, ScenarioHashError> {
+        self.validate().map_err(ScenarioHashError::Invalid)?;
+        let encoded = ron::to_string(self).map_err(ScenarioHashError::Serialize)?;
+        Ok(format!("{:x}", Sha256::digest(encoded.as_bytes())))
+    }
+}
+
+fn deserialize_edges<'de, D>(deserializer: D) -> Result<BTreeMap<Edge, EdgeKind>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct EdgeMapVisitor;
+
+    impl<'de> Visitor<'de> for EdgeMapVisitor {
+        type Value = BTreeMap<Edge, EdgeKind>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a map of canonical board edges to edge kinds")
+        }
+
+        fn visit_map<A>(self, mut entries: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut edges = BTreeMap::new();
+            while let Some((edge, kind)) = entries.next_entry()? {
+                if let Some(previous) = edges.insert(edge, kind)
+                    && previous != kind
+                {
+                    return Err(A::Error::custom(format!(
+                        "opposite definitions for shared edge {edge:?} disagree"
+                    )));
+                }
+            }
+            Ok(edges)
+        }
+    }
+
+    deserializer.deserialize_map(EdgeMapVisitor)
 }
 
 fn validate_header(scenario: &ScenarioDefinition, errors: &mut Vec<ScenarioError>) {
@@ -813,6 +881,14 @@ pub enum ScenarioError {
     PawnDirectionsNotOpposed,
 }
 
+#[derive(Debug, Error)]
+pub enum ScenarioHashError {
+    #[error("scenario is invalid: {0:?}")]
+    Invalid(Vec<ScenarioError>),
+    #[error("failed to serialize canonical scenario: {0}")]
+    Serialize(ron::Error),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,6 +1049,42 @@ mod tests {
         let a = Coord::new(1, 2);
         let b = Coord::new(1, 3);
         assert_eq!(Edge::new(a, b), Edge::new(b, a));
+
+        let reversed: Edge = ron::from_str("(first:(x:1,y:3),second:(x:1,y:2))").unwrap();
+        assert_eq!(reversed, Edge::new(a, b));
+
+        let mut first = minimal_scenario();
+        first.rules.army_setup = ArmySetup::Custom;
+        first.edges.insert(Edge::new(a, b), EdgeKind::River);
+        let encoded = ron::to_string(&first).unwrap();
+        let canonical_edge = ron::to_string(&Edge::new(a, b)).unwrap();
+        let reversed_edge = "(first:(x:1,y:3),second:(x:1,y:2))";
+        let reversed_authored: ScenarioDefinition =
+            ron::from_str(&encoded.replace(&canonical_edge, reversed_edge)).unwrap();
+        assert_eq!(
+            first.canonical_hash().unwrap(),
+            reversed_authored.canonical_hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn rejects_disagreeing_opposite_edge_definitions() {
+        #[derive(Deserialize)]
+        struct Fixture {
+            #[serde(deserialize_with = "deserialize_edges")]
+            edges: BTreeMap<Edge, EdgeKind>,
+        }
+
+        let valid: Fixture =
+            ron::from_str("(edges:{(first:(x:1,y:2),second:(x:1,y:3)):river})").unwrap();
+        assert_eq!(valid.edges.len(), 1);
+        let result = ron::from_str::<Fixture>(
+            "(edges:{\
+             (first:(x:1,y:2),second:(x:1,y:3)):river,\
+             (first:(x:1,y:3),second:(x:1,y:2)):wall\
+             })",
+        );
+        assert!(result.is_err());
     }
 
     #[test]

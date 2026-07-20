@@ -20,5 +20,5 @@ pub use rules::{
     AttackLine, LegalMove, MoveKind, Transition, TransitionEvent, apply_action, attack_lines_on,
     is_in_check, legal_moves,
 };
-pub use scenario::{ScenarioDefinition, ScenarioError};
+pub use scenario::{ScenarioDefinition, ScenarioError, ScenarioHashError};
 pub use state::{Action, MatchState, TransitionError};

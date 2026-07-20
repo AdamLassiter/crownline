@@ -1347,6 +1347,81 @@ mod tests {
     }
 
     #[test]
+    fn orthogonal_edge_kinds_apply_closed_and_open_crossings() {
+        let edge = Edge::new(Coord::new(0, 6), Coord::new(0, 5));
+        for (kind, expected) in [
+            (EdgeKind::River, false),
+            (EdgeKind::Wall, false),
+            (EdgeKind::Bridge, true),
+            (EdgeKind::Ford, true),
+            (EdgeKind::Gate, true),
+        ] {
+            let mut scenario =
+                scenario_with(vec![deployment(Player::South, PieceKind::Rook, 0, 7)]);
+            scenario.edges.insert(edge, kind);
+            let state = MatchState::from_scenario(&scenario).unwrap();
+            let rook = piece_id_at(&state, Coord::new(0, 7));
+            assert_eq!(
+                legal_moves(&scenario, &state)
+                    .unwrap()
+                    .iter()
+                    .any(|mv| mv.piece == rook && mv.to == Coord::new(0, 5)),
+                expected,
+                "unexpected crossing behavior for {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn diagonal_crossing_requires_each_component_edge_to_be_open() {
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Bishop, 1, 6)]);
+        scenario.edges.insert(
+            Edge::new(Coord::new(1, 6), Coord::new(2, 6)),
+            EdgeKind::River,
+        );
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let bishop = piece_id_at(&state, Coord::new(1, 6));
+        assert!(
+            !legal_moves(&scenario, &state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == bishop && mv.to == Coord::new(2, 5))
+        );
+
+        scenario.edges.insert(
+            Edge::new(Coord::new(1, 6), Coord::new(2, 6)),
+            EdgeKind::Ford,
+        );
+        assert!(
+            legal_moves(&scenario, &state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == bishop && mv.to == Coord::new(2, 5))
+        );
+    }
+
+    #[test]
+    fn knight_jump_ignores_intervening_edge_barriers() {
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Knight, 1, 6)]);
+        scenario.edges.insert(
+            Edge::new(Coord::new(1, 6), Coord::new(2, 6)),
+            EdgeKind::Wall,
+        );
+        scenario.edges.insert(
+            Edge::new(Coord::new(2, 6), Coord::new(2, 5)),
+            EdgeKind::River,
+        );
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let knight = piece_id_at(&state, Coord::new(1, 6));
+        assert!(
+            legal_moves(&scenario, &state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == knight && mv.to == Coord::new(2, 4))
+        );
+    }
+
+    #[test]
     fn pinned_piece_cannot_expose_king() {
         let scenario = scenario_with(vec![
             deployment(Player::South, PieceKind::Rook, 4, 6),
