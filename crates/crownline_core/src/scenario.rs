@@ -145,7 +145,7 @@ pub struct CastlingRoute {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScenarioRules {
     pub pawn_forward_y: BTreeMap<Player, i8>,
-    pub require_standard_armies: bool,
+    pub army_setup: ArmySetup,
     pub allow_pawn_double_step: bool,
     pub allow_en_passant: bool,
     pub establishment_cycles: u8,
@@ -158,7 +158,7 @@ impl Default for ScenarioRules {
     fn default() -> Self {
         Self {
             pawn_forward_y: BTreeMap::from([(Player::North, 1), (Player::South, -1)]),
-            require_standard_armies: true,
+            army_setup: ArmySetup::Standard,
             allow_pawn_double_step: true,
             allow_en_passant: true,
             establishment_cycles: 3,
@@ -167,6 +167,13 @@ impl Default for ScenarioRules {
             development_resets_when_interrupted: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArmySetup {
+    Standard,
+    Custom,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,7 +263,7 @@ impl ScenarioDefinition {
                 Some(-1 | 1) => {}
                 _ => errors.push(ScenarioError::InvalidPawnDirection(player)),
             }
-            if self.rules.require_standard_armies {
+            if self.rules.army_setup == ArmySetup::Standard {
                 validate_standard_army(self, player, &mut errors);
             }
         }
@@ -490,14 +497,14 @@ mod tests {
     #[test]
     fn validates_minimal_scenario() {
         let mut scenario = minimal_scenario();
-        scenario.rules.require_standard_armies = false;
+        scenario.rules.army_setup = ArmySetup::Custom;
         assert_eq!(scenario.validate(), Ok(()));
     }
 
     #[test]
     fn reports_multiple_errors_at_once() {
         let mut scenario = minimal_scenario();
-        scenario.rules.require_standard_armies = false;
+        scenario.rules.army_setup = ArmySetup::Custom;
         scenario.schema_version = 99;
         scenario.deployments[0].at = Coord::new(99, 99);
         scenario.rules.establishment_cycles = 0;

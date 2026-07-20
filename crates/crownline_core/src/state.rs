@@ -468,7 +468,7 @@ mod tests {
             fortifications: vec![],
             castling_routes: vec![],
             rules: ScenarioRules {
-                require_standard_armies: false,
+                army_setup: crate::scenario::ArmySetup::Custom,
                 ..ScenarioRules::default()
             },
         }

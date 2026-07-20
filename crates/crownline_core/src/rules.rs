@@ -771,7 +771,7 @@ mod tests {
             fortifications: Vec::new(),
             castling_routes: Vec::new(),
             rules: ScenarioRules {
-                require_standard_armies: false,
+                army_setup: crate::scenario::ArmySetup::Custom,
                 ..ScenarioRules::default()
             },
         }
