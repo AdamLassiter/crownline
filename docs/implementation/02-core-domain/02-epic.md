@@ -2,6 +2,10 @@
 
 Create the deterministic, serializable vocabulary and state transition boundary shared by local and online games.
 
+## Status
+
+- [ ] In progress
+
 ## Stories
 
 - [02.01 Scenario model](02.01-scenarios/02.01-story.md)
@@ -21,4 +25,3 @@ Create the deterministic, serializable vocabulary and state transition boundary 
 ## Cross-cutting concerns
 
 - Determinism, compatibility, bounded data, and migration safety.
-
