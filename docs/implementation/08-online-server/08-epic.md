@@ -13,6 +13,7 @@ Host private-room matches with server-authoritative rules, clocks, durable state
 - Tasks 08.02.01-08.02.02 provide the private-room lifecycle and hashed, redacted, rate-limited reconnect credentials for seat authority.
 - Task 08.02.03 completes bounded room operation with configurable request/connection limits, observable throttling, and cleanup that preserves every started match.
 - Task 08.03.01 adds bounded per-match command actors with total ordering, revisioned results, backpressure, isolated durable recovery, and idle unload.
+- Task 08.03.02 supplies those actors with authenticated canonical rules, restart-aware authoritative clocks, append-only journaling, and one prepared atomic persistence transition per decision.
 
 ## Stories
 

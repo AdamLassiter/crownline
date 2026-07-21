@@ -1,10 +1,10 @@
 use std::{
     collections::BTreeMap,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
-use crownline_core::Action;
+use crownline_core::{Action, scenario::Player};
 use crownline_protocol::{
     MAX_CACHED_MUTATIONS_PER_MATCH, MatchSnapshot, MutationContext, MutationResult,
 };
@@ -18,12 +18,27 @@ pub const DEFAULT_ACTOR_QUEUE_CAPACITY: usize = 64;
 #[derive(Debug, Clone)]
 pub struct MatchCommand {
     pub context: MutationContext,
+    pub seat: Player,
     pub action: Action,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CommandTiming {
+    pub received_at: SystemTime,
+    pub decided_at: SystemTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandRejection {
+    WrongSeat,
+    InactivePhase,
+    ExpiredTime,
+    IllegalAction(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecutionError {
-    Rejected(String),
+    Rejected(CommandRejection),
     Fatal(String),
 }
 
@@ -35,7 +50,13 @@ pub trait MatchExecutor: Send {
     /// # Errors
     ///
     /// Returns a recoverable rejection or a fatal error requiring durable reload.
-    fn execute(&mut self, action: &Action) -> Result<MatchSnapshot, ExecutionError>;
+    fn execute(
+        &mut self,
+        idempotency_key: Uuid,
+        seat: Player,
+        action: &Action,
+        timing: CommandTiming,
+    ) -> Result<MatchSnapshot, ExecutionError>;
 }
 
 pub trait MatchLoader: Send + Sync {
@@ -51,7 +72,10 @@ pub trait MatchLoader: Send + Sync {
 pub enum MatchCommandResult {
     Accepted(MutationResult),
     Stale(MatchSnapshot),
-    Rejected(String),
+    Rejected {
+        reason: CommandRejection,
+        snapshot: MatchSnapshot,
+    },
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -74,6 +98,7 @@ impl ActorSubmitError {
 
 struct QueuedCommand {
     command: MatchCommand,
+    received_at: SystemTime,
     response: oneshot::Sender<Result<MatchCommandResult, ActorSubmitError>>,
 }
 
@@ -110,7 +135,11 @@ impl MatchActorRegistry {
         let match_id = command.context.match_id;
         let sender = self.sender_for(match_id).await?;
         let (response, receiver) = oneshot::channel();
-        match sender.try_send(QueuedCommand { command, response }) {
+        match sender.try_send(QueuedCommand {
+            command,
+            received_at: SystemTime::now(),
+            response,
+        }) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => return Err(ActorSubmitError::QueueFull),
             Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -185,14 +214,12 @@ async fn run_actor(
     mut executor: Box<dyn MatchExecutor>,
     mut receiver: mpsc::Receiver<QueuedCommand>,
 ) {
-    let mut accepted = BTreeMap::<Uuid, MutationResult>::new();
-    let mut accepted_order = std::collections::VecDeque::<Uuid>::new();
+    let mut decisions = BTreeMap::<Uuid, MatchCommandResult>::new();
+    let mut decision_order = std::collections::VecDeque::<Uuid>::new();
     while let Some(queued) = receiver.recv().await {
         let context = queued.command.context;
-        if let Some(original) = accepted.get(&context.idempotency_key) {
-            let _ = queued
-                .response
-                .send(Ok(MatchCommandResult::Accepted(original.clone())));
+        if let Some(original) = decisions.get(&context.idempotency_key) {
+            let _ = queued.response.send(Ok(original.clone()));
             continue;
         }
         let current = executor.snapshot();
@@ -200,28 +227,45 @@ async fn run_actor(
             let _ = queued.response.send(Ok(MatchCommandResult::Stale(current)));
             continue;
         }
-        match executor.execute(&queued.command.action) {
+        let timing = CommandTiming {
+            received_at: queued.received_at,
+            decided_at: SystemTime::now(),
+        };
+        match executor.execute(
+            context.idempotency_key,
+            queued.command.seat,
+            &queued.command.action,
+            timing,
+        ) {
             Ok(snapshot) => {
                 let result = MutationResult {
                     match_id,
                     idempotency_key: context.idempotency_key,
                     snapshot,
                 };
-                accepted.insert(context.idempotency_key, result.clone());
-                accepted_order.push_back(context.idempotency_key);
-                if accepted.len() > MAX_CACHED_MUTATIONS_PER_MATCH
-                    && let Some(oldest) = accepted_order.pop_front()
+                let decision = MatchCommandResult::Accepted(result);
+                decisions.insert(context.idempotency_key, decision.clone());
+                decision_order.push_back(context.idempotency_key);
+                if decisions.len() > MAX_CACHED_MUTATIONS_PER_MATCH
+                    && let Some(oldest) = decision_order.pop_front()
                 {
-                    accepted.remove(&oldest);
+                    decisions.remove(&oldest);
                 }
-                let _ = queued
-                    .response
-                    .send(Ok(MatchCommandResult::Accepted(result)));
+                let _ = queued.response.send(Ok(decision));
             }
-            Err(ExecutionError::Rejected(message)) => {
-                let _ = queued
-                    .response
-                    .send(Ok(MatchCommandResult::Rejected(message)));
+            Err(ExecutionError::Rejected(reason)) => {
+                let decision = MatchCommandResult::Rejected {
+                    reason,
+                    snapshot: executor.snapshot(),
+                };
+                decisions.insert(context.idempotency_key, decision.clone());
+                decision_order.push_back(context.idempotency_key);
+                if decisions.len() > MAX_CACHED_MUTATIONS_PER_MATCH
+                    && let Some(oldest) = decision_order.pop_front()
+                {
+                    decisions.remove(&oldest);
+                }
+                let _ = queued.response.send(Ok(decision));
             }
             Err(ExecutionError::Fatal(message)) => {
                 error!(%match_id, %message, "match actor failed; durable reload required");
@@ -272,7 +316,13 @@ mod tests {
             self.snapshot.lock().unwrap().clone()
         }
 
-        fn execute(&mut self, _action: &Action) -> Result<MatchSnapshot, ExecutionError> {
+        fn execute(
+            &mut self,
+            _idempotency_key: Uuid,
+            _seat: Player,
+            _action: &Action,
+            _timing: CommandTiming,
+        ) -> Result<MatchSnapshot, ExecutionError> {
             let mut fail_next = self.fail_next.lock().unwrap();
             if *fail_next {
                 *fail_next = false;
@@ -320,6 +370,7 @@ mod tests {
                 expected_revision: revision,
                 idempotency_key: Uuid::new_v4(),
             },
+            seat: Player::South,
             action: Action::Hold {
                 player: Player::South,
             },
@@ -420,7 +471,13 @@ mod tests {
             self.snapshot.clone()
         }
 
-        fn execute(&mut self, _action: &Action) -> Result<MatchSnapshot, ExecutionError> {
+        fn execute(
+            &mut self,
+            _idempotency_key: Uuid,
+            _seat: Player,
+            _action: &Action,
+            _timing: CommandTiming,
+        ) -> Result<MatchSnapshot, ExecutionError> {
             if let Some(started) = self.started.take() {
                 let _ = started.send(());
             }

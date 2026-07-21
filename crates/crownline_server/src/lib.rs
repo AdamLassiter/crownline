@@ -15,6 +15,7 @@ use crownline_protocol::{
 use tokio::sync::Mutex;
 
 pub mod actors;
+pub mod authority;
 pub mod limits;
 pub mod rooms;
 
