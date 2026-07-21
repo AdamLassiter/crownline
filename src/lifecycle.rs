@@ -4,8 +4,10 @@ use bevy::{
     text::{EditableText, TextCursorStyle},
 };
 use crownline_core::{
-    Action, apply_action,
+    Action, ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES,
+    advance_clock, apply_timed_action,
     scenario::{Player, ScenarioDefinition},
+    start_clocks,
     state::MatchState,
 };
 
@@ -33,6 +35,7 @@ struct LocalSetup {
     north_name: String,
     south_name: String,
     error: String,
+    clock: Option<ClockSettings>,
 }
 
 impl Default for LocalSetup {
@@ -43,8 +46,14 @@ impl Default for LocalSetup {
             north_name: "North Player".to_owned(),
             south_name: "South Player".to_owned(),
             error: String::new(),
+            clock: None,
         }
     }
+}
+
+#[derive(Resource, Default)]
+struct LocalClockRuntime {
+    sub_millisecond_nanos: u32,
 }
 
 #[derive(Component)]
@@ -65,12 +74,14 @@ impl Plugin for LocalLifecyclePlugin {
         app.add_plugins(TabNavigationPlugin)
             .init_resource::<ClientFlow>()
             .init_resource::<LocalSetup>()
+            .init_resource::<LocalClockRuntime>()
             .insert_resource(ScenarioCatalog(vec![
                 ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap(),
                 ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap(),
                 ron::from_str(include_str!("../assets/scenarios/large.ron")).unwrap(),
             ]))
             .add_systems(Startup, spawn_lifecycle_ui)
+            .add_systems(PreUpdate, tick_local_clock)
             .add_systems(Update, (handle_lifecycle_input, sync_lifecycle_ui).chain());
     }
 }
@@ -175,6 +186,7 @@ fn handle_lifecycle_input(
             if keys.just_pressed(KeyCode::PageDown) {
                 setup.selected_scenario = (setup.selected_scenario + 1) % catalog.0.len();
             }
+            update_clock_setup(&keys, &mut setup);
             if keys.just_pressed(KeyCode::KeyX) {
                 let mut north = String::new();
                 let mut south = String::new();
@@ -315,7 +327,10 @@ fn start_fresh_match(
     history: &mut LocalTransitionNoticeLog,
 ) {
     game.scenario.clone_from(scenario);
-    game.state = MatchState::from_scenario(scenario).expect("catalog scenarios are validated");
+    let state = MatchState::from_scenario(scenario).expect("catalog scenarios are validated");
+    game.state = setup.clock.map_or(state.clone(), |settings| {
+        start_clocks(&state, settings).expect("validated local clock settings")
+    });
     setup.session_id = setup.session_id.saturating_add(1);
     selection.piece = None;
     history.entries.clear();
@@ -326,10 +341,70 @@ fn apply_control(
     game: &mut DisplayedGame,
     events: &mut LocalTransitionEventQueue,
 ) {
-    if let Ok(transition) = apply_action(&game.scenario, &game.state, action) {
+    if let Ok(transition) = apply_timed_action(&game.scenario, &game.state, action, 0) {
         events.push_transition(&transition);
         game.state = transition.state;
     }
+}
+
+fn update_clock_setup(keys: &ButtonInput<KeyCode>, setup: &mut LocalSetup) {
+    if keys.just_pressed(KeyCode::KeyC) {
+        setup.clock = setup.clock.is_none().then_some(ClockSettings {
+            base_minutes: 10,
+            increment_seconds: 0,
+        });
+    }
+    let Some(clock) = setup.clock.as_mut() else {
+        return;
+    };
+    if keys.just_pressed(KeyCode::Minus) {
+        clock.base_minutes = clock.base_minutes.saturating_sub(1).max(MIN_BASE_MINUTES);
+    }
+    if keys.just_pressed(KeyCode::Equal) {
+        clock.base_minutes = clock.base_minutes.saturating_add(1).min(MAX_BASE_MINUTES);
+    }
+    if keys.just_pressed(KeyCode::Comma) {
+        clock.increment_seconds = clock.increment_seconds.saturating_sub(1);
+    }
+    if keys.just_pressed(KeyCode::Period) {
+        clock.increment_seconds = clock
+            .increment_seconds
+            .saturating_add(1)
+            .min(MAX_INCREMENT_SECONDS);
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn tick_local_clock(
+    time: Option<Res<Time<Real>>>,
+    mut runtime: ResMut<LocalClockRuntime>,
+    mut flow: ResMut<ClientFlow>,
+    mut game: ResMut<DisplayedGame>,
+    mut events: ResMut<LocalTransitionEventQueue>,
+) {
+    if *flow != ClientFlow::Playing || game.state.outcome.is_some() || game.state.clocks.is_none() {
+        return;
+    }
+    let Some(time) = time else {
+        return;
+    };
+    let elapsed_millis = accumulate_elapsed(&mut runtime, time.delta());
+    if elapsed_millis == 0 {
+        return;
+    }
+    if let Ok(transition) = advance_clock(&game.state, elapsed_millis) {
+        if transition.state.outcome.is_some() {
+            events.push_transition(&transition);
+            *flow = ClientFlow::Outcome;
+        }
+        game.state = transition.state;
+    }
+}
+
+fn accumulate_elapsed(runtime: &mut LocalClockRuntime, delta: std::time::Duration) -> u64 {
+    let total_nanos = u64::from(runtime.sub_millisecond_nanos) + u64::from(delta.subsec_nanos());
+    runtime.sub_millisecond_nanos = u32::try_from(total_nanos % 1_000_000).unwrap();
+    delta.as_secs() * 1_000 + total_nanos / 1_000_000
 }
 
 #[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
@@ -359,7 +434,7 @@ fn sync_lifecycle_ui(
     }
     let scenario = &catalog.0[setup.selected_scenario];
     let setup_text = format!(
-        "CROWNLINES — LOCAL SETUP\nScenario: {} · {}×{} · {}–{} minutes\nDouble-step: {} · en passant: {} · castling routes: {}\nTab edits names · X swaps color assignments · PageUp/PageDown scenario · F2 start\nNorth blue/pale: {} · South orange/dark: {}\n{}",
+        "CROWNLINES — LOCAL SETUP\nScenario: {} · {}×{} · {}–{} minutes\nDouble-step: {} · en passant: {} · castling routes: {}\nTab edits names · X swaps colors · PageUp/PageDown scenario · F2 start\nClock: {} · C toggle · -/+ base · ,/. increment\nNorth blue/pale: {} · South orange/dark: {}\n{}",
         scenario.metadata.name,
         scenario.board.width,
         scenario.board.height,
@@ -368,6 +443,13 @@ fn sync_lifecycle_ui(
         yes_no(scenario.rules.allow_pawn_double_step),
         yes_no(scenario.rules.allow_en_passant),
         scenario.castling_routes.len(),
+        setup.clock.map_or_else(
+            || "untimed (default)".to_owned(),
+            |clock| format!(
+                "{} min + {} sec",
+                clock.base_minutes, clock.increment_seconds
+            ),
+        ),
         setup.north_name,
         setup.south_name,
         setup.error,
@@ -449,5 +531,72 @@ mod tests {
         assert_eq!(game.state.revision, 0);
         assert!(history.entries.is_empty());
         assert_eq!(setup.north_name, "North Player");
+    }
+
+    #[test]
+    fn clock_setup_is_untimed_by_default_and_clamps_documented_bounds() {
+        let mut setup = LocalSetup::default();
+        assert_eq!(setup.clock, None);
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyC);
+        update_clock_setup(&keys, &mut setup);
+        assert_eq!(setup.clock.unwrap().base_minutes, 10);
+        setup.clock = Some(ClockSettings {
+            base_minutes: MIN_BASE_MINUTES,
+            increment_seconds: 0,
+        });
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Minus);
+        keys.press(KeyCode::Comma);
+        update_clock_setup(&keys, &mut setup);
+        assert_eq!(setup.clock.unwrap().base_minutes, MIN_BASE_MINUTES);
+        setup.clock = Some(ClockSettings {
+            base_minutes: MAX_BASE_MINUTES,
+            increment_seconds: MAX_INCREMENT_SECONDS,
+        });
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Equal);
+        keys.press(KeyCode::Period);
+        update_clock_setup(&keys, &mut setup);
+        assert_eq!(setup.clock.unwrap().base_minutes, MAX_BASE_MINUTES);
+        assert_eq!(
+            setup.clock.unwrap().increment_seconds,
+            MAX_INCREMENT_SECONDS
+        );
+    }
+
+    #[test]
+    fn monotonic_elapsed_carry_is_independent_of_frame_partitioning() {
+        let mut split = LocalClockRuntime::default();
+        let split_total: u64 = [333_333, 333_333, 333_334]
+            .into_iter()
+            .map(|micros| accumulate_elapsed(&mut split, std::time::Duration::from_micros(micros)))
+            .sum();
+        let mut single = LocalClockRuntime::default();
+        assert_eq!(
+            split_total,
+            accumulate_elapsed(&mut single, std::time::Duration::from_secs(1))
+        );
+        assert_eq!(split_total, 1_000);
+    }
+
+    #[test]
+    fn exact_deadline_clock_transition_prevents_the_action() {
+        let scenario: ScenarioDefinition =
+            ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap();
+        let state = start_clocks(
+            &MatchState::from_scenario(&scenario).unwrap(),
+            ClockSettings {
+                base_minutes: 1,
+                increment_seconds: 5,
+            },
+        )
+        .unwrap();
+        let action = Action::Hold {
+            player: state.active_player,
+        };
+        let transition = apply_timed_action(&scenario, &state, &action, 60_000).unwrap();
+        assert!(transition.state.outcome.is_some());
+        assert_eq!(transition.state.turn_number, 1);
     }
 }

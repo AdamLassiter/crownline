@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use crownline_core::{
-    Action, apply_action, is_in_check, legal_moves,
+    Action, apply_timed_action, is_in_check, legal_moves,
     scenario::{BoardSize, Coord, Player},
     state::{MandatoryChoice, MatchState, PieceId, PromotionKind, TurnPhase},
 };
@@ -396,7 +396,7 @@ fn submit_action(
         return;
     }
     interaction.submitting = true;
-    match apply_action(&game.scenario, &game.state, action) {
+    match apply_timed_action(&game.scenario, &game.state, action, 0) {
         Ok(transition) => {
             transitions.push_transition(&transition);
             game.state = transition.state;

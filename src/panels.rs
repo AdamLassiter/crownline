@@ -3,7 +3,7 @@ use crownline_core::{
     governance_report, is_in_check,
     rules::GovernanceBlocker,
     scenario::ScenarioDefinition,
-    state::{MatchState, PieceId, TurnPhase},
+    state::{ClockState, MatchState, PieceId, TurnPhase},
 };
 
 use crate::{
@@ -31,6 +31,7 @@ struct PanelContentCache {
     revision: Option<u64>,
     selected: Option<PieceId>,
     history_len: usize,
+    clocks: Option<ClockState>,
 }
 
 impl PanelState {
@@ -302,6 +303,7 @@ fn update_panel_text(
     if cache.revision == Some(game.state.revision)
         && cache.selected == selection.piece
         && cache.history_len == history.entries.len()
+        && cache.clocks == game.state.clocks
     {
         return;
     }
@@ -320,6 +322,7 @@ fn update_panel_text(
     cache.revision = Some(game.state.revision);
     cache.selected = selection.piece;
     cache.history_len = history.entries.len();
+    cache.clocks = game.state.clocks;
 }
 
 #[allow(clippy::needless_pass_by_value)]
