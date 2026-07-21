@@ -12,11 +12,17 @@ mod camera;
 mod coordinates;
 mod features;
 mod overlays;
+mod transitions;
 
 use bevy::window::PrimaryWindow;
 use coordinates::{BoardGeometry, BoardOrientation};
 use features::{spawn_scenario_features, sync_settlement_visuals};
 use overlays::{OverlayCache, OverlayLegend, OverlaySelection, OverlayText, sync_overlays};
+use transitions::{
+    PiecePresentation, PresentationMotionQueue, PresentationPlayback, TransitionEventQueue,
+    TransitionNoticeLog, animate_piece_presentations, animate_transition_notices,
+    process_piece_motion_requests, process_transition_events,
+};
 
 pub use camera::CameraControlPlugin;
 
@@ -110,7 +116,7 @@ pub(super) struct DisplayedGame {
 }
 
 #[derive(Resource)]
-struct ChessPieceFont(Handle<Font>);
+pub(super) struct ChessPieceFont(pub(super) Handle<Font>);
 
 #[derive(Resource, Default)]
 pub struct HoveredBoardSquare(pub Option<Coord>);
@@ -134,6 +140,10 @@ impl Plugin for BoardRenderingPlugin {
             .init_resource::<OverlayCache>()
             .init_resource::<OverlayLegend>()
             .init_resource::<OverlayText>()
+            .init_resource::<PresentationMotionQueue>()
+            .init_resource::<PresentationPlayback>()
+            .init_resource::<TransitionEventQueue>()
+            .init_resource::<TransitionNoticeLog>()
             .add_systems(Startup, spawn_default_board)
             .add_systems(
                 Update,
@@ -142,6 +152,10 @@ impl Plugin for BoardRenderingPlugin {
                     sync_settlement_visuals,
                     update_hovered_square,
                     sync_overlays.after(update_hovered_square),
+                    process_piece_motion_requests.after(sync_piece_visuals),
+                    animate_piece_presentations.after(process_piece_motion_requests),
+                    process_transition_events,
+                    animate_transition_notices.after(process_transition_events),
                 ),
             );
     }
@@ -256,18 +270,26 @@ fn sync_piece_visuals(
     game: Res<DisplayedGame>,
     font: Res<ChessPieceFont>,
     mut visuals: Query<(Entity, &mut PieceVisual, &mut Transform)>,
+    mut motion: ResMut<PresentationMotionQueue>,
 ) {
     let mut existing = BTreeSet::new();
     for (entity, visual, mut transform) in &mut visuals {
         let Some(piece) = game.state.pieces.get(&visual.id) else {
+            motion.retire(visual.id, visual.kind, visual.owner, transform.translation);
             commands.entity(entity).despawn();
             continue;
         };
         if piece.kind != visual.kind || piece.owner != visual.owner {
+            motion.retire(visual.id, visual.kind, visual.owner, transform.translation);
             commands.entity(entity).despawn();
             continue;
         }
         let [x, y] = tile_position(piece.at, &game.scenario);
+        let target = Vec2::new(x, y);
+        let previous = transform.translation.truncate();
+        if (previous - target).length_squared() > f32::EPSILON {
+            motion.move_piece(piece.id, previous - target);
+        }
         transform.translation = Vec3::new(x, y, PIECE_Z);
         existing.insert(piece.id);
     }
@@ -300,27 +322,35 @@ fn spawn_piece(
             Visibility::default(),
         ))
         .with_children(|visual| {
-            visual.spawn((
-                Sprite::from_color(backplate, Vec2::splat(PIECE_BACKPLATE_SIZE)),
-                Transform::from_rotation(rotation),
-                PieceBackplate,
-            ));
-            visual.spawn((
-                Text2d::new(piece_glyph(piece.kind)),
-                TextFont {
-                    font: FontSource::Handle(font.clone()),
-                    font_size: FontSize::Px(PIECE_FONT_SIZE),
-                    ..default()
-                },
-                TextColor(text),
-                TextLayout::justify(Justify::Center),
-                Transform::from_xyz(0.0, 0.0, 1.0),
-                ChessFontText,
-            ));
+            visual
+                .spawn((
+                    PiecePresentation { id: piece.id },
+                    Transform::default(),
+                    Visibility::default(),
+                ))
+                .with_children(|presentation| {
+                    presentation.spawn((
+                        Sprite::from_color(backplate, Vec2::splat(PIECE_BACKPLATE_SIZE)),
+                        Transform::from_rotation(rotation),
+                        PieceBackplate,
+                    ));
+                    presentation.spawn((
+                        Text2d::new(piece_glyph(piece.kind)),
+                        TextFont {
+                            font: FontSource::Handle(font.clone()),
+                            font_size: FontSize::Px(PIECE_FONT_SIZE),
+                            ..default()
+                        },
+                        TextColor(text),
+                        TextLayout::justify(Justify::Center),
+                        Transform::from_xyz(0.0, 0.0, 1.0),
+                        ChessFontText,
+                    ));
+                });
         });
 }
 
-fn player_piece_style(player: Player) -> (Color, Color, Quat) {
+pub(super) fn player_piece_style(player: Player) -> (Color, Color, Quat) {
     match player {
         Player::North => (
             Color::srgb(0.94, 0.97, 1.0),
@@ -335,7 +365,7 @@ fn player_piece_style(player: Player) -> (Color, Color, Quat) {
     }
 }
 
-const fn piece_glyph(kind: PieceKind) -> &'static str {
+pub(super) const fn piece_glyph(kind: PieceKind) -> &'static str {
     match kind {
         PieceKind::King => "♔",
         PieceKind::Queen => "♕",

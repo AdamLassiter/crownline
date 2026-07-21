@@ -2,6 +2,15 @@
 
 Render a scalable, readable 2D board using tinted checker tiles, Unicode chess glyphs, and code-native overlays.
 
+## Status
+
+- [x] Done
+
+## Implementation notes
+
+- The default authored scenario projects through stable coordinate transforms into accessible terrain tiles, Unicode pieces, sites, ownership cues, Keeps, barriers, labels, and revision-cached semantic overlays.
+- Fit/pan/zoom controls, UI-aware picking, explicit precedence, textual overlay equivalents, and non-blocking presentation-only transitions complete the scalable 2D rendering boundary without changing canonical rules.
+
 ## Stories
 
 - [06.01 Board and pieces](06.01-board-pieces/06.01-story.md)
@@ -21,4 +30,3 @@ Render a scalable, readable 2D board using tinted checker tiles, Unicode chess g
 ## Cross-cutting concerns
 
 - Accessibility, font licensing, layering, stable coordinates, and bounded entity churn.
-
