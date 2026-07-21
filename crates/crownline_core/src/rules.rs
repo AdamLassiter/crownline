@@ -117,6 +117,16 @@ pub enum TransitionEvent {
         owner: Player,
         founder: PieceId,
     },
+    SettlementDevelopmentAdvanced {
+        settlement_index: u16,
+        progress: u8,
+    },
+    SettlementDevelopmentReset {
+        settlement_index: u16,
+    },
+    SettlementEstablished {
+        settlement_index: u16,
+    },
     DrawOffered {
         player: Player,
     },
@@ -338,7 +348,7 @@ pub fn apply_action(
     latch_settlement_interruptions(scenario, &mut next)?;
     if state.active_player != next.active_player && next.outcome.is_none() {
         let owner = next.active_player;
-        complete_owner_cycles(&mut next, owner);
+        complete_owner_cycles(scenario, &mut next, owner);
         latch_settlement_interruptions(scenario, &mut next)?;
     }
     let events = transition_events(state, &next, action);
@@ -614,6 +624,23 @@ fn settlement_change_events(before: &MatchState, after: &MatchState) -> Vec<Tran
                 }
                 _ => {}
             }
+            if settlement_before.establishment_progress != settlement_after.establishment_progress {
+                if settlement_after.establishment_progress == 0 {
+                    events.push(TransitionEvent::SettlementDevelopmentReset {
+                        settlement_index: settlement_after.site_index,
+                    });
+                } else {
+                    events.push(TransitionEvent::SettlementDevelopmentAdvanced {
+                        settlement_index: settlement_after.site_index,
+                        progress: settlement_after.establishment_progress,
+                    });
+                }
+            }
+            if !settlement_before.established && settlement_after.established {
+                events.push(TransitionEvent::SettlementEstablished {
+                    settlement_index: settlement_after.site_index,
+                });
+            }
         }
     }
     events
@@ -779,10 +806,24 @@ fn settlement_cycle_requirements_met(
     Ok(founder_present && !enemy_occupies && governed)
 }
 
-fn complete_owner_cycles(state: &mut MatchState, owner: Player) {
+fn complete_owner_cycles(scenario: &ScenarioDefinition, state: &mut MatchState, owner: Player) {
     for settlement in &mut state.settlements {
         if settlement.owner == Some(owner) {
-            settlement.completed_cycle_continuous = !settlement.cycle_interrupted;
+            let continuous = !settlement.cycle_interrupted;
+            settlement.completed_cycle_continuous = continuous;
+            if !settlement.established {
+                if continuous {
+                    settlement.establishment_progress = settlement
+                        .establishment_progress
+                        .saturating_add(1)
+                        .min(scenario.rules.establishment_cycles);
+                    if settlement.establishment_progress == scenario.rules.establishment_cycles {
+                        settlement.established = true;
+                    }
+                } else if scenario.rules.development_resets_when_interrupted {
+                    settlement.establishment_progress = 0;
+                }
+            }
             settlement.cycle_interrupted = false;
         }
     }
@@ -1995,6 +2036,127 @@ mod tests {
             .read(&save.to_json().unwrap())
             .unwrap();
         assert_eq!(loaded.state, interrupted.state);
+    }
+
+    #[test]
+    fn continuous_owner_cycle_advances_to_configured_establishment_threshold() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        scenario.rules.establishment_cycles = 2;
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+        state.settlements[0].establishment_progress = 1;
+
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(transition.state.settlements[0].establishment_progress, 2);
+        assert!(transition.state.settlements[0].established);
+        assert!(
+            transition
+                .events
+                .contains(&TransitionEvent::SettlementDevelopmentAdvanced {
+                    settlement_index: 0,
+                    progress: 2,
+                })
+        );
+        assert!(
+            transition
+                .events
+                .contains(&TransitionEvent::SettlementEstablished {
+                    settlement_index: 0,
+                })
+        );
+    }
+
+    #[test]
+    fn interrupted_development_pauses_or_resets_by_scenario_policy() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+        state.settlements[0].establishment_progress = 1;
+        state.settlements[0].cycle_interrupted = true;
+
+        let paused = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(paused.state.settlements[0].establishment_progress, 1);
+        assert!(!paused.state.settlements[0].established);
+
+        scenario.rules.development_resets_when_interrupted = true;
+        let reset = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(reset.state.settlements[0].establishment_progress, 0);
+        assert!(
+            reset
+                .events
+                .contains(&TransitionEvent::SettlementDevelopmentReset {
+                    settlement_index: 0,
+                })
+        );
+    }
+
+    #[test]
+    fn establishment_persists_after_founder_moves_away() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let founder = piece_id_at(&state, target);
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(founder);
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles;
+        state.settlements[0].established = true;
+
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: founder,
+                to: Coord::new(3, 2),
+            },
+        )
+        .unwrap();
+
+        assert!(transition.state.settlements[0].established);
+        assert_eq!(
+            transition.state.settlements[0].establishment_progress,
+            scenario.rules.establishment_cycles
+        );
     }
 
     #[test]
