@@ -2,6 +2,14 @@
 
 Integrate private-room networking into the Bevy client while keeping server snapshots authoritative.
 
+## Status
+
+- [ ] In progress
+
+## Implementation notes
+
+- Task 09.01.01 adds the Bevy online lobby and bounded create/join HTTP boundary with authored scenario/clock selection, safe server errors, TLS policy, normalized room codes, and credential-free invitations.
+
 ## Stories
 
 - [09.01 Room connection flow](09.01-connection/09.01-story.md)
@@ -21,4 +29,3 @@ Integrate private-room networking into the Bevy client while keeping server snap
 ## Cross-cutting concerns
 
 - Secret storage, clear connection state, retry bounds, responsiveness, and server authority.
-

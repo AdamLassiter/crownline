@@ -23,11 +23,13 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 anyhow = "1.0.98"
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 axum = { version = "0.8.4", features = ["http1", "json", "tokio", "ws"] }
 bevy = { version = "0.19.0", default-features = false, features = ["2d", "ui", "wayland", "x11"] }
 directories = "6.0.0"
 futures-util = "0.3.31"
 rand = "0.9.1"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
 ron = "0.10.1"
 rusqlite = { version = "0.37.0", features = ["bundled"] }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -41,15 +43,18 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "jso
 uuid = { version = "1.16.0", features = ["serde", "v4"] }
 
 [dependencies]
+arboard.workspace = true
 bevy.workspace = true
 crownline_core = { path = "crates/crownline_core" }
 crownline_protocol = { path = "crates/crownline_protocol" }
 directories.workspace = true
+reqwest.workspace = true
 ron.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [profile.dev]
 opt-level = 1

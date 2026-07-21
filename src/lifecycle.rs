@@ -19,6 +19,7 @@ use crate::rendering::{
 pub(crate) enum ClientFlow {
     #[default]
     Setup,
+    OnlineLobby,
     Playing,
     Paused,
     ConfirmResign,
@@ -26,7 +27,17 @@ pub(crate) enum ClientFlow {
 }
 
 #[derive(Resource)]
-struct ScenarioCatalog(Vec<ScenarioDefinition>);
+pub(crate) struct ScenarioCatalog(pub(crate) Vec<ScenarioDefinition>);
+
+impl Default for ScenarioCatalog {
+    fn default() -> Self {
+        Self(vec![
+            ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap(),
+            ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap(),
+            ron::from_str(include_str!("../assets/scenarios/large.ron")).unwrap(),
+        ])
+    }
+}
 
 #[derive(Resource)]
 pub(crate) struct LocalSetup {
@@ -75,11 +86,7 @@ impl Plugin for LocalLifecyclePlugin {
             .init_resource::<ClientFlow>()
             .init_resource::<LocalSetup>()
             .init_resource::<LocalClockRuntime>()
-            .insert_resource(ScenarioCatalog(vec![
-                ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap(),
-                ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap(),
-                ron::from_str(include_str!("../assets/scenarios/large.ron")).unwrap(),
-            ]))
+            .init_resource::<ScenarioCatalog>()
             .add_systems(Startup, spawn_lifecycle_ui)
             .add_systems(PreUpdate, tick_local_clock)
             .add_systems(Update, (handle_lifecycle_input, sync_lifecycle_ui).chain());
@@ -230,6 +237,7 @@ fn handle_lifecycle_input(
                 }
             }
         }
+        ClientFlow::OnlineLobby => {}
         ClientFlow::Playing => {
             if game.state.outcome.is_some() {
                 *flow = ClientFlow::Outcome;
@@ -434,7 +442,7 @@ fn sync_lifecycle_ui(
     }
     let scenario = &catalog.0[setup.selected_scenario];
     let setup_text = format!(
-        "CROWNLINES — LOCAL SETUP\nScenario: {} · {}×{} · {}–{} minutes\nDouble-step: {} · en passant: {} · castling routes: {}\nTab edits names · X swaps colors · PageUp/PageDown scenario · F2 start\nClock: {} · C toggle · -/+ base · ,/. increment\nNorth blue/pale: {} · South orange/dark: {}\n{}",
+        "CROWNLINES — LOCAL SETUP\nScenario: {} · {}×{} · {}–{} minutes\nDouble-step: {} · en passant: {} · castling routes: {}\nTab edits names · X swaps colors · PageUp/PageDown scenario · F2 local start · F3 online\nClock: {} · C toggle · -/+ base · ,/. increment\nNorth blue/pale: {} · South orange/dark: {}\n{}",
         scenario.metadata.name,
         scenario.board.width,
         scenario.board.height,
