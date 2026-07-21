@@ -118,7 +118,7 @@ pub(crate) struct DisplayedGame {
 }
 
 #[derive(Resource)]
-pub(super) struct ChessPieceFont(pub(super) Handle<Font>);
+pub(crate) struct ChessPieceFont(pub(crate) Handle<Font>);
 
 #[derive(Resource, Default)]
 pub struct HoveredBoardSquare(pub Option<Coord>);
