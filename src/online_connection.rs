@@ -6,11 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use crownline_core::Action;
 use crownline_protocol::{
     ActionRequest, ClientMessage, ConnectionState, ErrorCode, MatchSnapshot, MutationContext,
-    MutationResult, PROTOCOL_VERSION, ReconnectToken, ServerMessage, validate_snapshot,
+    MutationResult, PROTOCOL_VERSION, ReconnectToken, RematchState, ServerMessage,
+    validate_snapshot,
 };
 use directories::ProjectDirs;
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -61,6 +62,7 @@ pub(crate) struct OnlineConnection {
     ready_sent: bool,
     status: String,
     pending_action: Option<PendingAction>,
+    pending_control: Option<PendingControl>,
     last_snapshot: Option<SnapshotIdentity>,
     force_resync_requested: bool,
 }
@@ -89,6 +91,15 @@ struct PendingAction {
 }
 
 #[derive(Debug, Clone)]
+struct PendingControl {
+    message: ClientMessage,
+    idempotency_key: Uuid,
+    kind: OnlineControlKind,
+    last_sent: Instant,
+    attempts: u32,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct OnlineActionIntent {
     pub(crate) action: Action,
     pub(crate) expected_revision: u64,
@@ -99,6 +110,29 @@ pub(crate) struct OnlineIntentOutbox {
     pub(crate) intent: Option<OnlineActionIntent>,
     pub(crate) locked: bool,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnlineControlKind {
+    Draw,
+    Resign,
+    Rematch,
+    Leave,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct OnlineControlOutbox {
+    pub(crate) message: Option<(ClientMessage, OnlineControlKind)>,
+    pub(crate) locked: bool,
+}
+
+#[derive(Debug, Clone, Copy, Message)]
+pub(crate) struct OnlineControlResolved {
+    pub(crate) kind: OnlineControlKind,
+    pub(crate) accepted: bool,
+}
+
+#[derive(Debug, Clone, Copy, Message)]
+pub(crate) struct OnlineRematchStateChanged(pub(crate) Option<RematchState>);
 
 #[derive(Component)]
 struct ConnectionStatusText;
@@ -114,6 +148,11 @@ enum ConnectionCommand {
     Restore(SavedOnlineSeat),
     Ready,
     Action(ActionRequest),
+    Control(ClientMessage),
+    LeaveAndForget {
+        message: ClientMessage,
+        saved: Option<SavedOnlineSeat>,
+    },
     Retry,
     Cancel,
     Forget(SavedOnlineSeat),
@@ -129,6 +168,7 @@ enum ConnectionEvent {
         retryable: bool,
     },
     RoomState(ConnectionState),
+    RematchState(RematchState),
     Persisted(SavedOnlineSeat, CredentialProtection),
     Restored {
         saved: SavedOnlineSeat,
@@ -179,7 +219,10 @@ impl Plugin for OnlineConnectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OnlineConnection>()
             .init_resource::<OnlineIntentOutbox>()
+            .init_resource::<OnlineControlOutbox>()
             .init_resource::<ConnectionTransport>()
+            .add_message::<OnlineControlResolved>()
+            .add_message::<OnlineRematchStateChanged>()
             .add_systems(Startup, spawn_connection_status)
             .add_systems(
                 Update,
@@ -187,8 +230,9 @@ impl Plugin for OnlineConnectionPlugin {
                     start_or_restore_connection,
                     handle_connection_controls,
                     queue_online_action,
+                    queue_online_control,
                     request_forced_resync,
-                    retry_timed_out_action,
+                    retry_timed_out_commands,
                     poll_connection_events,
                     sync_connection_status,
                 )
@@ -368,27 +412,101 @@ fn queue_online_action(
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn retry_timed_out_action(
+fn queue_online_control(
+    mut outbox: ResMut<OnlineControlOutbox>,
+    mut connection: ResMut<OnlineConnection>,
+    settings: Res<ClientSettings>,
+    transport: Res<ConnectionTransport>,
+) {
+    let Some((message, kind)) = outbox.message.take() else {
+        return;
+    };
+    if connection.pending_action.is_some() || connection.pending_control.is_some() {
+        outbox.message = Some((message, kind));
+        outbox.locked = true;
+        return;
+    }
+    let Some(context) = message_context(&message) else {
+        outbox.locked = false;
+        "The lifecycle command was malformed.".clone_into(&mut connection.status);
+        return;
+    };
+    let command = if kind == OnlineControlKind::Leave {
+        ConnectionCommand::LeaveAndForget {
+            message: message.clone(),
+            saved: settings.saved_online_seat.clone(),
+        }
+    } else {
+        ConnectionCommand::Control(message.clone())
+    };
+    let sent = transport.commands.try_send(command).is_ok();
+    connection.pending_control = Some(PendingControl {
+        message,
+        idempotency_key: context.idempotency_key,
+        kind,
+        last_sent: if sent {
+            Instant::now()
+        } else {
+            Instant::now()
+                .checked_sub(ACTION_RESPONSE_TIMEOUT)
+                .unwrap_or_else(Instant::now)
+        },
+        attempts: u32::from(sent),
+    });
+    outbox.locked = true;
+    if sent {
+        "Match control pending authoritative response.".clone_into(&mut connection.status);
+    } else {
+        "Match control queued; the bounded network channel is busy."
+            .clone_into(&mut connection.status);
+    }
+}
+
+fn message_context(message: &ClientMessage) -> Option<MutationContext> {
+    match message {
+        ClientMessage::Ready { context, .. }
+        | ClientMessage::Draw { context, .. }
+        | ClientMessage::Rematch { context, .. }
+        | ClientMessage::Leave { context, .. } => Some(*context),
+        ClientMessage::Action { request, .. } => Some(request.context),
+        ClientMessage::Authenticate { .. } => None,
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn retry_timed_out_commands(
     mut connection: ResMut<OnlineConnection>,
     transport: Res<ConnectionTransport>,
 ) {
-    if connection.phase != ConnectionPhase::Connected {
+    if !matches!(
+        connection.phase,
+        ConnectionPhase::Connected | ConnectionPhase::Terminal
+    ) {
         return;
     }
-    let Some(pending) = connection.pending_action.as_mut() else {
-        return;
-    };
-    if pending.last_sent.elapsed() < ACTION_RESPONSE_TIMEOUT {
-        return;
-    }
-    if transport
-        .commands
-        .try_send(ConnectionCommand::Action(pending.request.clone()))
-        .is_ok()
+    if let Some(pending) = connection.pending_action.as_mut()
+        && pending.last_sent.elapsed() >= ACTION_RESPONSE_TIMEOUT
+        && transport
+            .commands
+            .try_send(ConnectionCommand::Action(pending.request.clone()))
+            .is_ok()
     {
         pending.last_sent = Instant::now();
         pending.attempts = pending.attempts.saturating_add(1);
         "Command response timed out; retrying the same idempotent intent."
+            .clone_into(&mut connection.status);
+    }
+    if let Some(pending) = connection.pending_control.as_mut()
+        && pending.last_sent.elapsed() >= ACTION_RESPONSE_TIMEOUT
+        && pending.kind != OnlineControlKind::Leave
+        && transport
+            .commands
+            .try_send(ConnectionCommand::Control(pending.message.clone()))
+            .is_ok()
+    {
+        pending.last_sent = Instant::now();
+        pending.attempts = pending.attempts.saturating_add(1);
+        "Match control timed out; retrying the same idempotent request."
             .clone_into(&mut connection.status);
     }
 }
@@ -408,28 +526,51 @@ fn request_forced_resync(
     }
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    clippy::needless_pass_by_value
-)]
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+#[derive(SystemParam)]
+struct ConnectionEventParams<'w> {
+    settings: ResMut<'w, ClientSettings>,
+    lobby: ResMut<'w, OnlineLobby>,
+    catalog: Res<'w, ScenarioCatalog>,
+    flow: ResMut<'w, ClientFlow>,
+    game: ResMut<'w, DisplayedGame>,
+    selection: ResMut<'w, OverlaySelection>,
+    hovered: ResMut<'w, HoveredBoardSquare>,
+    transitions: ResMut<'w, LocalTransitionEventQueue>,
+    notices: ResMut<'w, LocalTransitionNoticeLog>,
+    interaction: ResMut<'w, BoardInteraction>,
+    outbox: ResMut<'w, OnlineIntentOutbox>,
+    control_outbox: ResMut<'w, OnlineControlOutbox>,
+    presentation_snapshots: MessageWriter<'w, AuthoritativePresentationSnapshot>,
+    room_states: MessageWriter<'w, OnlineRoomStateChanged>,
+    control_resolutions: MessageWriter<'w, OnlineControlResolved>,
+    rematch_states: MessageWriter<'w, OnlineRematchStateChanged>,
+}
+
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
 fn poll_connection_events(
     transport: Res<ConnectionTransport>,
     mut connection: ResMut<OnlineConnection>,
-    mut settings: ResMut<ClientSettings>,
-    mut lobby: ResMut<OnlineLobby>,
-    catalog: Res<ScenarioCatalog>,
-    mut flow: ResMut<ClientFlow>,
-    mut game: ResMut<DisplayedGame>,
-    mut selection: ResMut<OverlaySelection>,
-    mut hovered: ResMut<HoveredBoardSquare>,
-    mut transitions: ResMut<LocalTransitionEventQueue>,
-    mut notices: ResMut<LocalTransitionNoticeLog>,
-    mut interaction: ResMut<BoardInteraction>,
-    mut outbox: ResMut<OnlineIntentOutbox>,
-    mut presentation_snapshots: MessageWriter<AuthoritativePresentationSnapshot>,
-    mut room_states: MessageWriter<OnlineRoomStateChanged>,
+    params: ConnectionEventParams,
 ) {
+    let ConnectionEventParams {
+        mut settings,
+        mut lobby,
+        catalog,
+        mut flow,
+        mut game,
+        mut selection,
+        mut hovered,
+        mut transitions,
+        mut notices,
+        mut interaction,
+        mut outbox,
+        mut control_outbox,
+        mut presentation_snapshots,
+        mut room_states,
+        mut control_resolutions,
+        mut rematch_states,
+    } = params;
     let Ok(events) = transport.events.lock() else {
         return;
     };
@@ -438,7 +579,11 @@ fn poll_connection_events(
             ConnectionEvent::Phase(phase) => {
                 if phase == ConnectionPhase::Rejected {
                     connection.pending_action = None;
+                    connection.pending_control = None;
                     outbox.locked = false;
+                    outbox.intent = None;
+                    control_outbox.locked = false;
+                    control_outbox.message = None;
                     interaction.resolve_online("Online authentication was rejected.");
                 }
                 connection.phase = phase;
@@ -447,9 +592,21 @@ fn poll_connection_events(
             ConnectionEvent::Forgotten => {
                 connection.phase = ConnectionPhase::Offline;
                 connection.pending_action = None;
+                connection.pending_control = None;
                 outbox.locked = false;
+                outbox.intent = None;
+                control_outbox.locked = false;
+                control_outbox.message = None;
                 interaction.resolve_online("Saved seat credential deleted.");
                 "Saved seat credential deleted.".clone_into(&mut connection.status);
+                settings.saved_online_seat = None;
+                if let Err(error) = settings.save() {
+                    tracing::warn!(%error, "could not clear forgotten online seat settings");
+                }
+                lobby.seat = None;
+                lobby.ready_requested = false;
+                lobby.screen = LobbyScreen::Closed;
+                *flow = ClientFlow::Setup;
             }
             ConnectionEvent::Persisted(saved, protection) => {
                 connection.active_match = Some(saved.match_id);
@@ -493,6 +650,17 @@ fn poll_connection_events(
                     connection.pending_action = None;
                     outbox.locked = false;
                     interaction.resolve_online("Command accepted by the server.");
+                } else if let Some(pending) = connection.pending_control.as_ref()
+                    && pending.idempotency_key == result.idempotency_key
+                    && result.match_id == connection.active_match.unwrap_or(result.match_id)
+                {
+                    let kind = pending.kind;
+                    connection.pending_control = None;
+                    control_outbox.locked = false;
+                    control_resolutions.write(OnlineControlResolved {
+                        kind,
+                        accepted: true,
+                    });
                 } else {
                     "Received an acknowledgement for a non-pending command."
                         .clone_into(&mut connection.status);
@@ -509,11 +677,21 @@ fn poll_connection_events(
                     if let Some(pending) = connection.pending_action.as_mut() {
                         pending.last_sent = Instant::now();
                     }
+                    if let Some(pending) = connection.pending_control.as_mut() {
+                        pending.last_sent = Instant::now();
+                    }
                     "The server asked the client to retry the same command."
                         .clone_into(&mut connection.status);
                 } else {
                     connection.pending_action = None;
                     outbox.locked = false;
+                    if let Some(pending) = connection.pending_control.take() {
+                        control_resolutions.write(OnlineControlResolved {
+                            kind: pending.kind,
+                            accepted: false,
+                        });
+                        control_outbox.locked = false;
+                    }
                     let message = match failure {
                         CommandFailure::WrongTurn => {
                             "Command rejected: it is not this seat's turn."
@@ -532,6 +710,28 @@ fn poll_connection_events(
             ConnectionEvent::RoomState(state) => {
                 room_states.write(OnlineRoomStateChanged(state));
             }
+            ConnectionEvent::RematchState(state) => {
+                if connection
+                    .pending_control
+                    .as_ref()
+                    .is_some_and(|pending| pending.kind == OnlineControlKind::Rematch)
+                {
+                    connection.pending_control = None;
+                    control_outbox.locked = false;
+                    control_resolutions.write(OnlineControlResolved {
+                        kind: OnlineControlKind::Rematch,
+                        accepted: true,
+                    });
+                }
+                rematch_states.write(OnlineRematchStateChanged(Some(state)));
+                if state == RematchState::Accepted {
+                    connection.active_match = None;
+                    connection.last_snapshot = None;
+                    connection.force_resync_requested = true;
+                    connection.pending_action = None;
+                    outbox.locked = false;
+                }
+            }
             ConnectionEvent::Snapshot(snapshot) => match reconcile_snapshot(
                 &snapshot,
                 connection.active_match,
@@ -544,6 +744,17 @@ fn poll_connection_events(
                 &mut notices,
             ) {
                 Ok(SnapshotDisposition::Replace | SnapshotDisposition::Equal) => {
+                    if connection.active_match != Some(snapshot.match_id) {
+                        if let Some(seat) = lobby.seat.as_mut() {
+                            seat.match_id = snapshot.match_id;
+                        }
+                        if let Some(saved) = settings.saved_online_seat.as_mut() {
+                            saved.match_id = snapshot.match_id;
+                            if let Err(error) = settings.save() {
+                                tracing::warn!(%error, "could not save rematch identity");
+                            }
+                        }
+                    }
                     connection.active_match = Some(snapshot.match_id);
                     connection.last_snapshot = Some(snapshot_identity(&snapshot));
                     connection.phase = if snapshot.room_state == ConnectionState::Finished
@@ -562,6 +773,7 @@ fn poll_connection_events(
                             || snapshot.room_state == ConnectionState::Finished,
                         room_state: snapshot.room_state,
                     });
+                    rematch_states.write(OnlineRematchStateChanged(snapshot.rematch_state));
                 }
                 Ok(SnapshotDisposition::Older) => {
                     tracing::debug!(
@@ -579,8 +791,12 @@ fn poll_connection_events(
                     connection.last_snapshot = None;
                     connection.force_resync_requested = true;
                     connection.pending_action = None;
+                    connection.pending_control = None;
                     connection.phase = ConnectionPhase::Connecting;
                     outbox.locked = false;
+                    outbox.intent = None;
+                    control_outbox.locked = false;
+                    control_outbox.message = None;
                     *selection = OverlaySelection::default();
                     interaction.resolve_online(
                         "Canonical state disagreed at the same revision; forcing a clean resync.",
@@ -717,7 +933,17 @@ fn sync_connection_status(
         ConnectionPhase::Terminal => "TERMINAL".to_owned(),
     };
     let pending = connection.pending_action.as_ref().map_or_else(
-        || "no command pending".to_owned(),
+        || {
+            connection.pending_control.as_ref().map_or_else(
+                || "no command pending".to_owned(),
+                |pending| {
+                    format!(
+                        "{:?} control pending · attempt {}",
+                        pending.kind, pending.attempts
+                    )
+                },
+            )
+        },
         |pending| format!("command pending · attempt {}", pending.attempts),
     );
     for (mut text, mut visibility) in &mut text {
@@ -869,6 +1095,8 @@ fn apply_idle_command(
         }
         ConnectionCommand::Ready
         | ConnectionCommand::Action(_)
+        | ConnectionCommand::Control(_)
+        | ConnectionCommand::LeaveAndForget { .. }
         | ConnectionCommand::Retry
         | ConnectionCommand::Cancel => false,
     }
@@ -931,6 +1159,17 @@ async fn connect_once(
                         ConnectionCommand::Action(request) => {
                             let action = ClientMessage::Action { protocol_version: PROTOCOL_VERSION, request };
                             if send_client_message(&mut socket, &action).await.is_err() { return SocketOutcome::Transient; }
+                        }
+                        ConnectionCommand::Control(message) => {
+                            if send_client_message(&mut socket, &message).await.is_err() { return SocketOutcome::Transient; }
+                        }
+                        ConnectionCommand::LeaveAndForget { message, saved } => {
+                            let _ = send_client_message(&mut socket, &message).await;
+                            if let Some(saved) = saved {
+                                let _ = vault.delete(saved.credential_id);
+                            }
+                            let _ = events.send(ConnectionEvent::Forgotten);
+                            return SocketOutcome::Cancelled;
                         }
                         ConnectionCommand::Retry => return SocketOutcome::RetryNow,
                         ConnectionCommand::Cancel => return SocketOutcome::Cancelled,
@@ -998,7 +1237,9 @@ fn handle_server_message(bytes: &[u8], events: &mpsc::SyncSender<ConnectionEvent
         ServerMessage::ConnectionState { state, .. } => {
             let _ = events.send(ConnectionEvent::RoomState(state));
         }
-        ServerMessage::RematchState { .. } => {}
+        ServerMessage::RematchState { state, .. } => {
+            let _ = events.send(ConnectionEvent::RematchState(state));
+        }
     }
     true
 }
@@ -1064,7 +1305,15 @@ async fn wait_for_retry(
         if let Ok(command) = commands.try_recv() {
             match command {
                 ConnectionCommand::Retry => return true,
-                ConnectionCommand::Action(_) => continue,
+                ConnectionCommand::Action(_) | ConnectionCommand::Control(_) => continue,
+                ConnectionCommand::LeaveAndForget { saved, .. } => {
+                    if let Some(saved) = saved {
+                        let _ = vault.delete(saved.credential_id);
+                    }
+                    *target = None;
+                    let _ = events.send(ConnectionEvent::Forgotten);
+                    return false;
+                }
                 ConnectionCommand::Cancel => {
                     *target = None;
                     let _ = events.send(ConnectionEvent::Phase(ConnectionPhase::Offline));
