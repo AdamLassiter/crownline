@@ -474,6 +474,7 @@ mod tests {
                 name: "State test".to_owned(),
                 description: String::new(),
                 expected_minutes: (30, 45),
+                is_default: false,
             },
             board: BoardSize {
                 width: 16,

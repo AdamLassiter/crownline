@@ -2114,6 +2114,7 @@ mod tests {
                 name: "Rules test".to_owned(),
                 description: String::new(),
                 expected_minutes: (1, 2),
+                is_default: false,
             },
             board: BoardSize {
                 width: 8,

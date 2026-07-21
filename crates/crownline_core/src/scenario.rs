@@ -214,6 +214,8 @@ pub struct ScenarioMetadata {
     pub name: String,
     pub description: String,
     pub expected_minutes: (u16, u16),
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -930,6 +932,7 @@ mod tests {
                 name: "Test".to_owned(),
                 description: String::new(),
                 expected_minutes: (30, 45),
+                is_default: false,
             },
             board: BoardSize {
                 width: 16,
@@ -1006,6 +1009,7 @@ mod tests {
                 name: "Standard fixture".to_owned(),
                 description: String::new(),
                 expected_minutes: (60, 90),
+                is_default: false,
             },
             board: BoardSize {
                 width: 16,
@@ -1140,6 +1144,7 @@ mod tests {
             }
         );
         assert_eq!(scenario.metadata.expected_minutes, (30, 45));
+        assert!(!scenario.metadata.is_default);
         assert_eq!(scenario.deployments.len(), 32);
         assert_eq!(scenario.settlements.len(), 4);
         assert_eq!(scenario.promotion_sites.len(), 2);
