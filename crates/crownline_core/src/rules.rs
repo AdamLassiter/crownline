@@ -90,6 +90,14 @@ pub enum TransitionEvent {
         pawn: PieceId,
         at: Coord,
     },
+    SettlementContinuityInterrupted {
+        settlement_index: u16,
+    },
+    SettlementCycleStarted {
+        settlement_index: u16,
+        player: Player,
+        previous_continuous: bool,
+    },
     DrawOffered {
         player: Player,
     },
@@ -285,7 +293,7 @@ pub fn apply_action(
         return Err(TransitionError::MatchFinished);
     }
 
-    let next = match *action {
+    let mut next = match *action {
         Action::Move { player, piece, to } => apply_move(scenario, state, player, piece, to),
         Action::Hold { player } => apply_hold(scenario, state, player),
         Action::Resign { .. } | Action::OfferDraw { .. } | Action::RespondToDraw { .. } => {
@@ -302,6 +310,11 @@ pub fn apply_action(
             at,
         } => apply_pawn_placement(state, player, settlement_index, at),
     }?;
+    latch_settlement_interruptions(scenario, &mut next)?;
+    if state.active_player != next.active_player && next.outcome.is_none() {
+        let owner = next.active_player;
+        complete_owner_cycles(&mut next, owner);
+    }
     let events = transition_events(state, &next, action);
     Ok(Transition {
         state: next,
@@ -490,7 +503,31 @@ fn transition_events(
         }
         Action::Resign { .. } => Vec::new(),
     };
-    if before.active_player != after.active_player {
+    for settlement_after in &after.settlements {
+        if let Some(settlement_before) = before
+            .settlements
+            .iter()
+            .find(|settlement| settlement.site_index == settlement_after.site_index)
+            && !settlement_before.cycle_interrupted
+            && settlement_after.cycle_interrupted
+        {
+            events.push(TransitionEvent::SettlementContinuityInterrupted {
+                settlement_index: settlement_after.site_index,
+            });
+        }
+    }
+    if before.active_player != after.active_player && after.outcome.is_none() {
+        for settlement in after
+            .settlements
+            .iter()
+            .filter(|settlement| settlement.owner == Some(after.active_player))
+        {
+            events.push(TransitionEvent::SettlementCycleStarted {
+                settlement_index: settlement.site_index,
+                player: after.active_player,
+                previous_continuous: settlement.completed_cycle_continuous,
+            });
+        }
         events.push(TransitionEvent::TurnStarted {
             player: after.active_player,
             turn_number: after.turn_number,
@@ -502,6 +539,71 @@ fn transition_events(
         events.push(TransitionEvent::MatchEnded { outcome });
     }
     events
+}
+
+fn latch_settlement_interruptions(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+) -> Result<(), TransitionError> {
+    let indices: Vec<_> = state
+        .settlements
+        .iter()
+        .filter(|settlement| settlement.owner.is_some() && !settlement.cycle_interrupted)
+        .map(|settlement| settlement.site_index)
+        .collect();
+    for index in indices {
+        if !settlement_cycle_requirements_met(scenario, state, index)?
+            && let Some(settlement) = state
+                .settlements
+                .iter_mut()
+                .find(|settlement| settlement.site_index == index)
+        {
+            settlement.cycle_interrupted = true;
+        }
+    }
+    Ok(())
+}
+
+fn settlement_cycle_requirements_met(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    settlement_index: u16,
+) -> Result<bool, TransitionError> {
+    let settlement = state
+        .settlements
+        .iter()
+        .find(|settlement| settlement.site_index == settlement_index)
+        .ok_or(TransitionError::MissingSettlement(settlement_index))?;
+    let Some(owner) = settlement.owner else {
+        return Ok(false);
+    };
+    let founder_present = settlement.founder.is_some_and(|founder| {
+        state
+            .pieces
+            .get(&founder)
+            .is_some_and(|piece| piece.owner == owner && piece.kind == PieceKind::Pawn)
+    });
+    let site = scenario
+        .settlements
+        .get(usize::from(settlement_index))
+        .ok_or(TransitionError::MissingSettlement(settlement_index))?;
+    let enemy_occupies = state
+        .pieces
+        .values()
+        .any(|piece| piece.at == site.at && piece.owner != owner);
+    let governed = !governance_report(scenario, state, settlement_index)?
+        .governors
+        .is_empty();
+    Ok(founder_present && !enemy_occupies && governed)
+}
+
+fn complete_owner_cycles(state: &mut MatchState, owner: Player) {
+    for settlement in &mut state.settlements {
+        if settlement.owner == Some(owner) {
+            settlement.completed_cycle_continuous = !settlement.cycle_interrupted;
+            settlement.cycle_interrupted = false;
+        }
+    }
 }
 
 fn move_transition_events(
@@ -1626,6 +1728,94 @@ mod tests {
     }
 
     #[test]
+    fn accepted_actions_latch_broken_settlement_continuity() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+        let rook = piece_id_at(&state, Coord::new(3, 7));
+
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: rook,
+                to: Coord::new(2, 7),
+            },
+        )
+        .unwrap();
+
+        assert!(transition.state.settlements[0].cycle_interrupted);
+        assert!(
+            transition
+                .events
+                .contains(&TransitionEvent::SettlementContinuityInterrupted {
+                    settlement_index: 0,
+                })
+        );
+    }
+
+    #[test]
+    fn owner_turn_boundary_snapshots_and_resets_continuity() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+        state.active_player = Player::North;
+
+        let continuous = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert!(continuous.state.settlements[0].completed_cycle_continuous);
+        assert!(!continuous.state.settlements[0].cycle_interrupted);
+        assert!(
+            continuous
+                .events
+                .contains(&TransitionEvent::SettlementCycleStarted {
+                    settlement_index: 0,
+                    player: Player::South,
+                    previous_continuous: true,
+                })
+        );
+
+        state.settlements[0].cycle_interrupted = true;
+        let interrupted = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert!(!interrupted.state.settlements[0].completed_cycle_continuous);
+        assert!(!interrupted.state.settlements[0].cycle_interrupted);
+
+        let save =
+            crate::persistence::SaveEnvelope::new("continuity-test", interrupted.state.clone())
+                .unwrap();
+        let loaded = crate::persistence::SaveReader::new()
+            .read(&save.to_json().unwrap())
+            .unwrap();
+        assert_eq!(loaded.state, interrupted.state);
+    }
+
+    #[test]
     fn slider_stops_on_forest_and_piece() {
         let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Rook, 0, 7)]);
         scenario
@@ -2392,14 +2582,11 @@ mod tests {
                 }]
             }
         );
-        assert_eq!(
-            transition.events,
-            vec![TransitionEvent::PawnProduced {
-                settlement_index: 0,
-                pawn,
-                at: first_at,
-            }]
-        );
+        assert!(transition.events.contains(&TransitionEvent::PawnProduced {
+            settlement_index: 0,
+            pawn,
+            at: first_at,
+        }));
     }
 
     #[test]

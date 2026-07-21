@@ -44,6 +44,7 @@ pub struct SettlementState {
     pub production_progress: u8,
     pub produced_pawn: Option<PieceId>,
     pub cycle_interrupted: bool,
+    pub completed_cycle_continuous: bool,
     pub transfer_candidate: Option<PieceId>,
 }
 
@@ -171,6 +172,7 @@ impl MatchState {
                         production_progress: 0,
                         produced_pawn: None,
                         cycle_interrupted: false,
+                        completed_cycle_continuous: false,
                         transfer_candidate: None,
                     })
                 })
