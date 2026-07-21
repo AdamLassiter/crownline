@@ -10,6 +10,7 @@ Prove rules correctness, online durability, UI readability, map balance, and max
 
 - Task 10.01.01 establishes the core rules verification layer with readable fixtures, interaction regressions, generated King-safety walks, transactional rejection checks, and canonical serialization/hash invariants.
 - Story 10.01 completes rules verification with versioned golden journals for every shipped scenario and terminal reason, including a combined realm transition path and per-revision event/hash enforcement.
+- Task 10.02.01 adds real-loopback HTTP/WebSocket integration over isolated durable SQLite, proving the two-client lifecycle, one-winner concurrency, idempotency, credential recovery, persisted deadlines, terminal/rematch behavior, and secret-safe responses.
 
 ## Stories
 
