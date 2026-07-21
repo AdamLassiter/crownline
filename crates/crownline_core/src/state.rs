@@ -406,6 +406,10 @@ pub enum TransitionError {
     ChoiceDoesNotMatch,
     #[error("piece {0:?} is not an eligible promotion Pawn")]
     InvalidPromotionPawn(PieceId),
+    #[error("promotion would leave the active King in check")]
+    PromotionLeavesKingInCheck,
+    #[error("promotion candidate progress overflowed")]
+    PromotionProgressOverflow,
     #[error("{at:?} is not a legal placement for settlement {settlement_index}")]
     IllegalPawnPlacement { settlement_index: u16, at: Coord },
     #[error("settlement {0} is missing")]

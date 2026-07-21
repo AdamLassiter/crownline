@@ -138,6 +138,20 @@ pub enum TransitionEvent {
         settlement_index: u16,
         legal_squares: BTreeSet<Coord>,
     },
+    PromotionCandidateStarted {
+        pawn: PieceId,
+    },
+    PromotionCandidateAdvanced {
+        pawn: PieceId,
+        progress: u8,
+    },
+    PromotionCandidateCancelled {
+        pawn: PieceId,
+    },
+    PromotionReady {
+        pawn: PieceId,
+        site_index: u16,
+    },
     DrawOffered {
         player: Player,
     },
@@ -382,7 +396,7 @@ pub fn apply_action(
             player,
             pawn,
             promote_to,
-        } => apply_promotion_choice(state, player, pawn, promote_to),
+        } => apply_promotion_choice(scenario, state, player, pawn, promote_to),
         Action::PlacePawn {
             player,
             settlement_index,
@@ -390,15 +404,19 @@ pub fn apply_action(
         } => apply_pawn_placement(state, player, settlement_index, at),
     }?;
     apply_settlement_landing_effect(scenario, &mut next, action)?;
+    apply_promotion_landing_effect(scenario, &mut next, action);
     cancel_invalid_transfer_candidates(scenario, &mut next)?;
+    cancel_invalid_promotion_candidates(scenario, &mut next);
     if state.active_player != next.active_player && next.outcome.is_none() {
         let active_player = next.active_player;
         resolve_transfer_candidates(scenario, &mut next, active_player)?;
+        advance_promotion_candidates(scenario, &mut next, active_player)?;
     }
     latch_settlement_interruptions(scenario, &mut next)?;
     if state.active_player != next.active_player && next.outcome.is_none() {
         let owner = next.active_player;
         complete_owner_cycles(scenario, &mut next, owner);
+        sort_mandatory_choices(scenario, &mut next);
         latch_settlement_interruptions(scenario, &mut next)?;
         record_repetition(&mut next)?;
     }
@@ -410,6 +428,7 @@ pub fn apply_action(
 }
 
 fn apply_promotion_choice(
+    scenario: &ScenarioDefinition,
     state: &MatchState,
     player: Player,
     pawn_id: PieceId,
@@ -449,6 +468,9 @@ fn apply_promotion_choice(
     complete_first_choice(&mut next)?;
     finish_non_command_transition(&mut next)?;
     next.validate_invariants()?;
+    if is_in_check(scenario, &next, player)? {
+        return Err(TransitionError::PromotionLeavesKingInCheck);
+    }
     Ok(next)
 }
 
@@ -591,6 +613,7 @@ fn transition_events(
         Action::Resign { .. } => Vec::new(),
     };
     events.extend(settlement_change_events(before, after));
+    events.extend(promotion_candidate_events(before, after, action));
     events.extend(new_mandatory_choice_events(before, after));
     if before.active_player != after.active_player && after.outcome.is_none() {
         for settlement in after
@@ -722,17 +745,50 @@ fn new_mandatory_choice_events(before: &MatchState, after: &MatchState) -> Vec<T
     after_queue
         .iter()
         .filter(|choice| !before_queue.contains(choice))
-        .filter_map(|choice| match choice {
+        .map(|choice| match choice {
             MandatoryChoice::PlacePawn {
                 settlement_index,
                 legal_squares,
-            } => Some(TransitionEvent::PawnPlacementReady {
+            } => TransitionEvent::PawnPlacementReady {
                 settlement_index: *settlement_index,
                 legal_squares: legal_squares.clone(),
-            }),
-            MandatoryChoice::Promote { .. } => None,
+            },
+            MandatoryChoice::Promote { pawn, site_index } => TransitionEvent::PromotionReady {
+                pawn: *pawn,
+                site_index: *site_index,
+            },
         })
         .collect()
+}
+
+fn promotion_candidate_events(
+    before: &MatchState,
+    after: &MatchState,
+    action: &Action,
+) -> Vec<TransitionEvent> {
+    let promoted = match action {
+        Action::ChoosePromotion { pawn, .. } => Some(*pawn),
+        _ => None,
+    };
+    let mut events = Vec::new();
+    for (pawn, progress) in &after.promotion_candidates {
+        match before.promotion_candidates.get(pawn) {
+            None => events.push(TransitionEvent::PromotionCandidateStarted { pawn: *pawn }),
+            Some(previous) if previous != progress => {
+                events.push(TransitionEvent::PromotionCandidateAdvanced {
+                    pawn: *pawn,
+                    progress: *progress,
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    for pawn in before.promotion_candidates.keys() {
+        if !after.promotion_candidates.contains_key(pawn) && promoted != Some(*pawn) {
+            events.push(TransitionEvent::PromotionCandidateCancelled { pawn: *pawn });
+        }
+    }
+    events
 }
 
 fn apply_settlement_landing_effect(
@@ -784,6 +840,122 @@ fn apply_settlement_landing_effect(
         Some(_) => {}
     }
     Ok(())
+}
+
+fn apply_promotion_landing_effect(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+    action: &Action,
+) {
+    let Action::Move { piece, .. } = *action else {
+        return;
+    };
+    let Some(pawn) = state
+        .pieces
+        .get(&piece)
+        .filter(|piece| piece.kind == PieceKind::Pawn)
+    else {
+        return;
+    };
+    if scenario
+        .promotion_sites
+        .iter()
+        .any(|site| site.at == pawn.at)
+    {
+        state.promotion_candidates.insert(piece, 0);
+    }
+}
+
+fn cancel_invalid_promotion_candidates(scenario: &ScenarioDefinition, state: &mut MatchState) {
+    let pieces = &state.pieces;
+    state.promotion_candidates.retain(|pawn, _| {
+        pieces.get(pawn).is_some_and(|piece| {
+            piece.kind == PieceKind::Pawn
+                && scenario
+                    .promotion_sites
+                    .iter()
+                    .any(|site| site.at == piece.at)
+        })
+    });
+}
+
+fn advance_promotion_candidates(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+    active_player: Player,
+) -> Result<(), TransitionError> {
+    let pieces = &state.pieces;
+    for (pawn, progress) in &mut state.promotion_candidates {
+        if pieces
+            .get(pawn)
+            .is_some_and(|piece| piece.owner == active_player)
+            && *progress < scenario.rules.promotion_cycles
+        {
+            *progress = progress
+                .checked_add(1)
+                .ok_or(TransitionError::PromotionProgressOverflow)?;
+        }
+    }
+    let choices: Vec<_> = state
+        .promotion_candidates
+        .iter()
+        .filter(|(_, progress)| **progress >= scenario.rules.promotion_cycles)
+        .filter_map(|(pawn, _)| {
+            let piece = state.pieces.get(pawn)?;
+            if piece.owner != active_player {
+                return None;
+            }
+            let site_index = scenario
+                .promotion_sites
+                .iter()
+                .position(|site| site.at == piece.at)
+                .and_then(|index| u16::try_from(index).ok())?;
+            Some(MandatoryChoice::Promote {
+                pawn: *pawn,
+                site_index,
+            })
+        })
+        .collect();
+    append_mandatory_choices(state, choices);
+    Ok(())
+}
+
+fn append_mandatory_choices(state: &mut MatchState, choices: Vec<MandatoryChoice>) {
+    if choices.is_empty() {
+        return;
+    }
+    match &mut state.phase {
+        TurnPhase::ResolvingChoices { queue } => queue.extend(choices),
+        TurnPhase::Command => {
+            state.phase = TurnPhase::ResolvingChoices { queue: choices };
+        }
+    }
+}
+
+fn sort_mandatory_choices(scenario: &ScenarioDefinition, state: &mut MatchState) {
+    let TurnPhase::ResolvingChoices { queue } = &mut state.phase else {
+        return;
+    };
+    queue.sort_by_key(|choice| match choice {
+        MandatoryChoice::Promote { pawn, site_index } => (
+            scenario
+                .promotion_sites
+                .get(usize::from(*site_index))
+                .map_or(Coord::new(u16::MAX, u16::MAX), |site| site.at),
+            0_u8,
+            pawn.0,
+        ),
+        MandatoryChoice::PlacePawn {
+            settlement_index, ..
+        } => (
+            scenario
+                .settlements
+                .get(usize::from(*settlement_index))
+                .map_or(Coord::new(u16::MAX, u16::MAX), |site| site.at),
+            1,
+            u32::from(*settlement_index),
+        ),
+    });
 }
 
 fn cancel_invalid_transfer_candidates(
@@ -954,14 +1126,7 @@ fn complete_owner_cycles(scenario: &ScenarioDefinition, state: &mut MatchState, 
             })
         })
         .collect();
-    if !choices.is_empty() {
-        match &mut state.phase {
-            TurnPhase::ResolvingChoices { queue } => queue.extend(choices),
-            TurnPhase::Command => {
-                state.phase = TurnPhase::ResolvingChoices { queue: choices };
-            }
-        }
-    }
+    append_mandatory_choices(state, choices);
 }
 
 fn pawn_placement_squares_unchecked(
@@ -1875,7 +2040,8 @@ mod tests {
     use crate::{
         scenario::{
             BoardSize, CastlingRoute, Deployment, Edge, EdgeKind, Fortification, KeepDefinition,
-            SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules, SettlementSite, TileTerrain,
+            PromotionSite, SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules,
+            SettlementSite, TileTerrain,
         },
         state::PieceOrigin,
     };
@@ -2584,6 +2750,187 @@ mod tests {
         assert!(!squares.contains(&Coord::new(3, 2)));
         assert!(!squares.contains(&Coord::new(4, 3)));
         assert!(squares.contains(&Coord::new(2, 3)));
+    }
+
+    #[test]
+    fn surviving_promotion_candidate_queues_and_replaces_stable_identity() {
+        let site = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Pawn, 3, 4)]);
+        scenario.promotion_sites.push(PromotionSite {
+            id: "court".to_owned(),
+            at: site,
+        });
+        scenario.settlements.push(SettlementSite {
+            id: "capacity-source".to_owned(),
+            at: Coord::new(6, 6),
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let pawn = piece_id_at(&state, Coord::new(3, 4));
+        state.pieces.get_mut(&pawn).unwrap().origin = PieceOrigin::Settlement {
+            settlement_index: 0,
+        };
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].established = true;
+        state.settlements[0].produced_pawn = Some(pawn);
+
+        let candidate = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: pawn,
+                to: site,
+            },
+        )
+        .unwrap();
+        assert_eq!(candidate.state.promotion_candidates[&pawn], 0);
+        assert!(
+            candidate
+                .events
+                .contains(&TransitionEvent::PromotionCandidateStarted { pawn })
+        );
+        assert!(matches!(candidate.state.phase, TurnPhase::Command));
+
+        let ready = apply_action(
+            &scenario,
+            &candidate.state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(ready.state.promotion_candidates[&pawn], 1);
+        assert_eq!(
+            ready.state.phase,
+            TurnPhase::ResolvingChoices {
+                queue: vec![MandatoryChoice::Promote {
+                    pawn,
+                    site_index: 0,
+                }]
+            }
+        );
+        assert!(ready.events.contains(&TransitionEvent::PromotionReady {
+            pawn,
+            site_index: 0,
+        }));
+
+        let promoted_id = PieceId(ready.state.next_piece_id);
+        let promoted = apply_action(
+            &scenario,
+            &ready.state,
+            &Action::ChoosePromotion {
+                player: Player::South,
+                pawn,
+                promote_to: PromotionKind::Bishop,
+            },
+        )
+        .unwrap();
+        assert!(!promoted.state.pieces.contains_key(&pawn));
+        assert_eq!(promoted.state.pieces[&promoted_id].owner, Player::South);
+        assert_eq!(promoted.state.pieces[&promoted_id].at, site);
+        assert_eq!(promoted.state.pieces[&promoted_id].kind, PieceKind::Bishop);
+        assert_eq!(promoted.state.settlements[0].produced_pawn, None);
+    }
+
+    #[test]
+    fn promotion_candidacy_cancels_on_departure_or_capture() {
+        let site = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 4),
+            deployment(Player::North, PieceKind::Rook, 3, 0),
+        ]);
+        scenario.promotion_sites.push(PromotionSite {
+            id: "court".to_owned(),
+            at: site,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let pawn = piece_id_at(&state, Coord::new(3, 4));
+        let candidate = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: pawn,
+                to: site,
+            },
+        )
+        .unwrap()
+        .state;
+
+        let mut leaving = candidate.clone();
+        leaving.active_player = Player::South;
+        let departed = apply_action(
+            &scenario,
+            &leaving,
+            &Action::Move {
+                player: Player::South,
+                piece: pawn,
+                to: Coord::new(3, 2),
+            },
+        )
+        .unwrap();
+        assert!(!departed.state.promotion_candidates.contains_key(&pawn));
+        assert!(
+            departed
+                .events
+                .contains(&TransitionEvent::PromotionCandidateCancelled { pawn })
+        );
+
+        let rook = piece_id_at(&candidate, Coord::new(3, 0));
+        let captured = apply_action(
+            &scenario,
+            &candidate,
+            &Action::Move {
+                player: Player::North,
+                piece: rook,
+                to: site,
+            },
+        )
+        .unwrap();
+        assert!(!captured.state.pieces.contains_key(&pawn));
+        assert!(!captured.state.promotion_candidates.contains_key(&pawn));
+        assert!(
+            captured
+                .events
+                .contains(&TransitionEvent::PromotionCandidateCancelled { pawn })
+        );
+    }
+
+    #[test]
+    fn promotion_rejects_a_result_that_leaves_king_in_check() {
+        let site = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::North, PieceKind::Rook, 0, 7),
+        ]);
+        scenario.promotion_sites.push(PromotionSite {
+            id: "court".to_owned(),
+            at: site,
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let pawn = piece_id_at(&state, site);
+        state.promotion_candidates.insert(pawn, 1);
+        state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::Promote {
+                pawn,
+                site_index: 0,
+            }],
+        };
+        let before = state.clone();
+
+        assert!(matches!(
+            apply_action(
+                &scenario,
+                &state,
+                &Action::ChoosePromotion {
+                    player: Player::South,
+                    pawn,
+                    promote_to: PromotionKind::Queen,
+                }
+            ),
+            Err(TransitionError::PromotionLeavesKingInCheck)
+        ));
+        assert_eq!(state, before);
     }
 
     #[test]
