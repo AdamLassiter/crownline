@@ -1,8 +1,6 @@
 use std::{env, net::SocketAddr};
 
 use anyhow::{Context, Result};
-use axum::{Json, Router, routing::get};
-use serde::Serialize;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use tracing::info;
@@ -31,19 +29,6 @@ impl ServerConfig {
     }
 }
 
-#[derive(Serialize)]
-struct HealthResponse {
-    status: &'static str,
-    protocol_version: u16,
-}
-
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok",
-        protocol_version: crownline_protocol::PROTOCOL_VERSION,
-    })
-}
-
 fn init_tracing(json_logs: bool) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let subscriber = tracing_subscriber::fmt().with_env_filter(filter);
@@ -59,9 +44,7 @@ async fn main() -> Result<()> {
     let config = ServerConfig::from_env()?;
     init_tracing(config.json_logs);
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .layer(TraceLayer::new_for_http());
+    let app = crownline_server::app().layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(config.bind_address)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_address))?;

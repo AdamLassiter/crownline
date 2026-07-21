@@ -91,6 +91,10 @@ pub enum ClientMessage {
         context: MutationContext,
         command: RematchCommand,
     },
+    Leave {
+        protocol_version: u16,
+        context: MutationContext,
+    },
 }
 
 impl ClientMessage {
@@ -106,6 +110,9 @@ impl ClientMessage {
                 protocol_version, ..
             }
             | Self::Rematch {
+                protocol_version, ..
+            }
+            | Self::Leave {
                 protocol_version, ..
             } => *protocol_version,
         }
