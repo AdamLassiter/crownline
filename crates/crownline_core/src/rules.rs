@@ -3856,6 +3856,71 @@ mod tests {
     }
 
     #[test]
+    fn hold_completes_stalemated_turn_without_changing_occupancy_and_is_journaled() {
+        use crate::journal::{ActionJournal, AppendOutcome, IdempotencyKey};
+
+        let scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::King, 0, 7),
+            deployment(Player::North, PieceKind::King, 2, 6),
+            deployment(Player::North, PieceKind::Queen, 1, 5),
+        ]);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        assert!(!is_in_check(&scenario, &state, Player::South).unwrap());
+        assert!(legal_moves(&scenario, &state).unwrap().is_empty());
+        let occupancy = state.pieces.clone();
+
+        let action = Action::Hold {
+            player: Player::South,
+        };
+        let mut journal = ActionJournal::new("command-phase-test", &scenario).unwrap();
+        let AppendOutcome::Accepted(transition) = journal
+            .append(&scenario, &state, IdempotencyKey([1; 16]), &action)
+            .unwrap()
+        else {
+            panic!("Hold must be accepted exactly once");
+        };
+
+        assert_eq!(transition.state.pieces, occupancy);
+        assert_eq!(transition.state.active_player, Player::North);
+        assert_eq!(transition.state.revision, state.revision + 1);
+        assert!(transition.events.contains(&TransitionEvent::TurnHeld {
+            player: Player::South,
+        }));
+        assert_eq!(journal.records.len(), 1);
+        assert_eq!(journal.records[0].action, action);
+        assert_eq!(journal.replay(&scenario).unwrap(), transition.state);
+    }
+
+    #[test]
+    fn commands_are_rejected_after_match_termination() {
+        let scenario = scenario_with(Vec::new());
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let king = piece_id_at(&state, Coord::new(4, 7));
+        state.outcome = Some(MatchOutcome {
+            winner: Some(Player::North),
+            reason: OutcomeReason::Resignation,
+        });
+        let before = state.clone();
+
+        for action in [
+            Action::Hold {
+                player: Player::South,
+            },
+            Action::Move {
+                player: Player::South,
+                piece: king,
+                to: Coord::new(4, 6),
+            },
+        ] {
+            assert!(matches!(
+                apply_action(&scenario, &state, &action),
+                Err(TransitionError::MatchFinished)
+            ));
+        }
+        assert_eq!(state, before);
+    }
+
+    #[test]
     fn capture_event_preserves_identity_and_cleans_realm_references() {
         let mut scenario = scenario_with(vec![
             deployment(Player::South, PieceKind::Rook, 0, 7),
@@ -3975,6 +4040,18 @@ mod tests {
                 &state,
                 &Action::Hold {
                     player: Player::South
+                }
+            ),
+            Err(TransitionError::WrongTurnPhase)
+        ));
+        assert!(matches!(
+            apply_action(
+                &scenario,
+                &state,
+                &Action::Move {
+                    player: Player::South,
+                    piece: pawn,
+                    to: Coord::new(0, 2),
                 }
             ),
             Err(TransitionError::WrongTurnPhase)
