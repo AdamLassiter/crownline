@@ -115,6 +115,10 @@ impl AuthoritativeMatch {
         self.prepared.take()
     }
 
+    pub const fn has_prepared_transition(&self) -> bool {
+        self.prepared.is_some()
+    }
+
     /// Captures the current authority state as an initial atomic persistence unit.
     ///
     /// # Errors
@@ -136,6 +140,11 @@ impl AuthoritativeMatch {
     }
 
     fn authoritative_snapshot(&self) -> Result<MatchSnapshot, String> {
+        let room_state = if self.state.outcome.is_some() {
+            ConnectionState::Finished
+        } else {
+            self.room_state
+        };
         Ok(MatchSnapshot {
             match_id: self.match_id,
             revision: self.state.revision,
@@ -146,7 +155,8 @@ impl AuthoritativeMatch {
                 .canonical_hash()
                 .map_err(|error| error.to_string())?,
             state: self.state.clone(),
-            room_state: self.room_state,
+            room_state,
+            rematch_state: None,
         })
     }
 

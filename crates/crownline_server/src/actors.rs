@@ -352,6 +352,7 @@ mod tests {
             state_hash: state.canonical_hash().unwrap(),
             state,
             room_state: crownline_protocol::ConnectionState::Connected,
+            rematch_state: None,
         };
         (
             match_id,

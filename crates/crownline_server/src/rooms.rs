@@ -351,6 +351,33 @@ impl RoomService {
         Ok(())
     }
 
+    /// Applies a newly committed canonical state to the room lifecycle.
+    ///
+    /// Results for an earlier match are rejected so a late response cannot overwrite a rematch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the room or match does not correspond to the committed state.
+    pub fn sync_committed_state(
+        &mut self,
+        code: &str,
+        match_id: Uuid,
+        state: MatchState,
+    ) -> Result<RoomPhase, RoomError> {
+        let room = self.room_mut(code)?;
+        if room.match_id != match_id || room.scenario_id != state.scenario_id {
+            return Err(RoomError::InvalidRequest);
+        }
+        room.phase = if state.outcome.is_some() {
+            RoomPhase::Finished
+        } else {
+            RoomPhase::Playing
+        };
+        room.state = Some(state);
+        room.last_activity = Instant::now();
+        Ok(room.phase)
+    }
+
     /// Records acceptance and creates a fresh match once both seats accept.
     ///
     /// # Errors
@@ -383,6 +410,23 @@ impl RoomService {
             room.rematch_acceptances.clear();
         }
         Ok(room.phase)
+    }
+
+    /// Clears an outstanding rematch negotiation for an authenticated seat.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a missing room, bad credential, or non-terminal room.
+    pub fn decline_rematch(&mut self, code: &str, token: &str) -> Result<(), RoomError> {
+        let code = normalize_code(code);
+        self.authenticate(&code, token)?;
+        let room = self.rooms.get_mut(&code).ok_or(RoomError::Unauthorized)?;
+        if room.phase != RoomPhase::Finished {
+            return Err(RoomError::WrongPhase);
+        }
+        room.rematch_acceptances.clear();
+        room.last_activity = Instant::now();
+        Ok(())
     }
 
     /// Removes a lobby seat; a host departure removes the room.
@@ -440,6 +484,11 @@ impl RoomService {
                 },
             ],
         })
+    }
+
+    pub fn installed_scenario_for_room(&self, code: &str) -> Option<InstalledScenario> {
+        let room = self.room(code)?;
+        self.catalog.get(&room.scenario_id).cloned()
     }
 
     /// Authenticates a seat secret without exposing whether a room or seat exists.
@@ -731,17 +780,20 @@ mod tests {
             .ready(&created.response.room_code, &guest_token)
             .unwrap();
         let old_match = service.room(&created.response.room_code).unwrap().match_id;
-        service
-            .room_mut(&created.response.room_code)
+        let mut terminal = service
+            .room(&created.response.room_code)
             .unwrap()
             .state
-            .as_mut()
-            .unwrap()
-            .outcome = Some(MatchOutcome {
+            .clone()
+            .unwrap();
+        terminal.outcome = Some(MatchOutcome {
             winner: None,
             reason: OutcomeReason::AgreedDraw,
         });
-        service.mark_finished(&created.response.room_code).unwrap();
+        assert_eq!(
+            service.sync_committed_state(&created.response.room_code, old_match, terminal),
+            Ok(RoomPhase::Finished)
+        );
         assert_eq!(
             service.accept_rematch(&created.response.room_code, &host_token),
             Ok(RoomPhase::Finished)

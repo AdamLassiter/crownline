@@ -14,6 +14,7 @@ Host private-room matches with server-authoritative rules, clocks, durable state
 - Task 08.02.03 completes bounded room operation with configurable request/connection limits, observable throttling, and cleanup that preserves every started match.
 - Task 08.03.01 adds bounded per-match command actors with total ordering, revisioned results, backpressure, isolated durable recovery, and idle unload.
 - Task 08.03.02 supplies those actors with authenticated canonical rules, restart-aware authoritative clocks, append-only journaling, and one prepared atomic persistence transition per decision.
+- Task 08.03.03 completes the live authority path with authenticated WebSockets, durable commit-before-broadcast ordering, bounded snapshot/event delivery, reconnect state, and terminal rematch synchronization.
 - Task 08.04.01 establishes migration-controlled SQLite storage with explicit durability, bounded data, hashed-seat records, and revision/snapshot/action integrity constraints.
 - Task 08.04.02 adds atomic snapshot/journal/deadline commits, startup replay validation, isolated quarantine, restart-equivalent clocks, and WAL-safe operator recovery procedures.
 

@@ -94,6 +94,11 @@ impl std::fmt::Debug for ReconnectToken {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    Authenticate {
+        protocol_version: u16,
+        room_code: String,
+        reconnect_token: ReconnectToken,
+    },
     Ready {
         protocol_version: u16,
         context: MutationContext,
@@ -121,7 +126,10 @@ pub enum ClientMessage {
 impl ClientMessage {
     pub const fn protocol_version(&self) -> u16 {
         match self {
-            Self::Ready {
+            Self::Authenticate {
+                protocol_version, ..
+            }
+            | Self::Ready {
                 protocol_version, ..
             }
             | Self::Action {
@@ -210,6 +218,7 @@ pub struct MatchSnapshot {
     pub state_hash: String,
     pub state: MatchState,
     pub room_state: ConnectionState,
+    pub rematch_state: Option<RematchState>,
 }
 
 /// The exact cacheable result returned for an accepted mutation and its retries.
@@ -335,6 +344,8 @@ pub enum ProtocolError {
     InvalidScenarioId,
     #[error("clock configuration is outside supported bounds")]
     InvalidClock,
+    #[error("reconnect token is malformed")]
+    InvalidReconnectToken,
     #[error("snapshot metadata does not match canonical state: {0}")]
     InvalidSnapshot(String),
 }
@@ -357,6 +368,21 @@ pub fn decode_http_request<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Proto
 pub fn decode_client_message(bytes: &[u8]) -> Result<ClientMessage, ProtocolError> {
     let message: ClientMessage = decode_bounded(bytes, MAX_CLIENT_MESSAGE_BYTES)?;
     validate_version(message.protocol_version())?;
+    if let ClientMessage::Authenticate {
+        room_code,
+        reconnect_token,
+        ..
+    } = &message
+    {
+        validate_room_code(room_code)?;
+        let token = reconnect_token.expose();
+        if token.is_empty()
+            || token.len() > MAX_RECONNECT_TOKEN_CHARS
+            || token.chars().any(char::is_control)
+        {
+            return Err(ProtocolError::InvalidReconnectToken);
+        }
+    }
     if let ClientMessage::Action { request, .. } = &message
         && matches!(
             request.action,
@@ -560,6 +586,11 @@ mod tests {
             idempotency_key: Uuid::nil(),
         };
         let messages = [
+            ClientMessage::Authenticate {
+                protocol_version: PROTOCOL_VERSION,
+                room_code: "A7B9C2".to_owned(),
+                reconnect_token: ReconnectToken::issued("a".repeat(64)),
+            },
             ClientMessage::Ready {
                 protocol_version: PROTOCOL_VERSION,
                 context,
@@ -670,6 +701,7 @@ mod tests {
             state_hash: state.canonical_hash().unwrap(),
             state,
             room_state: ConnectionState::Connected,
+            rematch_state: None,
         }
     }
 

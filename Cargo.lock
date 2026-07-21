@@ -2200,6 +2200,7 @@ dependencies = [
  "axum",
  "crownline_core",
  "crownline_protocol",
+ "futures-util",
  "ron 0.10.1",
  "rusqlite",
  "serde",

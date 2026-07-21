@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crownline_core::{ClockSettings, scenario::Player};
 use crownline_protocol::MatchSnapshot;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use thiserror::Error;
 use tracing::error;
 use uuid::Uuid;
@@ -80,7 +80,14 @@ impl MatchRepository {
         let transaction = self.database.connection_mut().transaction()?;
         transaction.execute(
             "INSERT INTO rooms(code, scenario_id, scenario_hash, lifecycle, base_minutes, increment_seconds, created_unix_millis, updated_unix_millis)
-             VALUES(?1, ?2, ?3, 'playing', ?4, ?5, ?6, ?6)",
+             VALUES(?1, ?2, ?3, 'playing', ?4, ?5, ?6, ?6)
+             ON CONFLICT(code) DO UPDATE SET
+                scenario_id = excluded.scenario_id,
+                scenario_hash = excluded.scenario_hash,
+                lifecycle = 'playing',
+                base_minutes = excluded.base_minutes,
+                increment_seconds = excluded.increment_seconds,
+                updated_unix_millis = excluded.updated_unix_millis",
             params![
                 room.code,
                 image.state.scenario_id,
@@ -93,7 +100,11 @@ impl MatchRepository {
         for seat in &room.seats {
             transaction.execute(
                 "INSERT INTO seats(room_code, player, display_name, token_hash, ready)
-                 VALUES(?1, ?2, ?3, ?4, ?5)",
+                 VALUES(?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(room_code, player) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    token_hash = excluded.token_hash,
+                    ready = excluded.ready",
                 params![
                     room.code,
                     player_label(seat.player),
@@ -191,6 +202,16 @@ impl MatchRepository {
         if changed != 1 {
             return Err(RecoveryError::MissingMatch);
         }
+        if transition.state.outcome.is_some() {
+            transaction.execute(
+                "UPDATE rooms SET lifecycle = 'finished', updated_unix_millis = ?2
+                 WHERE code = (SELECT room_code FROM matches WHERE match_id = ?1)",
+                params![
+                    transition.match_id.to_string(),
+                    transition.decided_unix_millis
+                ],
+            )?;
+        }
         let scenario_hash: String = transaction.query_row(
             "SELECT r.scenario_hash FROM matches m JOIN rooms r ON r.code = m.room_code WHERE m.match_id = ?1",
             [transition.match_id.to_string()],
@@ -233,26 +254,7 @@ impl MatchRepository {
                  ORDER BY m.match_id",
             )?;
             statement
-                .query_map([], |row| {
-                    Ok(RawRestoreRow {
-                        match_id: row.get(0)?,
-                        revision: row.get(1)?,
-                        state_hash: row.get(2)?,
-                        snapshot_json: row.get(3)?,
-                        scenario_id: row.get(4)?,
-                        scenario_hash: row.get(5)?,
-                        room_code: row.get(6)?,
-                        lifecycle: row.get(7)?,
-                        base_minutes: row.get(8)?,
-                        increment_seconds: row.get(9)?,
-                        north_name: row.get(10)?,
-                        north_token_hash: row.get(11)?,
-                        north_ready: row.get(12)?,
-                        south_name: row.get(13)?,
-                        south_token_hash: row.get(14)?,
-                        south_ready: row.get(15)?,
-                    })
-                })?
+                .query_map([], raw_restore_row)?
                 .collect::<Result<Vec<_>, _>>()?
         };
 
@@ -276,6 +278,49 @@ impl MatchRepository {
         Ok(report)
     }
 
+    /// Reloads one unfinished match for a lazily restarted actor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database/missing-match error, or quarantines and rejects corrupt state.
+    pub fn restore_match(
+        &mut self,
+        match_id: Uuid,
+        catalog: &ScenarioCatalog,
+    ) -> Result<RestoredMatch, RecoveryError> {
+        let row = self
+            .database
+            .connection()
+            .query_row(
+                "SELECT m.match_id, m.revision, m.state_hash, s.snapshot_json,
+                    r.scenario_id, r.scenario_hash, r.code, r.lifecycle,
+                    r.base_minutes, r.increment_seconds,
+                    (SELECT display_name FROM seats WHERE room_code = r.code AND player = 'north'),
+                    (SELECT token_hash FROM seats WHERE room_code = r.code AND player = 'north'),
+                    (SELECT ready FROM seats WHERE room_code = r.code AND player = 'north'),
+                    (SELECT display_name FROM seats WHERE room_code = r.code AND player = 'south'),
+                    (SELECT token_hash FROM seats WHERE room_code = r.code AND player = 'south'),
+                    (SELECT ready FROM seats WHERE room_code = r.code AND player = 'south')
+             FROM matches m
+             JOIN rooms r ON r.code = m.room_code
+             JOIN match_snapshots s
+               ON s.match_id = m.match_id AND s.revision = m.current_snapshot_revision
+             LEFT JOIN quarantined_matches q ON q.match_id = m.match_id
+             WHERE m.match_id = ?1 AND m.outcome_json IS NULL AND q.match_id IS NULL",
+                [match_id.to_string()],
+                raw_restore_row,
+            )
+            .optional()?
+            .ok_or(RecoveryError::MissingMatch)?;
+        match restore_row(catalog, &row) {
+            Ok(restored) => Ok(restored),
+            Err(reason) => {
+                self.quarantine(&row.match_id, reason)?;
+                Err(RecoveryError::InvalidState)
+            }
+        }
+    }
+
     pub fn database(&self) -> &Database {
         &self.database
     }
@@ -288,6 +333,27 @@ impl MatchRepository {
         )?;
         Ok(())
     }
+}
+
+fn raw_restore_row(row: &rusqlite::Row<'_>) -> Result<RawRestoreRow, rusqlite::Error> {
+    Ok(RawRestoreRow {
+        match_id: row.get(0)?,
+        revision: row.get(1)?,
+        state_hash: row.get(2)?,
+        snapshot_json: row.get(3)?,
+        scenario_id: row.get(4)?,
+        scenario_hash: row.get(5)?,
+        room_code: row.get(6)?,
+        lifecycle: row.get(7)?,
+        base_minutes: row.get(8)?,
+        increment_seconds: row.get(9)?,
+        north_name: row.get(10)?,
+        north_token_hash: row.get(11)?,
+        north_ready: row.get(12)?,
+        south_name: row.get(13)?,
+        south_token_hash: row.get(14)?,
+        south_ready: row.get(15)?,
+    })
 }
 
 struct RawRestoreRow {
@@ -434,7 +500,12 @@ fn snapshot_from_transition(
         scenario_hash,
         state_hash,
         state: transition.state.clone(),
-        room_state: crownline_protocol::ConnectionState::Connected,
+        room_state: if transition.state.outcome.is_some() {
+            crownline_protocol::ConnectionState::Finished
+        } else {
+            crownline_protocol::ConnectionState::Connected
+        },
+        rematch_state: None,
     }
 }
 
