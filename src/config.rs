@@ -15,6 +15,51 @@ pub struct ClientSettings {
     pub ui_scale: f32,
     pub server_url: String,
     pub reduced_motion: bool,
+    pub camera_bindings: CameraBindingsSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CameraKey {
+    W,
+    A,
+    S,
+    D,
+    Q,
+    E,
+    F,
+    Up,
+    Down,
+    Left,
+    Right,
+    Minus,
+    Equal,
+}
+
+#[derive(Debug, Clone, Resource, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CameraBindingsSettings {
+    pub pan_up: CameraKey,
+    pub pan_down: CameraKey,
+    pub pan_left: CameraKey,
+    pub pan_right: CameraKey,
+    pub zoom_in: CameraKey,
+    pub zoom_out: CameraKey,
+    pub reset: CameraKey,
+}
+
+impl Default for CameraBindingsSettings {
+    fn default() -> Self {
+        Self {
+            pan_up: CameraKey::W,
+            pan_down: CameraKey::S,
+            pan_left: CameraKey::A,
+            pan_right: CameraKey::D,
+            zoom_in: CameraKey::E,
+            zoom_out: CameraKey::Q,
+            reset: CameraKey::F,
+        }
+    }
 }
 
 impl Default for ClientSettings {
@@ -25,6 +70,7 @@ impl Default for ClientSettings {
             ui_scale: 1.0,
             server_url: "ws://127.0.0.1:5000".to_owned(),
             reduced_motion: false,
+            camera_bindings: CameraBindingsSettings::default(),
         }
     }
 }

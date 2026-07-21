@@ -3,7 +3,7 @@ mod rendering;
 
 use bevy::{asset::LoadState, prelude::*, window::WindowResolution};
 use config::ClientSettings;
-use rendering::BoardRenderingPlugin;
+use rendering::{BoardRenderingPlugin, CameraControlPlugin};
 
 const WINDOW_TITLE: &str = "Crownlines";
 
@@ -22,6 +22,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(BoardRenderingPlugin)
+        .add_plugins(CameraControlPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();

@@ -8,12 +8,15 @@ use crownline_core::{
 
 use crate::ChessFontText;
 
+mod camera;
 mod coordinates;
 mod features;
 
 use bevy::window::PrimaryWindow;
 use coordinates::{BoardGeometry, BoardOrientation};
 use features::{spawn_scenario_features, sync_settlement_visuals};
+
+pub use camera::CameraControlPlugin;
 
 pub const TILE_SIZE: f32 = 32.0;
 const TILE_Z: f32 = 0.0;
@@ -110,6 +113,11 @@ struct ChessPieceFont(Handle<Font>);
 #[derive(Resource, Default)]
 pub struct HoveredBoardSquare(pub Option<Coord>);
 
+#[derive(Resource, Default)]
+pub struct PointerCapture {
+    pub ui_has_pointer: bool,
+}
+
 #[derive(Component)]
 struct CoordinateLabel;
 
@@ -119,6 +127,7 @@ impl Plugin for BoardRenderingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BoardPalette>()
             .init_resource::<HoveredBoardSquare>()
+            .init_resource::<PointerCapture>()
             .add_systems(Startup, spawn_default_board)
             .add_systems(
                 Update,
@@ -172,8 +181,13 @@ fn update_hovered_square(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     geometry: Res<BoardGeometry>,
+    capture: Res<PointerCapture>,
     mut hovered: ResMut<HoveredBoardSquare>,
 ) {
+    if capture.ui_has_pointer {
+        hovered.0 = None;
+        return;
+    }
     let Ok(window) = windows.single() else {
         hovered.0 = None;
         return;
