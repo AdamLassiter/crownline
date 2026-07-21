@@ -25,7 +25,8 @@ use crate::{
     local_interaction::BoardInteraction,
     online_lobby::{LobbyScreen, OnlineLobby, OnlineSeat},
     rendering::{
-        DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
+        DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue, LocalTransitionNoticeLog,
+        OverlaySelection,
     },
 };
 
@@ -59,6 +60,24 @@ pub(crate) struct OnlineConnection {
     ready_sent: bool,
     status: String,
     pending_action: Option<PendingAction>,
+    last_snapshot: Option<SnapshotIdentity>,
+    force_resync_requested: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SnapshotIdentity {
+    match_id: Uuid,
+    scenario_id: String,
+    revision: u64,
+    state_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotDisposition {
+    Replace,
+    Equal,
+    Older,
+    Diverged,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +185,7 @@ impl Plugin for OnlineConnectionPlugin {
                     start_or_restore_connection,
                     handle_connection_controls,
                     queue_online_action,
+                    request_forced_resync,
                     retry_timed_out_action,
                     poll_connection_events,
                     sync_connection_status,
@@ -220,6 +240,8 @@ fn start_or_restore_connection(
     }
     connection.observed_lobby_match = Some(seat.match_id);
     connection.ready_sent = false;
+    connection.last_snapshot = None;
+    connection.force_resync_requested = false;
     let credential_id = settings
         .saved_online_seat
         .as_ref()
@@ -369,6 +391,21 @@ fn retry_timed_out_action(
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
+fn request_forced_resync(
+    mut connection: ResMut<OnlineConnection>,
+    transport: Res<ConnectionTransport>,
+) {
+    if connection.force_resync_requested
+        && transport
+            .commands
+            .try_send(ConnectionCommand::Retry)
+            .is_ok()
+    {
+        connection.force_resync_requested = false;
+    }
+}
+
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -383,6 +420,7 @@ fn poll_connection_events(
     mut flow: ResMut<ClientFlow>,
     mut game: ResMut<DisplayedGame>,
     mut selection: ResMut<OverlaySelection>,
+    mut hovered: ResMut<HoveredBoardSquare>,
     mut transitions: ResMut<LocalTransitionEventQueue>,
     mut notices: ResMut<LocalTransitionNoticeLog>,
     mut interaction: ResMut<BoardInteraction>,
@@ -439,6 +477,8 @@ fn poll_connection_events(
                 *flow = ClientFlow::OnlineLobby;
                 connection.observed_lobby_match = Some(saved.match_id);
                 connection.active_match = Some(saved.match_id);
+                connection.last_snapshot = None;
+                connection.force_resync_requested = false;
             }
             ConnectionEvent::Acknowledgement(result) => {
                 let matches_pending = connection.pending_action.as_ref().is_some_and(|pending| {
@@ -485,17 +525,20 @@ fn poll_connection_events(
                     interaction.resolve_online(message);
                 }
             }
-            ConnectionEvent::Snapshot(snapshot) => match adopt_snapshot(
+            ConnectionEvent::Snapshot(snapshot) => match reconcile_snapshot(
                 &snapshot,
                 connection.active_match,
+                connection.last_snapshot.as_ref(),
                 &catalog,
                 &mut game,
                 &mut selection,
+                &mut hovered,
                 &mut transitions,
                 &mut notices,
             ) {
-                Ok(()) => {
+                Ok(SnapshotDisposition::Replace | SnapshotDisposition::Equal) => {
                     connection.active_match = Some(snapshot.match_id);
+                    connection.last_snapshot = Some(snapshot_identity(&snapshot));
                     connection.phase = if snapshot.room_state == ConnectionState::Finished
                         || snapshot.state.outcome.is_some()
                     {
@@ -504,6 +547,29 @@ fn poll_connection_events(
                         ConnectionPhase::Connected
                     };
                     *flow = ClientFlow::OnlinePlaying;
+                }
+                Ok(SnapshotDisposition::Older) => {
+                    tracing::debug!(
+                        match_id = %snapshot.match_id,
+                        revision = snapshot.revision,
+                        "ignored older authoritative snapshot"
+                    );
+                }
+                Ok(SnapshotDisposition::Diverged) => {
+                    tracing::warn!(
+                        match_id = %snapshot.match_id,
+                        revision = snapshot.revision,
+                        "equal-revision online snapshot hash mismatch; forcing resync"
+                    );
+                    connection.last_snapshot = None;
+                    connection.force_resync_requested = true;
+                    connection.pending_action = None;
+                    connection.phase = ConnectionPhase::Connecting;
+                    outbox.locked = false;
+                    *selection = OverlaySelection::default();
+                    interaction.resolve_online(
+                        "Canonical state disagreed at the same revision; forcing a clean resync.",
+                    );
                 }
                 Err(message) => {
                     connection.phase = ConnectionPhase::Rejected;
@@ -515,15 +581,18 @@ fn poll_connection_events(
     }
 }
 
-fn adopt_snapshot(
+#[allow(clippy::too_many_arguments)]
+fn reconcile_snapshot(
     snapshot: &MatchSnapshot,
     active_match: Option<Uuid>,
+    last_snapshot: Option<&SnapshotIdentity>,
     catalog: &ScenarioCatalog,
     game: &mut DisplayedGame,
     selection: &mut OverlaySelection,
+    hovered: &mut HoveredBoardSquare,
     transitions: &mut LocalTransitionEventQueue,
     notices: &mut LocalTransitionNoticeLog,
-) -> Result<(), String> {
+) -> Result<SnapshotDisposition, String> {
     validate_snapshot(snapshot)
         .map_err(|_| "The server sent an invalid match snapshot.".to_owned())?;
     if active_match.is_some_and(|match_id| match_id != snapshot.match_id) {
@@ -540,12 +609,80 @@ fn adopt_snapshot(
     if scenario_hash != snapshot.scenario_hash {
         return Err("The installed scenario differs from the server scenario.".to_owned());
     }
+
+    let displayed_hash = last_snapshot
+        .filter(|last| last.match_id == snapshot.match_id && last.revision == snapshot.revision)
+        .map(|_| game.state.canonical_hash())
+        .transpose()
+        .map_err(|_| "The displayed canonical state could not be verified.".to_owned())?;
+    let disposition = classify_snapshot(last_snapshot, snapshot, displayed_hash.as_deref())?;
+    if disposition != SnapshotDisposition::Replace {
+        return Ok(disposition);
+    }
+
+    let selected = selection.piece;
     game.scenario = scenario.clone();
     game.state = snapshot.state.clone();
-    *selection = OverlaySelection::default();
+    selection.piece = selected.filter(|piece_id| selection_is_valid(*piece_id, &game.state));
+    if hovered
+        .0
+        .is_some_and(|coord| !coord.is_within(game.scenario.board))
+    {
+        hovered.0 = None;
+    }
     transitions.clear();
     notices.entries.clear();
-    Ok(())
+    Ok(SnapshotDisposition::Replace)
+}
+
+fn snapshot_identity(snapshot: &MatchSnapshot) -> SnapshotIdentity {
+    SnapshotIdentity {
+        match_id: snapshot.match_id,
+        scenario_id: snapshot.scenario_id.clone(),
+        revision: snapshot.revision,
+        state_hash: snapshot.state_hash.clone(),
+    }
+}
+
+fn classify_snapshot(
+    last: Option<&SnapshotIdentity>,
+    incoming: &MatchSnapshot,
+    displayed_hash: Option<&str>,
+) -> Result<SnapshotDisposition, String> {
+    let Some(last) = last else {
+        return Ok(SnapshotDisposition::Replace);
+    };
+    if last.match_id != incoming.match_id {
+        return Ok(SnapshotDisposition::Replace);
+    }
+    if last.scenario_id != incoming.scenario_id {
+        return Err("The server changed scenarios within an active match.".to_owned());
+    }
+    if incoming.revision < last.revision {
+        return Ok(SnapshotDisposition::Older);
+    }
+    if incoming.revision > last.revision {
+        return Ok(SnapshotDisposition::Replace);
+    }
+    if incoming.state_hash == last.state_hash
+        && displayed_hash.is_some_and(|displayed_hash| incoming.state_hash == displayed_hash)
+    {
+        Ok(SnapshotDisposition::Equal)
+    } else {
+        Ok(SnapshotDisposition::Diverged)
+    }
+}
+
+fn selection_is_valid(
+    piece_id: crownline_core::state::PieceId,
+    state: &crownline_core::MatchState,
+) -> bool {
+    state.outcome.is_none()
+        && matches!(state.phase, crownline_core::state::TurnPhase::Command)
+        && state
+            .pieces
+            .get(&piece_id)
+            .is_some_and(|piece| piece.owner == state.active_player)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -802,6 +939,12 @@ fn handle_server_message(bytes: &[u8], events: &mpsc::SyncSender<ConnectionEvent
         ));
         return false;
     };
+    if server_message_version(&message) != PROTOCOL_VERSION {
+        let _ = events.send(ConnectionEvent::Notice(
+            "The client and server protocol versions are incompatible.".to_owned(),
+        ));
+        return false;
+    }
     let _ = events.send(ConnectionEvent::Phase(ConnectionPhase::Connected));
     match message {
         ServerMessage::Snapshot { snapshot, .. } => {
@@ -839,6 +982,26 @@ fn handle_server_message(bytes: &[u8], events: &mpsc::SyncSender<ConnectionEvent
         ServerMessage::ConnectionState { .. } | ServerMessage::RematchState { .. } => {}
     }
     true
+}
+
+const fn server_message_version(message: &ServerMessage) -> u16 {
+    match message {
+        ServerMessage::Snapshot {
+            protocol_version, ..
+        }
+        | ServerMessage::Acknowledgement {
+            protocol_version, ..
+        }
+        | ServerMessage::Error {
+            protocol_version, ..
+        }
+        | ServerMessage::ConnectionState {
+            protocol_version, ..
+        }
+        | ServerMessage::RematchState {
+            protocol_version, ..
+        } => *protocol_version,
+    }
 }
 
 fn classify_command_failure(code: ErrorCode, message: &str) -> CommandFailure {
@@ -1023,7 +1186,27 @@ fn write_secret(path: &Path, bytes: &[u8]) -> Result<(), ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crownline_core::scenario::Player;
+    use crownline_core::{
+        MatchState,
+        scenario::{Coord, Player, ScenarioDefinition},
+    };
+
+    fn fixture_snapshot() -> (ScenarioDefinition, MatchSnapshot) {
+        let scenario: ScenarioDefinition =
+            ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap();
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let snapshot = MatchSnapshot {
+            match_id: Uuid::new_v4(),
+            revision: state.revision,
+            scenario_id: scenario.id.clone(),
+            scenario_hash: scenario.canonical_hash().unwrap(),
+            state_hash: state.canonical_hash().unwrap(),
+            state,
+            room_state: ConnectionState::Connected,
+            rematch_state: None,
+        };
+        (scenario, snapshot)
+    }
 
     #[test]
     fn retry_backoff_is_jittered_and_capped() {
@@ -1132,5 +1315,110 @@ mod tests {
             classify_command_failure(ErrorCode::StaleRevision, "ignored"),
             CommandFailure::Stale
         );
+    }
+
+    #[test]
+    fn snapshot_ordering_ignores_old_checks_equal_and_detects_divergence() {
+        let (_, mut incoming) = fixture_snapshot();
+        let mut last = snapshot_identity(&incoming);
+        last.revision = 4;
+        last.state_hash = "revision-four".to_owned();
+
+        incoming.revision = 3;
+        assert_eq!(
+            classify_snapshot(Some(&last), &incoming, Some("revision-four")).unwrap(),
+            SnapshotDisposition::Older
+        );
+        incoming.revision = 4;
+        incoming.state_hash = "revision-four".to_owned();
+        assert_eq!(
+            classify_snapshot(Some(&last), &incoming, Some("revision-four")).unwrap(),
+            SnapshotDisposition::Equal
+        );
+        assert_eq!(
+            classify_snapshot(Some(&last), &incoming, Some("different-local-hash")).unwrap(),
+            SnapshotDisposition::Diverged
+        );
+        incoming.revision = 5;
+        assert_eq!(
+            classify_snapshot(Some(&last), &incoming, Some("revision-four")).unwrap(),
+            SnapshotDisposition::Replace
+        );
+    }
+
+    #[test]
+    fn canonical_replacement_preserves_only_valid_board_context() {
+        let (scenario, snapshot) = fixture_snapshot();
+        let mut game = DisplayedGame {
+            scenario: scenario.clone(),
+            state: snapshot.state.clone(),
+        };
+        let active_piece = game
+            .state
+            .pieces
+            .values()
+            .find(|piece| piece.owner == game.state.active_player)
+            .unwrap()
+            .id;
+        let mut selection = OverlaySelection {
+            piece: Some(active_piece),
+        };
+        let mut hovered = HoveredBoardSquare(Some(Coord::new(999, 999)));
+        let mut transitions = LocalTransitionEventQueue::default();
+        let mut notices = LocalTransitionNoticeLog::default();
+
+        assert_eq!(
+            reconcile_snapshot(
+                &snapshot,
+                Some(snapshot.match_id),
+                None,
+                &ScenarioCatalog(vec![scenario]),
+                &mut game,
+                &mut selection,
+                &mut hovered,
+                &mut transitions,
+                &mut notices,
+            )
+            .unwrap(),
+            SnapshotDisposition::Replace
+        );
+        assert_eq!(selection.piece, Some(active_piece));
+        assert_eq!(hovered.0, None);
+
+        let inactive_piece = game
+            .state
+            .pieces
+            .values()
+            .find(|piece| piece.owner != game.state.active_player)
+            .unwrap()
+            .id;
+        selection.piece = Some(inactive_piece);
+        let scenario = game.scenario.clone();
+        assert_eq!(
+            reconcile_snapshot(
+                &snapshot,
+                Some(snapshot.match_id),
+                None,
+                &ScenarioCatalog(vec![scenario]),
+                &mut game,
+                &mut selection,
+                &mut hovered,
+                &mut transitions,
+                &mut notices,
+            )
+            .unwrap(),
+            SnapshotDisposition::Replace
+        );
+        assert_eq!(selection.piece, None);
+    }
+
+    #[test]
+    fn server_protocol_version_is_checked_before_snapshot_delivery() {
+        let (_, snapshot) = fixture_snapshot();
+        let message = ServerMessage::Snapshot {
+            protocol_version: PROTOCOL_VERSION + 1,
+            snapshot: Box::new(snapshot),
+        };
+        assert_eq!(server_message_version(&message), PROTOCOL_VERSION + 1);
     }
 }

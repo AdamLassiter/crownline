@@ -58,7 +58,14 @@ struct ChoiceVisual;
 
 #[derive(Resource, Default)]
 struct ChoicePresentation {
-    revision: Option<u64>,
+    key: Option<ChoicePresentationKey>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChoicePresentationKey {
+    scenario_id: String,
+    revision: u64,
+    phase: TurnPhase,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -509,7 +516,12 @@ fn sync_choice_affordances(
     mut presentation: ResMut<ChoicePresentation>,
     existing: Query<Entity, With<ChoiceVisual>>,
 ) {
-    if presentation.revision == Some(game.state.revision) {
+    let key = ChoicePresentationKey {
+        scenario_id: game.state.scenario_id.clone(),
+        revision: game.state.revision,
+        phase: game.state.phase.clone(),
+    };
+    if presentation.key.as_ref() == Some(&key) {
         return;
     }
     for entity in &existing {
@@ -563,7 +575,7 @@ fn sync_choice_affordances(
             }
         }
     }
-    presentation.revision = Some(game.state.revision);
+    presentation.key = Some(key);
 }
 
 fn choice_description(state: &MatchState) -> Option<String> {
@@ -868,6 +880,29 @@ mod tests {
         for label in ["♕ Queen", "♖ Rook", "♗ Bishop", "♘ Knight"] {
             assert!(description.contains(label));
         }
+    }
+
+    #[test]
+    fn choice_projection_key_changes_for_equal_revision_reconnect_state() {
+        let mut game = game();
+        let command_key = ChoicePresentationKey {
+            scenario_id: game.state.scenario_id.clone(),
+            revision: game.state.revision,
+            phase: game.state.phase.clone(),
+        };
+        game.state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::Promote {
+                pawn: game.state.pieces.keys().next().copied().unwrap(),
+                site_index: 0,
+            }],
+        };
+        let restored_choice_key = ChoicePresentationKey {
+            scenario_id: game.state.scenario_id.clone(),
+            revision: game.state.revision,
+            phase: game.state.phase.clone(),
+        };
+
+        assert_ne!(command_key, restored_choice_key);
     }
 
     #[test]
