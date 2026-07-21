@@ -1220,6 +1220,106 @@ mod tests {
     }
 
     #[test]
+    fn standard_authored_layout_is_valid_default_and_rotationally_symmetric() {
+        use crate::{rules::governance_report, state::MatchState};
+
+        let scenario: ScenarioDefinition =
+            ron::from_str(include_str!("../../../assets/scenarios/standard.ron"))
+                .expect("standard scenario parses");
+        assert_eq!(scenario.validate(), Ok(()));
+        assert_eq!(
+            scenario.board,
+            BoardSize {
+                width: 20,
+                height: 20
+            }
+        );
+        assert_eq!(scenario.metadata.expected_minutes, (60, 90));
+        assert!(scenario.metadata.is_default);
+        assert_eq!(scenario.deployments.len(), 32);
+        assert_eq!(scenario.settlements.len(), 6);
+        assert_eq!(scenario.promotion_sites.len(), 4);
+        assert_eq!(scenario.keeps.len(), 2);
+        assert_eq!(scenario.fortifications.len(), 4);
+        assert_eq!(scenario.castling_routes.len(), 4);
+        assert!(scenario.keeps.iter().all(|keep| keep.gates.len() == 4));
+        for kind in [
+            EdgeKind::River,
+            EdgeKind::Bridge,
+            EdgeKind::Ford,
+            EdgeKind::Wall,
+            EdgeKind::Gate,
+        ] {
+            assert!(scenario.edges.values().any(|candidate| *candidate == kind));
+        }
+        for terrain in [
+            TileTerrain::Road,
+            TileTerrain::Forest,
+            TileTerrain::Mountain,
+        ] {
+            assert!(
+                scenario
+                    .terrain
+                    .values()
+                    .any(|candidate| *candidate == terrain)
+            );
+        }
+
+        let rotate = |at: Coord| Coord::new(19 - at.x, 19 - at.y);
+        for (at, terrain) in &scenario.terrain {
+            assert_eq!(scenario.terrain.get(&rotate(*at)), Some(terrain));
+        }
+        for (edge, kind) in &scenario.edges {
+            let rotated = Edge::new(rotate(edge.first), rotate(edge.second));
+            assert_eq!(scenario.edges.get(&rotated), Some(kind));
+        }
+        for deployment in &scenario.deployments {
+            assert!(scenario.deployments.iter().any(|candidate| {
+                candidate.player == deployment.player.opponent()
+                    && candidate.kind == deployment.kind
+                    && candidate.at == rotate(deployment.at)
+            }));
+        }
+        for settlement in &scenario.settlements {
+            assert!(
+                scenario
+                    .settlements
+                    .iter()
+                    .any(|candidate| candidate.at == rotate(settlement.at))
+            );
+        }
+        for site in &scenario.promotion_sites {
+            assert!(
+                scenario
+                    .promotion_sites
+                    .iter()
+                    .any(|candidate| candidate.at == rotate(site.at))
+            );
+        }
+        for fortification in &scenario.fortifications {
+            assert!(scenario.fortifications.iter().any(|candidate| {
+                candidate.owner == fortification.owner.opponent()
+                    && candidate.tower == rotate(fortification.tower)
+                    && candidate.projected_wall
+                        == Edge::new(
+                            rotate(fortification.projected_wall.first),
+                            rotate(fortification.projected_wall.second),
+                        )
+            }));
+        }
+
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        for central_site in [2, 3] {
+            assert!(
+                governance_report(&scenario, &state, central_site)
+                    .unwrap()
+                    .governors
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn reports_keep_fortification_and_deployment_errors() {
         let mut scenario = standard_scenario();
         scenario.keeps[0].gates.pop_first();
