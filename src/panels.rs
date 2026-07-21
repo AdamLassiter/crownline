@@ -6,7 +6,10 @@ use crownline_core::{
     state::{MatchState, PieceId, TurnPhase},
 };
 
-use crate::rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection, PointerCapture};
+use crate::{
+    help::{HelpLink, HelpSection},
+    rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection, PointerCapture},
+};
 
 const HISTORY_LIMIT: usize = 12;
 const LOW_CLOCK_MILLIS: u64 = 60_000;
@@ -50,7 +53,7 @@ impl PanelState {
 struct InformationPanel;
 
 #[derive(Component)]
-struct PanelSurface;
+pub(crate) struct PanelSurface;
 
 #[derive(Component)]
 struct PanelToggle(PanelKind);
@@ -184,12 +187,43 @@ fn spawn_panel(commands: &mut Commands, kind: PanelKind, inset: UiRect) {
                             "RECENT ACTIONS\nNo actions yet.",
                             HistoryPanelText,
                         ));
+                        body.spawn(help_link(
+                            "Help: commands, clocks, outcomes",
+                            HelpSection::Match,
+                        ));
                     }
                     PanelKind::Settlements => {
                         body.spawn(panel_text("Loading settlements…", SettlementPanelText));
+                        body.spawn(help_link(
+                            "Help: settlements, promotion, board legend",
+                            HelpSection::Realm,
+                        ));
                     }
                 });
         });
+}
+
+fn help_link(label: &str, section: HelpSection) -> impl Bundle {
+    (
+        Button,
+        Node {
+            width: percent(100),
+            min_height: px(28),
+            padding: UiRect::axes(px(6), px(4)),
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.1, 0.2, 0.25)),
+        HelpLink(section),
+        PanelSurface,
+        children![(
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.55, 0.9, 0.94)),
+        )],
+    )
 }
 
 fn panel_text(marker_text: &str, marker: impl Component) -> impl Bundle {

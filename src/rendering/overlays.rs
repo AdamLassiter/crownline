@@ -517,6 +517,10 @@ fn overlay_style(kind: OverlayKind) -> (&'static str, Color, f32) {
     }
 }
 
+pub(crate) fn overlay_legend_symbol(kind: OverlayKind) -> &'static str {
+    overlay_style(kind).0
+}
+
 #[cfg(test)]
 mod tests {
     use crownline_core::scenario::Player;

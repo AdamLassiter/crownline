@@ -1,10 +1,12 @@
 mod config;
+mod help;
 mod local_interaction;
 mod panels;
 mod rendering;
 
 use bevy::{asset::LoadState, prelude::*, window::WindowResolution};
 use config::ClientSettings;
+use help::RulesHelpPlugin;
 use local_interaction::LocalInteractionPlugin;
 use panels::InformationPanelsPlugin;
 use rendering::{BoardRenderingPlugin, CameraControlPlugin};
@@ -29,6 +31,7 @@ fn main() {
         .add_plugins(CameraControlPlugin)
         .add_plugins(LocalInteractionPlugin)
         .add_plugins(InformationPanelsPlugin)
+        .add_plugins(RulesHelpPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();

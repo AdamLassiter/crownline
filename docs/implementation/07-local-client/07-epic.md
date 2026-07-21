@@ -12,6 +12,7 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 - Non-mutating consequence previews with explicit self-check, attack-line, governance, settlement-progress, capture, check, and promotion explanations are complete in Task 07.01.02.
 - Focused promotion and produced-Pawn placement controls, forced queue resolution, and choice-time clock labels are complete in Task 07.01.03.
 - Responsive, collapsible match, recent-history, and settlement information panels are complete in Task 07.02.01.
+- Scenario-aware rules help, complete visual legends, and state-preserving context links are complete in Task 07.02.02.
 
 ## Stories
 
