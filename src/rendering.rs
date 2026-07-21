@@ -11,10 +11,12 @@ use crate::ChessFontText;
 mod camera;
 mod coordinates;
 mod features;
+mod overlays;
 
 use bevy::window::PrimaryWindow;
 use coordinates::{BoardGeometry, BoardOrientation};
 use features::{spawn_scenario_features, sync_settlement_visuals};
+use overlays::{OverlayCache, OverlayLegend, OverlaySelection, OverlayText, sync_overlays};
 
 pub use camera::CameraControlPlugin;
 
@@ -128,6 +130,10 @@ impl Plugin for BoardRenderingPlugin {
         app.init_resource::<BoardPalette>()
             .init_resource::<HoveredBoardSquare>()
             .init_resource::<PointerCapture>()
+            .init_resource::<OverlaySelection>()
+            .init_resource::<OverlayCache>()
+            .init_resource::<OverlayLegend>()
+            .init_resource::<OverlayText>()
             .add_systems(Startup, spawn_default_board)
             .add_systems(
                 Update,
@@ -135,6 +141,7 @@ impl Plugin for BoardRenderingPlugin {
                     sync_piece_visuals,
                     sync_settlement_visuals,
                     update_hovered_square,
+                    sync_overlays.after(update_hovered_square),
                 ),
             );
     }
