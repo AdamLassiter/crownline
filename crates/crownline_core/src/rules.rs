@@ -28,6 +28,20 @@ pub struct LegalMove {
     pub kind: MoveKind,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveUnavailability {
+    NotALegalMovement,
+    ExposesKing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveInspection {
+    Legal(LegalMove),
+    Unavailable(MoveUnavailability),
+}
+
 /// One geometric attack, with a path containing both attacker and target.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AttackLine {
@@ -207,6 +221,69 @@ pub fn legal_moves(
     }
     moves.sort_unstable();
     Ok(moves)
+}
+
+/// Inspects one destination without changing canonical state.
+///
+/// Unlike [`legal_moves`], this preserves the distinction between a destination
+/// that is not reachable by the piece and a pseudo-legal move that would expose
+/// the active King. Hosts can therefore explain an unavailable hover without
+/// attempting or recommending an action.
+///
+/// # Errors
+///
+/// Returns an invariant, scenario, phase, or active-piece error when the request
+/// cannot be inspected in the current canonical state.
+pub fn inspect_move(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    piece_id: PieceId,
+    to: Coord,
+) -> Result<MoveInspection, TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+    state.validate_invariants()?;
+    if state.outcome.is_some() {
+        return Err(TransitionError::MatchFinished);
+    }
+    if !matches!(state.phase, TurnPhase::Command) {
+        return Err(TransitionError::WrongTurnPhase);
+    }
+    if !to.is_within(scenario.board) {
+        return Err(TransitionError::CoordinateOutOfBounds(to));
+    }
+    let piece = state
+        .pieces
+        .get(&piece_id)
+        .ok_or(TransitionError::MissingPiece(piece_id))?;
+    if piece.owner != state.active_player {
+        return Err(TransitionError::WrongPlayer {
+            expected: state.active_player,
+            actual: piece.owner,
+        });
+    }
+    let board = Board::new(scenario, state);
+    let Some(candidate) = board
+        .pseudo_legal_moves(piece)
+        .into_iter()
+        .find(|candidate| candidate.to == to)
+    else {
+        return Ok(MoveInspection::Unavailable(
+            MoveUnavailability::NotALegalMovement,
+        ));
+    };
+    if move_preserves_king(scenario, state, candidate)? {
+        Ok(MoveInspection::Legal(candidate))
+    } else {
+        Ok(MoveInspection::Unavailable(MoveUnavailability::ExposesKing))
+    }
 }
 
 /// Reports whether `player`'s King is geometrically attacked.
@@ -3649,6 +3726,18 @@ mod tests {
             moves
                 .iter()
                 .any(|mv| mv.piece == rook && mv.to == Coord::new(4, 5))
+        );
+        assert_eq!(
+            inspect_move(&scenario, &state, rook, Coord::new(5, 6)).unwrap(),
+            MoveInspection::Unavailable(MoveUnavailability::ExposesKing)
+        );
+        assert!(matches!(
+            inspect_move(&scenario, &state, rook, Coord::new(4, 5)).unwrap(),
+            MoveInspection::Legal(_)
+        ));
+        assert_eq!(
+            inspect_move(&scenario, &state, rook, Coord::new(5, 5)).unwrap(),
+            MoveInspection::Unavailable(MoveUnavailability::NotALegalMovement)
         );
     }
 

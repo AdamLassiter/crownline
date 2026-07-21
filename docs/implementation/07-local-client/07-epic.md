@@ -9,6 +9,7 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 ## Implementation notes
 
 - Local select/reselect/cancel, reducer-confirmed Move and Hold commands, and visible keyboard board focus are complete in Task 07.01.01.
+- Non-mutating consequence previews with explicit self-check, attack-line, governance, settlement-progress, capture, check, and promotion explanations are complete in Task 07.01.02.
 
 ## Stories
 

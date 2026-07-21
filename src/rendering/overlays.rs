@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 use crownline_core::{
-    apply_action, attack_lines_on, governance_report, is_in_check, legal_moves,
-    rules::{GovernanceBlocker, LegalMove, MoveKind},
+    MoveInspection, MoveUnavailability, TransitionEvent, apply_action, attack_lines_on,
+    governance_report, inspect_move, is_in_check, legal_moves,
+    rules::{GovernanceBlocker, MoveKind},
     scenario::{Coord, PieceKind, ScenarioDefinition},
     state::{Action, MatchState, PieceId, TurnPhase},
 };
@@ -215,7 +216,6 @@ fn build_overlay_model(
             piece_id,
             piece.at,
             hovered,
-            &moves,
             &mut overlays,
             &mut lines,
         );
@@ -223,23 +223,37 @@ fn build_overlay_model(
     (overlays, lines)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn add_hover_preview(
     scenario: &ScenarioDefinition,
     state: &MatchState,
     piece_id: PieceId,
     piece_at: Coord,
     hovered: Coord,
-    moves: &[LegalMove],
     overlays: &mut BTreeMap<Coord, BTreeSet<OverlayKind>>,
     lines: &mut Vec<String>,
 ) {
-    let Some(candidate) = moves.iter().find(|candidate| candidate.to == hovered) else {
-        if hovered != piece_at {
-            insert(overlays, hovered, OverlayKind::IllegalWarning);
-            lines.push(format!("{hovered:?} is not a legal destination."));
-        }
+    if hovered == piece_at {
         return;
+    }
+    let candidate = match inspect_move(scenario, state, piece_id, hovered) {
+        Ok(MoveInspection::Legal(candidate)) => candidate,
+        Ok(MoveInspection::Unavailable(reason)) => {
+            insert(overlays, hovered, OverlayKind::IllegalWarning);
+            lines.push(match reason {
+                MoveUnavailability::ExposesKing => format!(
+                    "Unavailable at {hovered:?}: this move would expose your King to check."
+                ),
+                MoveUnavailability::NotALegalMovement => {
+                    format!("Unavailable at {hovered:?}: the selected piece cannot move there.")
+                }
+            });
+            return;
+        }
+        Err(error) => {
+            insert(overlays, hovered, OverlayKind::IllegalWarning);
+            lines.push(format!("Preview unavailable at {hovered:?}: {error}."));
+            return;
+        }
     };
     let action = Action::Move {
         player: state.active_player,
@@ -248,40 +262,190 @@ fn add_hover_preview(
     };
     let Ok(preview) = apply_action(scenario, state, &action) else {
         insert(overlays, hovered, OverlayKind::IllegalWarning);
+        lines.push(format!(
+            "Preview unavailable at {hovered:?}: the reducer rejected the move."
+        ));
         return;
     };
 
     let before_attacks = attacked_by_piece(scenario, state, piece_id);
     let after_attacks = attacked_by_piece(scenario, &preview.state, piece_id);
-    for at in after_attacks.difference(&before_attacks) {
+    let gained_attacks: Vec<_> = after_attacks.difference(&before_attacks).copied().collect();
+    let lost_attacks: Vec<_> = before_attacks.difference(&after_attacks).copied().collect();
+    for at in &gained_attacks {
         insert(overlays, *at, OverlayKind::GainedAttack);
     }
-    for at in before_attacks.difference(&after_attacks) {
+    for at in &lost_attacks {
         insert(overlays, *at, OverlayKind::LostAttack);
     }
-    let before_governance = governed_sites(scenario, state, piece_id);
-    let after_governance = governed_sites(scenario, &preview.state, piece_id);
-    for index in after_governance.difference(&before_governance) {
-        insert(
-            overlays,
-            scenario.settlements[usize::from(*index)].at,
-            OverlayKind::GainedGovernance,
-        );
+    if !gained_attacks.is_empty() {
+        lines.push(format!(
+            "Opened attack lines to {}.",
+            coordinate_list(&gained_attacks)
+        ));
     }
-    for index in before_governance.difference(&after_governance) {
-        insert(
-            overlays,
-            scenario.settlements[usize::from(*index)].at,
-            OverlayKind::LostGovernance,
-        );
+    if !lost_attacks.is_empty() {
+        lines.push(format!(
+            "Closed attack lines to {}.",
+            coordinate_list(&lost_attacks)
+        ));
+    }
+
+    add_governance_preview(scenario, state, &preview.state, overlays, lines);
+    add_transition_preview(scenario, state, &preview.events, overlays, lines);
+
+    let opponent = state.active_player.opponent();
+    if is_in_check(scenario, &preview.state, opponent).unwrap_or(false)
+        && let Some(king) = preview
+            .state
+            .pieces
+            .values()
+            .find(|piece| piece.owner == opponent && piece.kind == PieceKind::King)
+    {
+        insert(overlays, king.at, OverlayKind::Check);
+        lines.push(format!("Preview gives check to the {opponent:?} King."));
     }
     lines.push(format!(
-        "Preview: {} attacks gained, {} lost; {} governance links gained, {} lost.",
-        after_attacks.difference(&before_attacks).count(),
-        before_attacks.difference(&after_attacks).count(),
-        after_governance.difference(&before_governance).count(),
-        before_governance.difference(&after_governance).count(),
+        "Preview from {piece_at:?} to {hovered:?}: {} attack lines opened, {} closed.",
+        gained_attacks.len(),
+        lost_attacks.len(),
     ));
+}
+
+fn add_governance_preview(
+    scenario: &ScenarioDefinition,
+    before: &MatchState,
+    after: &MatchState,
+    overlays: &mut BTreeMap<Coord, BTreeSet<OverlayKind>>,
+    lines: &mut Vec<String>,
+) {
+    let before_governors = governor_map(scenario, before);
+    let after_governors = governor_map(scenario, after);
+    for (index, site) in scenario.settlements.iter().enumerate() {
+        let site_index = u16::try_from(index).expect("validated settlement count fits u16");
+        let empty = BTreeSet::new();
+        let old = before_governors.get(&site_index).unwrap_or(&empty);
+        let new = after_governors.get(&site_index).unwrap_or(&empty);
+        let added: Vec<_> = new.difference(old).copied().collect();
+        let removed: Vec<_> = old.difference(new).copied().collect();
+        if !added.is_empty() {
+            insert(overlays, site.at, OverlayKind::GainedGovernance);
+        }
+        if !removed.is_empty() {
+            insert(overlays, site.at, OverlayKind::LostGovernance);
+        }
+        if !added.is_empty() || !removed.is_empty() {
+            lines.push(format!(
+                "Settlement {} governors changed: added {}; removed {}.",
+                site.id,
+                piece_list(&added),
+                piece_list(&removed)
+            ));
+        }
+    }
+}
+
+fn add_transition_preview(
+    scenario: &ScenarioDefinition,
+    before: &MatchState,
+    events: &[TransitionEvent],
+    overlays: &mut BTreeMap<Coord, BTreeSet<OverlayKind>>,
+    lines: &mut Vec<String>,
+) {
+    for event in events {
+        match event {
+            TransitionEvent::PieceCaptured { piece, at } => {
+                let description = before.pieces.get(piece).map_or_else(
+                    || format!("piece {piece:?}"),
+                    |piece| format!("{:?} {:?}", piece.owner, piece.kind),
+                );
+                insert(overlays, *at, OverlayKind::Capture);
+                lines.push(format!("Preview captures {description} at {at:?}."));
+            }
+            TransitionEvent::SettlementContinuityInterrupted { settlement_index }
+            | TransitionEvent::SettlementDevelopmentReset { settlement_index } => {
+                lines.push(format!(
+                    "Settlement {} loses its current settlement progress opportunity.",
+                    settlement_name(scenario, *settlement_index)
+                ));
+            }
+            TransitionEvent::SettlementDevelopmentAdvanced {
+                settlement_index,
+                progress,
+            } => lines.push(format!(
+                "Settlement {} development advances to {progress}.",
+                settlement_name(scenario, *settlement_index)
+            )),
+            TransitionEvent::PromotionCandidateStarted { pawn } => {
+                lines.push(format!("Pawn {pawn:?} starts promotion progress."));
+            }
+            TransitionEvent::PromotionCandidateAdvanced { pawn, progress } => {
+                lines.push(format!("Pawn {pawn:?} promotion advances to {progress}."));
+            }
+            TransitionEvent::PromotionCandidateCancelled { pawn } => {
+                lines.push(format!("Pawn {pawn:?} loses its promotion opportunity."));
+            }
+            TransitionEvent::PromotionReady { pawn, site_index } => lines.push(format!(
+                "Pawn {pawn:?} becomes ready to promote at site {}.",
+                scenario
+                    .promotion_sites
+                    .get(usize::from(*site_index))
+                    .map_or("unknown", |site| site.id.as_str())
+            )),
+            _ => {}
+        }
+    }
+}
+
+fn governor_map(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+) -> BTreeMap<u16, BTreeSet<PieceId>> {
+    state
+        .settlements
+        .iter()
+        .filter_map(|settlement| {
+            governance_report(scenario, state, settlement.site_index)
+                .ok()
+                .map(|report| {
+                    (
+                        report.settlement_index,
+                        report
+                            .governors
+                            .into_iter()
+                            .map(|governor| governor.attacker)
+                            .collect(),
+                    )
+                })
+        })
+        .collect()
+}
+
+fn settlement_name(scenario: &ScenarioDefinition, index: u16) -> &str {
+    scenario
+        .settlements
+        .get(usize::from(index))
+        .map_or("unknown", |site| site.id.as_str())
+}
+
+fn coordinate_list(coords: &[Coord]) -> String {
+    coords
+        .iter()
+        .map(|at| format!("{at:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn piece_list(pieces: &[PieceId]) -> String {
+    if pieces.is_empty() {
+        "none".to_owned()
+    } else {
+        pieces
+            .iter()
+            .map(|piece| format!("{piece:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 fn add_governance_overlays(
@@ -330,28 +494,6 @@ fn attacked_by_piece(
         }
     }
     attacked
-}
-
-fn governed_sites(
-    scenario: &ScenarioDefinition,
-    state: &MatchState,
-    piece: PieceId,
-) -> BTreeSet<u16> {
-    state
-        .settlements
-        .iter()
-        .filter_map(|settlement| {
-            governance_report(scenario, state, settlement.site_index)
-                .ok()
-                .filter(|report| {
-                    report
-                        .governors
-                        .iter()
-                        .any(|governor| governor.attacker == piece)
-                })
-                .map(|report| report.settlement_index)
-        })
-        .collect()
 }
 
 fn insert(overlays: &mut BTreeMap<Coord, BTreeSet<OverlayKind>>, at: Coord, kind: OverlayKind) {
@@ -429,6 +571,15 @@ mod tests {
             app.world().resource::<OverlayCache>().recomputations,
             initial + 1
         );
+        app.world_mut()
+            .resource_mut::<DisplayedGame>()
+            .state
+            .revision += 1;
+        app.update();
+        assert_eq!(
+            app.world().resource::<OverlayCache>().recomputations,
+            initial + 2
+        );
     }
 
     #[test]
@@ -466,5 +617,71 @@ mod tests {
                 .any(|line| line.contains("legal destinations"))
         );
         assert_eq!(app.world().resource::<OverlayLegend>().entries.len(), 12);
+    }
+
+    #[test]
+    fn legal_hover_preview_is_non_mutating_and_clears_with_selection() {
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        let game = app.world().resource::<DisplayedGame>();
+        let canonical_hash = game.state.canonical_hash().unwrap();
+        let candidate = legal_moves(&game.scenario, &game.state).unwrap().remove(0);
+        let (_, preview_lines) = build_overlay_model(
+            &game.scenario,
+            &game.state,
+            Some(candidate.piece),
+            Some(candidate.to),
+        );
+        assert_eq!(game.state.canonical_hash().unwrap(), canonical_hash);
+        assert!(
+            preview_lines
+                .iter()
+                .any(|line| line.contains("Preview from"))
+        );
+
+        let (_, cleared_lines) =
+            build_overlay_model(&game.scenario, &game.state, None, Some(candidate.to));
+        assert!(cleared_lines.iter().all(|line| !line.contains("Preview")));
+    }
+
+    #[test]
+    fn transition_preview_names_capture_progress_loss_and_promotion_changes() {
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        let game = app.world().resource::<DisplayedGame>();
+        let piece = *game.state.pieces.keys().next().unwrap();
+        let at = game.state.pieces[&piece].at;
+        let events = vec![
+            TransitionEvent::PieceCaptured { piece, at },
+            TransitionEvent::SettlementContinuityInterrupted {
+                settlement_index: 0,
+            },
+            TransitionEvent::PromotionCandidateStarted { pawn: piece },
+            TransitionEvent::PromotionCandidateCancelled { pawn: piece },
+        ];
+        let mut overlays = BTreeMap::new();
+        let mut lines = Vec::new();
+        add_transition_preview(
+            &game.scenario,
+            &game.state,
+            &events,
+            &mut overlays,
+            &mut lines,
+        );
+        assert!(lines.iter().any(|line| line.contains("captures")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("settlement progress opportunity"))
+        );
+        assert!(lines.iter().any(|line| line.contains("starts promotion")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("loses its promotion opportunity"))
+        );
+        assert!(overlays[&at].contains(&OverlayKind::Capture));
     }
 }
