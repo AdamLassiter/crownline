@@ -26,6 +26,20 @@ struct KeyboardFocusVisual;
 #[derive(Component)]
 struct InteractionHelpText;
 
+type FocusAffordanceQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Transform, &'static mut Visibility),
+    (With<KeyboardFocusVisual>, Without<InteractionHelpText>),
+>;
+
+type HelpAffordanceQuery<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Text2d, &'static mut Transform),
+    (With<InteractionHelpText>, Without<KeyboardFocusVisual>),
+>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Activation {
     Select(PieceId),
@@ -264,8 +278,8 @@ fn sync_interaction_affordances(
     game: Res<DisplayedGame>,
     geometry: Res<BoardGeometry>,
     interaction: Res<BoardInteraction>,
-    mut focus: Query<(&mut Transform, &mut Visibility), With<KeyboardFocusVisual>>,
-    mut help: Query<(&mut Text2d, &mut Transform), With<InteractionHelpText>>,
+    mut focus: FocusAffordanceQuery,
+    mut help: HelpAffordanceQuery,
 ) {
     if let Ok((mut transform, mut visibility)) = focus.single_mut() {
         if let Some(at) = interaction.keyboard_focus
@@ -436,5 +450,19 @@ mod tests {
             move_focus(Coord::new(7, 7), (1, 1), board),
             Coord::new(7, 7)
         );
+    }
+
+    #[test]
+    fn full_local_plugin_update_has_disjoint_affordance_queries() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_plugins(crate::rendering::BoardRenderingPlugin)
+            .add_plugins(LocalInteractionPlugin);
+        app.update();
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<KeyboardFocusVisual>>();
+        assert_eq!(query.iter(app.world()).count(), 1);
     }
 }
