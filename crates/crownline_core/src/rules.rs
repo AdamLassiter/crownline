@@ -2171,6 +2171,45 @@ mod tests {
         }
     }
 
+    /// Parses conventional chess coordinates for the 8x8 rules fixtures.
+    ///
+    /// `a8` is the north-west board corner and `h1` is the south-east corner.
+    fn square(notation: &str) -> Coord {
+        let bytes = notation.as_bytes();
+        assert_eq!(bytes.len(), 2, "fixture square must use file-rank notation");
+        assert!(
+            (b'a'..=b'h').contains(&bytes[0]) && (b'1'..=b'8').contains(&bytes[1]),
+            "fixture square {notation:?} must be between a1 and h8"
+        );
+        Coord::new(u16::from(bytes[0] - b'a'), u16::from(b'8' - bytes[1]))
+    }
+
+    fn deployment_at(player: Player, kind: PieceKind, at: &str) -> Deployment {
+        Deployment {
+            player,
+            kind,
+            at: square(at),
+        }
+    }
+
+    #[derive(Default)]
+    struct BoardFixture {
+        deployments: Vec<Deployment>,
+    }
+
+    impl BoardFixture {
+        fn with(mut self, player: Player, kind: PieceKind, at: &str) -> Self {
+            self.deployments.push(deployment_at(player, kind, at));
+            self
+        }
+
+        fn build(self) -> (ScenarioDefinition, MatchState) {
+            let scenario = scenario_with(self.deployments);
+            let state = MatchState::from_scenario(&scenario).expect("fixture must be valid");
+            (scenario, state)
+        }
+    }
+
     fn scenario_with(mut deployments: Vec<Deployment>) -> ScenarioDefinition {
         if !deployments
             .iter()
@@ -4530,5 +4569,175 @@ mod tests {
             ),
             Err(TransitionError::IllegalPawnPlacement { .. })
         ));
+    }
+
+    #[test]
+    fn empty_board_movement_table_covers_every_piece_from_a_readable_square() {
+        let cases = [
+            (PieceKind::King, 8),
+            (PieceKind::Queen, 25),
+            (PieceKind::Rook, 14),
+            (PieceKind::Bishop, 11),
+            (PieceKind::Knight, 8),
+            (PieceKind::Pawn, 2),
+        ];
+
+        for (kind, expected_moves) in cases {
+            let mut fixture = BoardFixture::default().with(Player::North, PieceKind::King, "h8");
+            fixture = if kind == PieceKind::King {
+                fixture.with(Player::South, PieceKind::King, "d4")
+            } else {
+                fixture
+                    .with(Player::South, PieceKind::King, "a1")
+                    .with(Player::South, kind, "d4")
+            };
+            let (scenario, state) = fixture.build();
+            let piece = piece_id_at(&state, square("d4"));
+            let targets = legal_moves(&scenario, &state)
+                .unwrap()
+                .into_iter()
+                .filter(|candidate| candidate.piece == piece)
+                .map(|candidate| candidate.to)
+                .collect::<BTreeSet<_>>();
+
+            assert_eq!(
+                targets.len(),
+                expected_moves,
+                "{kind:?} empty-board movement from d4"
+            );
+            assert!(
+                targets
+                    .iter()
+                    .all(|target| target.is_within(scenario.board)),
+                "{kind:?} movement remains inside the board"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_legal_moves_preserve_royal_safety_and_canonical_round_trips() {
+        let fixture = BoardFixture::default()
+            .with(Player::South, PieceKind::King, "g1")
+            .with(Player::South, PieceKind::Queen, "d1")
+            .with(Player::South, PieceKind::Rook, "a1")
+            .with(Player::South, PieceKind::Bishop, "c1")
+            .with(Player::South, PieceKind::Knight, "b1")
+            .with(Player::South, PieceKind::Pawn, "a2")
+            .with(Player::South, PieceKind::Pawn, "b2")
+            .with(Player::South, PieceKind::Pawn, "c2")
+            .with(Player::South, PieceKind::Pawn, "d2")
+            .with(Player::South, PieceKind::Pawn, "e2")
+            .with(Player::South, PieceKind::Pawn, "f2")
+            .with(Player::North, PieceKind::King, "g8")
+            .with(Player::North, PieceKind::Queen, "d8")
+            .with(Player::North, PieceKind::Rook, "a8")
+            .with(Player::North, PieceKind::Bishop, "c8")
+            .with(Player::North, PieceKind::Knight, "b8")
+            .with(Player::North, PieceKind::Pawn, "a7")
+            .with(Player::North, PieceKind::Pawn, "b7")
+            .with(Player::North, PieceKind::Pawn, "c7")
+            .with(Player::North, PieceKind::Pawn, "d7")
+            .with(Player::North, PieceKind::Pawn, "e7")
+            .with(Player::North, PieceKind::Pawn, "f7");
+        let (scenario, initial) = fixture.build();
+
+        for seed in 1_u64..=64 {
+            let mut state = initial.clone();
+            let mut generator = seed;
+            for ply in 0..64 {
+                let moves = legal_moves(&scenario, &state).unwrap();
+                if moves.is_empty() || state.outcome.is_some() {
+                    break;
+                }
+                generator = generator
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let move_count = u64::try_from(moves.len()).expect("move count fits u64");
+                let move_index =
+                    usize::try_from(generator % move_count).expect("bounded move index fits usize");
+                let candidate = moves[move_index];
+                let actor = state.active_player;
+                let transition = apply_action(
+                    &scenario,
+                    &state,
+                    &Action::Move {
+                        player: actor,
+                        piece: candidate.piece,
+                        to: candidate.to,
+                    },
+                )
+                .unwrap_or_else(|error| {
+                    panic!("seed {seed}, ply {ply}: generated legal move failed: {error}")
+                });
+
+                assert!(
+                    !is_in_check(&scenario, &transition.state, actor).unwrap(),
+                    "seed {seed}, ply {ply}: legal move left {actor:?} in check"
+                );
+                let encoded = serde_json::to_vec(&transition.state).unwrap();
+                let decoded: MatchState = serde_json::from_slice(&encoded).unwrap();
+                assert_eq!(
+                    decoded.canonical_hash().unwrap(),
+                    transition.state.canonical_hash().unwrap(),
+                    "seed {seed}, ply {ply}: canonical hash changed after round-trip"
+                );
+                assert_eq!(
+                    serde_json::to_vec(&decoded).unwrap(),
+                    encoded,
+                    "seed {seed}, ply {ply}: canonical bytes changed after round-trip"
+                );
+                state = transition.state;
+            }
+        }
+    }
+
+    #[test]
+    fn generated_invalid_actions_leave_canonical_bytes_unchanged() {
+        let (scenario, state) = BoardFixture::default()
+            .with(Player::South, PieceKind::King, "e1")
+            .with(Player::South, PieceKind::Rook, "a1")
+            .with(Player::North, PieceKind::King, "e8")
+            .build();
+        let rook = piece_id_at(&state, square("a1"));
+        let invalid_actions = [
+            Action::Move {
+                player: Player::North,
+                piece: rook,
+                to: square("a2"),
+            },
+            Action::Move {
+                player: Player::South,
+                piece: PieceId(u32::MAX),
+                to: square("a2"),
+            },
+            Action::Move {
+                player: Player::South,
+                piece: rook,
+                to: Coord::new(scenario.board.width, scenario.board.height),
+            },
+            Action::ChoosePromotion {
+                player: Player::South,
+                pawn: rook,
+                promote_to: PromotionKind::Queen,
+            },
+            Action::PlacePawn {
+                player: Player::South,
+                settlement_index: u16::MAX,
+                at: square("a2"),
+            },
+        ];
+
+        for action in invalid_actions {
+            let before = serde_json::to_vec(&state).unwrap();
+            assert!(
+                apply_action(&scenario, &state, &action).is_err(),
+                "fixture action must be rejected: {action:?}"
+            );
+            assert_eq!(
+                serde_json::to_vec(&state).unwrap(),
+                before,
+                "rejected action changed canonical state: {action:?}"
+            );
+        }
     }
 }

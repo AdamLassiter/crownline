@@ -2,6 +2,14 @@
 
 Prove rules correctness, online durability, UI readability, map balance, and maximum-board responsiveness before release.
 
+## Status
+
+- [ ] In progress
+
+## Implementation notes
+
+- Task 10.01.01 establishes the core rules verification layer with readable fixtures, interaction regressions, generated King-safety walks, transactional rejection checks, and canonical serialization/hash invariants.
+
 ## Stories
 
 - [10.01 Rules verification](10.01-rules-tests/10.01-story.md)
@@ -22,4 +30,3 @@ Prove rules correctness, online durability, UI readability, map balance, and max
 ## Cross-cutting concerns
 
 - Reproducible fixtures, representative hardware, privacy-preserving metrics, and regression ownership.
-
