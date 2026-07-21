@@ -98,6 +98,25 @@ pub enum TransitionEvent {
         player: Player,
         previous_continuous: bool,
     },
+    SettlementClaimed {
+        settlement_index: u16,
+        owner: Player,
+        founder: PieceId,
+    },
+    SettlementContested {
+        settlement_index: u16,
+        candidate: PieceId,
+    },
+    SettlementTransferCancelled {
+        settlement_index: u16,
+        candidate: PieceId,
+    },
+    SettlementTransferred {
+        settlement_index: u16,
+        previous_owner: Player,
+        owner: Player,
+        founder: PieceId,
+    },
     DrawOffered {
         player: Player,
     },
@@ -310,10 +329,17 @@ pub fn apply_action(
             at,
         } => apply_pawn_placement(state, player, settlement_index, at),
     }?;
+    apply_settlement_landing_effect(scenario, &mut next, action)?;
+    cancel_invalid_transfer_candidates(scenario, &mut next)?;
+    if state.active_player != next.active_player && next.outcome.is_none() {
+        let active_player = next.active_player;
+        resolve_transfer_candidates(scenario, &mut next, active_player)?;
+    }
     latch_settlement_interruptions(scenario, &mut next)?;
     if state.active_player != next.active_player && next.outcome.is_none() {
         let owner = next.active_player;
         complete_owner_cycles(&mut next, owner);
+        latch_settlement_interruptions(scenario, &mut next)?;
     }
     let events = transition_events(state, &next, action);
     Ok(Transition {
@@ -503,19 +529,7 @@ fn transition_events(
         }
         Action::Resign { .. } => Vec::new(),
     };
-    for settlement_after in &after.settlements {
-        if let Some(settlement_before) = before
-            .settlements
-            .iter()
-            .find(|settlement| settlement.site_index == settlement_after.site_index)
-            && !settlement_before.cycle_interrupted
-            && settlement_after.cycle_interrupted
-        {
-            events.push(TransitionEvent::SettlementContinuityInterrupted {
-                settlement_index: settlement_after.site_index,
-            });
-        }
-    }
+    events.extend(settlement_change_events(before, after));
     if before.active_player != after.active_player && after.outcome.is_none() {
         for settlement in after
             .settlements
@@ -539,6 +553,174 @@ fn transition_events(
         events.push(TransitionEvent::MatchEnded { outcome });
     }
     events
+}
+
+fn settlement_change_events(before: &MatchState, after: &MatchState) -> Vec<TransitionEvent> {
+    let mut events = Vec::new();
+    for settlement_after in &after.settlements {
+        if let Some(settlement_before) = before
+            .settlements
+            .iter()
+            .find(|settlement| settlement.site_index == settlement_after.site_index)
+            && !settlement_before.cycle_interrupted
+            && settlement_after.cycle_interrupted
+        {
+            events.push(TransitionEvent::SettlementContinuityInterrupted {
+                settlement_index: settlement_after.site_index,
+            });
+        }
+        if let Some(settlement_before) = before
+            .settlements
+            .iter()
+            .find(|settlement| settlement.site_index == settlement_after.site_index)
+        {
+            match (settlement_before.owner, settlement_after.owner) {
+                (None, Some(owner)) => {
+                    if let Some(founder) = settlement_after.founder {
+                        events.push(TransitionEvent::SettlementClaimed {
+                            settlement_index: settlement_after.site_index,
+                            owner,
+                            founder,
+                        });
+                    }
+                }
+                (Some(previous_owner), Some(owner)) if previous_owner != owner => {
+                    if let Some(founder) = settlement_after.founder {
+                        events.push(TransitionEvent::SettlementTransferred {
+                            settlement_index: settlement_after.site_index,
+                            previous_owner,
+                            owner,
+                            founder,
+                        });
+                    }
+                }
+                _ => {}
+            }
+            match (
+                settlement_before.transfer_candidate,
+                settlement_after.transfer_candidate,
+            ) {
+                (None, Some(candidate)) => {
+                    events.push(TransitionEvent::SettlementContested {
+                        settlement_index: settlement_after.site_index,
+                        candidate,
+                    });
+                }
+                (Some(candidate), None) if settlement_before.owner == settlement_after.owner => {
+                    events.push(TransitionEvent::SettlementTransferCancelled {
+                        settlement_index: settlement_after.site_index,
+                        candidate,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    events
+}
+
+fn apply_settlement_landing_effect(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+    action: &Action,
+) -> Result<(), TransitionError> {
+    let Action::Move { piece, .. } = *action else {
+        return Ok(());
+    };
+    let Some(pawn) = state
+        .pieces
+        .get(&piece)
+        .filter(|piece| piece.kind == PieceKind::Pawn)
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let Some((index, _)) = scenario
+        .settlements
+        .iter()
+        .enumerate()
+        .find(|(_, site)| site.at == pawn.at)
+    else {
+        return Ok(());
+    };
+    let settlement_index = u16::try_from(index).map_err(|_| TransitionError::TooManySites)?;
+    let settlement = state
+        .settlements
+        .iter_mut()
+        .find(|settlement| settlement.site_index == settlement_index)
+        .ok_or(TransitionError::MissingSettlement(settlement_index))?;
+    match settlement.owner {
+        None => {
+            settlement.owner = Some(pawn.owner);
+            settlement.founder = Some(pawn.id);
+            settlement.establishment_progress = 0;
+            settlement.established = false;
+            settlement.production_progress = 0;
+            settlement.produced_pawn = None;
+            settlement.cycle_interrupted = false;
+            settlement.completed_cycle_continuous = false;
+            settlement.transfer_candidate = None;
+        }
+        Some(owner) if owner != pawn.owner => {
+            settlement.transfer_candidate = Some(pawn.id);
+            settlement.cycle_interrupted = true;
+        }
+        Some(_) => {}
+    }
+    Ok(())
+}
+
+fn cancel_invalid_transfer_candidates(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+) -> Result<(), TransitionError> {
+    let pieces = &state.pieces;
+    for settlement in &mut state.settlements {
+        let Some(candidate) = settlement.transfer_candidate else {
+            continue;
+        };
+        let site = scenario
+            .settlements
+            .get(usize::from(settlement.site_index))
+            .ok_or(TransitionError::MissingSettlement(settlement.site_index))?;
+        let valid = pieces.get(&candidate).is_some_and(|piece| {
+            piece.kind == PieceKind::Pawn
+                && piece.at == site.at
+                && settlement.owner.is_some_and(|owner| owner != piece.owner)
+        });
+        if !valid {
+            settlement.transfer_candidate = None;
+        }
+    }
+    Ok(())
+}
+
+fn resolve_transfer_candidates(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+    active_player: Player,
+) -> Result<(), TransitionError> {
+    let pieces = &state.pieces;
+    for settlement in &mut state.settlements {
+        let Some(candidate) = settlement.transfer_candidate else {
+            continue;
+        };
+        let site = scenario
+            .settlements
+            .get(usize::from(settlement.site_index))
+            .ok_or(TransitionError::MissingSettlement(settlement.site_index))?;
+        let survives = pieces.get(&candidate).is_some_and(|piece| {
+            piece.owner == active_player && piece.kind == PieceKind::Pawn && piece.at == site.at
+        });
+        if survives {
+            settlement.owner = Some(active_player);
+            settlement.founder = Some(candidate);
+            settlement.transfer_candidate = None;
+            settlement.cycle_interrupted = true;
+            settlement.completed_cycle_continuous = false;
+        }
+    }
+    Ok(())
 }
 
 fn latch_settlement_interruptions(
@@ -1813,6 +1995,186 @@ mod tests {
             .read(&save.to_json().unwrap())
             .unwrap();
         assert_eq!(loaded.state, interrupted.state);
+    }
+
+    #[test]
+    fn pawn_landing_claims_neutral_settlement_without_removal() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 4),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let pawn = piece_id_at(&state, Coord::new(3, 4));
+
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: pawn,
+                to: target,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(transition.state.settlements[0].owner, Some(Player::South));
+        assert_eq!(transition.state.settlements[0].founder, Some(pawn));
+        assert_eq!(transition.state.pieces[&pawn].at, target);
+        assert!(
+            transition
+                .events
+                .contains(&TransitionEvent::SettlementClaimed {
+                    settlement_index: 0,
+                    owner: Player::South,
+                    founder: pawn,
+                })
+        );
+    }
+
+    #[test]
+    fn hostile_pawn_contests_then_transfers_only_at_its_owner_boundary() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 4),
+            deployment(Player::North, PieceKind::Pawn, 0, 1),
+            deployment(Player::North, PieceKind::Rook, 3, 0),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let candidate = piece_id_at(&state, Coord::new(3, 4));
+        let old_founder = piece_id_at(&state, Coord::new(0, 1));
+        state.settlements[0].owner = Some(Player::North);
+        state.settlements[0].founder = Some(old_founder);
+        state.settlements[0].establishment_progress = 2;
+        state.settlements[0].established = true;
+        state.settlements[0].production_progress = 1;
+
+        let contested = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: candidate,
+                to: target,
+            },
+        )
+        .unwrap();
+        assert_eq!(contested.state.settlements[0].owner, Some(Player::North));
+        assert_eq!(
+            contested.state.settlements[0].transfer_candidate,
+            Some(candidate)
+        );
+        assert!(contested.state.settlements[0].cycle_interrupted);
+        assert!(
+            contested
+                .events
+                .contains(&TransitionEvent::SettlementContested {
+                    settlement_index: 0,
+                    candidate,
+                })
+        );
+
+        let transferred = apply_action(
+            &scenario,
+            &contested.state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        let settlement = &transferred.state.settlements[0];
+        assert_eq!(settlement.owner, Some(Player::South));
+        assert_eq!(settlement.founder, Some(candidate));
+        assert_eq!(settlement.transfer_candidate, None);
+        assert_eq!(settlement.establishment_progress, 2);
+        assert!(settlement.established);
+        assert_eq!(settlement.production_progress, 1);
+        assert!(!settlement.completed_cycle_continuous);
+        assert!(
+            transferred
+                .events
+                .contains(&TransitionEvent::SettlementTransferred {
+                    settlement_index: 0,
+                    previous_owner: Player::North,
+                    owner: Player::South,
+                    founder: candidate,
+                })
+        );
+    }
+
+    #[test]
+    fn capture_cancels_transfer_without_changing_owner() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 4),
+            deployment(Player::North, PieceKind::Pawn, 0, 1),
+            deployment(Player::North, PieceKind::Rook, 3, 0),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let candidate = piece_id_at(&state, Coord::new(3, 4));
+        state.settlements[0].owner = Some(Player::North);
+        state.settlements[0].founder = Some(piece_id_at(&state, Coord::new(0, 1)));
+        let contested = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: candidate,
+                to: target,
+            },
+        )
+        .unwrap()
+        .state;
+        let rook = piece_id_at(&contested, Coord::new(3, 0));
+
+        let mut leaving = contested.clone();
+        leaving.active_player = Player::South;
+        let departed = apply_action(
+            &scenario,
+            &leaving,
+            &Action::Move {
+                player: Player::South,
+                piece: candidate,
+                to: Coord::new(3, 2),
+            },
+        )
+        .unwrap();
+        assert_eq!(departed.state.settlements[0].owner, Some(Player::North));
+        assert_eq!(departed.state.settlements[0].transfer_candidate, None);
+        assert!(
+            departed
+                .events
+                .contains(&TransitionEvent::SettlementTransferCancelled {
+                    settlement_index: 0,
+                    candidate,
+                })
+        );
+
+        let defended = apply_action(
+            &scenario,
+            &contested,
+            &Action::Move {
+                player: Player::North,
+                piece: rook,
+                to: target,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(defended.state.settlements[0].owner, Some(Player::North));
+        assert_eq!(defended.state.settlements[0].transfer_candidate, None);
+        assert!(!defended.state.pieces.contains_key(&candidate));
+        assert!(
+            defended
+                .events
+                .contains(&TransitionEvent::SettlementTransferCancelled {
+                    settlement_index: 0,
+                    candidate,
+                })
+        );
     }
 
     #[test]
