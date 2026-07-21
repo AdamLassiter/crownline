@@ -1320,6 +1320,89 @@ mod tests {
     }
 
     #[test]
+    fn large_authored_layout_is_valid_symmetric_and_has_multiple_theatre_routes() {
+        let scenario: ScenarioDefinition =
+            ron::from_str(include_str!("../../../assets/scenarios/large.ron"))
+                .expect("large scenario parses");
+        assert_eq!(scenario.validate(), Ok(()));
+        assert_eq!(
+            scenario.board,
+            BoardSize {
+                width: 24,
+                height: 24
+            }
+        );
+        assert_eq!(scenario.metadata.expected_minutes, (105, 135));
+        assert!(!scenario.metadata.is_default);
+        assert_eq!(scenario.deployments.len(), 32);
+        assert_eq!(scenario.settlements.len(), 6);
+        assert_eq!(scenario.promotion_sites.len(), 4);
+        assert_eq!(scenario.keeps.len(), 2);
+        assert_eq!(scenario.castling_routes.len(), 4);
+        assert!(scenario.keeps.iter().all(|keep| keep.gates.len() == 4));
+
+        for river_x in [5, 17] {
+            let crossings = scenario
+                .edges
+                .iter()
+                .filter(|(edge, kind)| {
+                    edge.first.x == river_x
+                        && edge.second.x == river_x + 1
+                        && matches!(kind, EdgeKind::Bridge | EdgeKind::Ford)
+                })
+                .count();
+            assert_eq!(crossings, 4);
+        }
+        for site in &scenario.promotion_sites {
+            let open_approaches = [(-1_i8, 0_i8), (1, 0), (0, -1), (0, 1)]
+                .into_iter()
+                .filter_map(|(dx, dy)| checked_offset(site.at, dx, dy))
+                .filter(|at| {
+                    at.is_within(scenario.board)
+                        && scenario.terrain.get(at) != Some(&TileTerrain::Mountain)
+                        && !matches!(
+                            scenario.edges.get(&Edge::new(site.at, *at)),
+                            Some(EdgeKind::River | EdgeKind::Wall)
+                        )
+                })
+                .count();
+            assert!(open_approaches >= 2);
+        }
+
+        let rotate = |at: Coord| Coord::new(23 - at.x, 23 - at.y);
+        for (at, terrain) in &scenario.terrain {
+            assert_eq!(scenario.terrain.get(&rotate(*at)), Some(terrain));
+        }
+        for (edge, kind) in &scenario.edges {
+            let rotated = Edge::new(rotate(edge.first), rotate(edge.second));
+            assert_eq!(scenario.edges.get(&rotated), Some(kind));
+        }
+        for deployment in &scenario.deployments {
+            assert!(scenario.deployments.iter().any(|candidate| {
+                candidate.player == deployment.player.opponent()
+                    && candidate.kind == deployment.kind
+                    && candidate.at == rotate(deployment.at)
+            }));
+        }
+        for settlement in &scenario.settlements {
+            assert!(
+                scenario
+                    .settlements
+                    .iter()
+                    .any(|candidate| candidate.at == rotate(settlement.at))
+            );
+        }
+        for site in &scenario.promotion_sites {
+            assert!(
+                scenario
+                    .promotion_sites
+                    .iter()
+                    .any(|candidate| candidate.at == rotate(site.at))
+            );
+        }
+    }
+
+    #[test]
     fn reports_keep_fortification_and_deployment_errors() {
         let mut scenario = standard_scenario();
         scenario.keeps[0].gates.pop_first();
