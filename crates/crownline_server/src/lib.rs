@@ -1,6 +1,6 @@
 //! Authoritative Crownlines server services.
 
-use std::{net::SocketAddr, sync::Arc, time::Instant};
+use std::{collections::BTreeMap, net::SocketAddr, path::Path, sync::Arc, time::Instant};
 
 use axum::{
     Json, Router,
@@ -18,9 +18,11 @@ pub mod actors;
 pub mod authority;
 pub mod database;
 pub mod limits;
+pub mod recovery;
 pub mod rooms;
 
 use limits::{LimitKind, RequestLimiter, ServerLimits};
+use recovery::{MatchRepository, RecoveryError};
 use rooms::{RoomError, RoomService, ScenarioCatalog};
 
 pub type SharedRooms = Arc<Mutex<RoomService>>;
@@ -31,27 +33,71 @@ struct AppState {
     rooms: SharedRooms,
     limiter: Arc<Mutex<RequestLimiter>>,
     limits: ServerLimits,
+    _repository: Arc<Mutex<MatchRepository>>,
+    _restored_authorities: Arc<Mutex<BTreeMap<uuid::Uuid, authority::AuthoritativeMatch>>>,
 }
 
 pub fn app() -> Router {
     app_with_limits(ServerLimits::default())
 }
 
+/// Builds an ephemeral server using an in-memory database.
+///
+/// # Panics
+///
+/// Panics only if this process cannot initialize a fresh in-memory `SQLite` database.
 pub fn app_with_limits(limits: ServerLimits) -> Router {
+    let database = database::Database::open_in_memory().expect("in-memory SQLite must open");
+    app_with_repository(limits, MatchRepository::new(database))
+        .expect("fresh in-memory repository must restore")
+}
+
+/// Builds the server around a durable database after validating active matches.
+///
+/// # Errors
+///
+/// Returns database, migration, or startup recovery errors.
+pub fn app_with_database(
+    limits: ServerLimits,
+    path: impl AsRef<Path>,
+    durability: database::Durability,
+) -> Result<Router, RecoveryError> {
+    let database = database::Database::open(path, durability)?;
+    app_with_repository(limits, MatchRepository::new(database))
+}
+
+fn app_with_repository(
+    limits: ServerLimits,
+    mut repository: MatchRepository,
+) -> Result<Router, RecoveryError> {
+    let catalog = ScenarioCatalog::installed();
+    let restored = repository.restore_active(&catalog)?;
+    tracing::info!(
+        restored = restored.matches.len(),
+        quarantined = restored.quarantined.len(),
+        "startup match recovery complete"
+    );
+    let restored_authorities = restored
+        .matches
+        .into_iter()
+        .map(|restored| (restored.match_id, restored.authority))
+        .collect();
     let rooms = Arc::new(Mutex::new(
-        RoomService::new(ScenarioCatalog::installed()).with_max_rooms(limits.max_rooms),
+        RoomService::new(catalog).with_max_rooms(limits.max_rooms),
     ));
     let state = AppState {
         rooms,
         limiter: Arc::new(Mutex::new(RequestLimiter::default())),
         limits,
+        _repository: Arc::new(Mutex::new(repository)),
+        _restored_authorities: Arc::new(Mutex::new(restored_authorities)),
     };
-    Router::new()
+    Ok(Router::new()
         .route("/health", get(health))
         .route("/rooms", post(create_room))
         .route("/rooms/join", post(join_room))
         .layer(DefaultBodyLimit::max(limits.max_http_body_bytes))
-        .with_state(state)
+        .with_state(state))
 }
 
 async fn health() -> Json<HealthResponse> {

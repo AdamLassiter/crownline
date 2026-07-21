@@ -115,6 +115,26 @@ impl AuthoritativeMatch {
         self.prepared.take()
     }
 
+    /// Captures the current authority state as an initial atomic persistence unit.
+    ///
+    /// # Errors
+    ///
+    /// Returns a wall-clock conversion error.
+    pub fn persistence_image(
+        &self,
+        recorded_at: SystemTime,
+    ) -> Result<PreparedAuthorityTransition, String> {
+        let recorded = unix_millis(recorded_at)?;
+        Ok(PreparedAuthorityTransition {
+            match_id: self.match_id,
+            state: self.state.clone(),
+            journal: self.journal.clone(),
+            clock: self.clock.clone(),
+            received_unix_millis: recorded,
+            decided_unix_millis: recorded,
+        })
+    }
+
     fn authoritative_snapshot(&self) -> Result<MatchSnapshot, String> {
         Ok(MatchSnapshot {
             match_id: self.match_id,

@@ -45,7 +45,19 @@ async fn main() -> Result<()> {
     init_tracing(config.json_logs);
 
     let limits = crownline_server::limits::ServerLimits::from_env().map_err(anyhow::Error::msg)?;
-    let app = crownline_server::app_with_limits(limits).layer(TraceLayer::new_for_http());
+    let database_path =
+        env::var("CROWNLINE_DATABASE_PATH").unwrap_or_else(|_| "crownline.sqlite3".to_owned());
+    let durability = match env::var("CROWNLINE_DATABASE_DURABILITY")
+        .unwrap_or_else(|_| "full".to_owned())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "full" => crownline_server::database::Durability::Full,
+        "normal" => crownline_server::database::Durability::Normal,
+        _ => anyhow::bail!("CROWNLINE_DATABASE_DURABILITY must be full or normal"),
+    };
+    let app = crownline_server::app_with_database(limits, database_path, durability)?
+        .layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(config.bind_address)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_address))?;

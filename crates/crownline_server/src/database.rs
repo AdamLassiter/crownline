@@ -3,7 +3,7 @@ use std::{path::Path, time::Duration};
 use rusqlite::{Connection, Transaction};
 use thiserror::Error;
 
-const CURRENT_SCHEMA_VERSION: i64 = 1;
+const CURRENT_SCHEMA_VERSION: i64 = 2;
 const MAX_SNAPSHOT_BYTES: i64 = 4 * 1024 * 1024;
 const MAX_ACTION_BYTES: i64 = 16 * 1024;
 
@@ -117,8 +117,28 @@ impl Database {
             )?;
             transaction.commit()?;
         }
+        if found < 2 {
+            let transaction = self.connection.transaction()?;
+            migration_002(&transaction)?;
+            transaction.execute(
+                "INSERT INTO schema_migrations(version, name, applied_unix_millis)
+                 VALUES(2, 'match_quarantine', unixepoch('subsec') * 1000)",
+                [],
+            )?;
+            transaction.commit()?;
+        }
         Ok(())
     }
+}
+
+fn migration_002(transaction: &Transaction<'_>) -> Result<(), rusqlite::Error> {
+    transaction.execute_batch(
+        "CREATE TABLE quarantined_matches (
+            match_id TEXT PRIMARY KEY REFERENCES matches(match_id) ON DELETE CASCADE,
+            reason_code TEXT NOT NULL,
+            quarantined_unix_millis INTEGER NOT NULL CHECK(quarantined_unix_millis >= 0)
+        );",
+    )
 }
 
 fn migration_001(transaction: &Transaction<'_>) -> Result<(), rusqlite::Error> {
@@ -220,7 +240,7 @@ mod tests {
                     row.get(0)
                 })
                 .unwrap();
-            assert_eq!(migrations, 1);
+            assert_eq!(migrations, 2);
             assert_eq!(
                 database
                     .connection()
@@ -303,7 +323,7 @@ mod tests {
                 .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
-            2
+            3
         );
     }
 }

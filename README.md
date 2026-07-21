@@ -35,3 +35,6 @@ Start the desktop shell with `cargo run -p crownline`. Start the server with
 `cargo run -p crownline_server`; it listens at `127.0.0.1:5000` by default.
 Override that with `CROWNLINE_BIND`, select `CROWNLINE_LOG_FORMAT=json` for JSON
 logs, and use `RUST_LOG` for filtering.
+
+Database durability, backup, and restore procedures are documented in
+[docs/server-operations.md](docs/server-operations.md).
