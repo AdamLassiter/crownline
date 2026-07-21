@@ -350,6 +350,7 @@ pub fn apply_action(
         let owner = next.active_player;
         complete_owner_cycles(scenario, &mut next, owner);
         latch_settlement_interruptions(scenario, &mut next)?;
+        record_repetition(&mut next)?;
     }
     let events = transition_events(state, &next, action);
     Ok(Transition {
@@ -984,6 +985,10 @@ fn finish_command(
         return Ok(());
     }
 
+    Ok(())
+}
+
+fn record_repetition(state: &mut MatchState) -> Result<(), TransitionError> {
     let repetition_key = state.repetition_key()?;
     let count = state.repetition_counts.entry(repetition_key).or_default();
     *count = count.saturating_add(1);
@@ -2078,6 +2083,42 @@ mod tests {
                 .contains(&TransitionEvent::SettlementEstablished {
                     settlement_index: 0,
                 })
+        );
+    }
+
+    #[test]
+    fn repetition_records_final_post_realm_state() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(transition.state.settlements[0].establishment_progress, 1);
+        let final_key = transition.state.repetition_key().unwrap();
+        assert_eq!(transition.state.repetition_counts[&final_key], 1);
+        let mut transient = transition.state.clone();
+        transient.settlements[0].establishment_progress = 0;
+        transient.settlements[0].completed_cycle_continuous = false;
+        let transient_key = transient.repetition_key().unwrap();
+        assert!(
+            !transition
+                .state
+                .repetition_counts
+                .contains_key(&transient_key)
         );
     }
 
