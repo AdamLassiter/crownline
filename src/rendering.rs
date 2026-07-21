@@ -8,10 +8,15 @@ use crownline_core::{
 
 use crate::ChessFontText;
 
+mod features;
+
+use features::{spawn_scenario_features, sync_settlement_visuals};
+
 pub const TILE_SIZE: f32 = 32.0;
 const TILE_Z: f32 = 0.0;
 const PIECE_Z: f32 = 2.0;
 const PIECE_FONT_SIZE: f32 = 26.0;
+pub(super) const PIECE_BACKPLATE_SIZE: f32 = TILE_SIZE * 0.72;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub enum TileParity {
@@ -91,9 +96,9 @@ pub struct PieceVisual {
 struct PieceBackplate;
 
 #[derive(Resource)]
-struct DisplayedGame {
-    scenario: ScenarioDefinition,
-    state: MatchState,
+pub(super) struct DisplayedGame {
+    pub(super) scenario: ScenarioDefinition,
+    pub(super) state: MatchState,
 }
 
 #[derive(Resource)]
@@ -105,7 +110,7 @@ impl Plugin for BoardRenderingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BoardPalette>()
             .add_systems(Startup, spawn_default_board)
-            .add_systems(Update, sync_piece_visuals);
+            .add_systems(Update, (sync_piece_visuals, sync_settlement_visuals));
     }
 }
 
@@ -124,6 +129,7 @@ fn spawn_default_board(
         assets.load("fonts/NotoSansSymbols2-Regular.ttf")
     });
     spawn_board(&mut commands, &palette, &scenario);
+    spawn_scenario_features(&mut commands, &scenario, &state);
     for piece in state.pieces.values() {
         spawn_piece(&mut commands, &font, &scenario, piece);
     }
@@ -182,7 +188,7 @@ fn spawn_piece(
         ))
         .with_children(|visual| {
             visual.spawn((
-                Sprite::from_color(backplate, Vec2::splat(TILE_SIZE * 0.72)),
+                Sprite::from_color(backplate, Vec2::splat(PIECE_BACKPLATE_SIZE)),
                 Transform::from_rotation(rotation),
                 PieceBackplate,
             ));
@@ -266,7 +272,7 @@ const fn tile_parity(at: Coord) -> TileParity {
     }
 }
 
-fn tile_position(at: Coord, scenario: &ScenarioDefinition) -> [f32; 2] {
+pub(super) fn tile_position(at: Coord, scenario: &ScenarioDefinition) -> [f32; 2] {
     let left = -(f32::from(scenario.board.width) * TILE_SIZE) / 2.0 + TILE_SIZE / 2.0;
     let top = (f32::from(scenario.board.height) * TILE_SIZE) / 2.0 - TILE_SIZE / 2.0;
     [
