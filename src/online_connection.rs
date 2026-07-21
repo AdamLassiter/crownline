@@ -3,13 +3,14 @@ use std::{
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use bevy::prelude::*;
+use crownline_core::Action;
 use crownline_protocol::{
-    ClientMessage, ConnectionState, ErrorCode, MatchSnapshot, MutationContext, PROTOCOL_VERSION,
-    ReconnectToken, ServerMessage, validate_snapshot,
+    ActionRequest, ClientMessage, ConnectionState, ErrorCode, MatchSnapshot, MutationContext,
+    MutationResult, PROTOCOL_VERSION, ReconnectToken, ServerMessage, validate_snapshot,
 };
 use directories::ProjectDirs;
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -21,6 +22,7 @@ use uuid::Uuid;
 use crate::{
     config::{ClientSettings, SavedOnlineSeat},
     lifecycle::{ClientFlow, ScenarioCatalog},
+    local_interaction::BoardInteraction,
     online_lobby::{LobbyScreen, OnlineLobby, OnlineSeat},
     rendering::{
         DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
@@ -31,6 +33,7 @@ const COMMAND_CAPACITY: usize = 8;
 const EVENT_CAPACITY: usize = 32;
 const RETRY_BASE: Duration = Duration::from_millis(500);
 const RETRY_CAP: Duration = Duration::from_secs(30);
+const ACTION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
 const CREDENTIAL_SERVICE: &str = "org.Crownlines.Crownlines";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -55,6 +58,26 @@ pub(crate) struct OnlineConnection {
     restore_requested: bool,
     ready_sent: bool,
     status: String,
+    pending_action: Option<PendingAction>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingAction {
+    request: ActionRequest,
+    last_sent: Instant,
+    attempts: u32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct OnlineActionIntent {
+    pub(crate) action: Action,
+    pub(crate) expected_revision: u64,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct OnlineIntentOutbox {
+    pub(crate) intent: Option<OnlineActionIntent>,
+    pub(crate) locked: bool,
 }
 
 #[derive(Component)]
@@ -70,6 +93,7 @@ enum ConnectionCommand {
     },
     Restore(SavedOnlineSeat),
     Ready,
+    Action(ActionRequest),
     Retry,
     Cancel,
     Forget(SavedOnlineSeat),
@@ -79,6 +103,11 @@ enum ConnectionCommand {
 enum ConnectionEvent {
     Phase(ConnectionPhase),
     Snapshot(Box<MatchSnapshot>),
+    Acknowledgement(Box<MutationResult>),
+    CommandRejected {
+        failure: CommandFailure,
+        retryable: bool,
+    },
     Persisted(SavedOnlineSeat, CredentialProtection),
     Restored {
         saved: SavedOnlineSeat,
@@ -92,6 +121,14 @@ enum ConnectionEvent {
 enum CredentialProtection {
     OperatingSystem,
     UserOnlyFile,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandFailure {
+    WrongTurn,
+    ClockExpired,
+    Stale,
+    Rejected,
 }
 
 #[derive(Resource)]
@@ -120,6 +157,7 @@ pub struct OnlineConnectionPlugin;
 impl Plugin for OnlineConnectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OnlineConnection>()
+            .init_resource::<OnlineIntentOutbox>()
             .init_resource::<ConnectionTransport>()
             .add_systems(Startup, spawn_connection_status)
             .add_systems(
@@ -127,6 +165,8 @@ impl Plugin for OnlineConnectionPlugin {
                 (
                     start_or_restore_connection,
                     handle_connection_controls,
+                    queue_online_action,
+                    retry_timed_out_action,
                     poll_connection_events,
                     sync_connection_status,
                 )
@@ -252,7 +292,88 @@ fn handle_connection_controls(
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value)]
+fn queue_online_action(
+    mut outbox: ResMut<OnlineIntentOutbox>,
+    mut connection: ResMut<OnlineConnection>,
+    transport: Res<ConnectionTransport>,
+    mut interaction: ResMut<BoardInteraction>,
+) {
+    let Some(intent) = outbox.intent.take() else {
+        return;
+    };
+    if connection.pending_action.is_some() {
+        outbox.locked = true;
+        return;
+    }
+    let Some(match_id) = connection.active_match else {
+        outbox.locked = false;
+        interaction.resolve_online("Command not sent: no authenticated match is active.");
+        return;
+    };
+    let request = ActionRequest {
+        context: MutationContext {
+            match_id,
+            expected_revision: intent.expected_revision,
+            idempotency_key: Uuid::new_v4(),
+        },
+        action: intent.action,
+    };
+    let sent = transport
+        .commands
+        .try_send(ConnectionCommand::Action(request.clone()))
+        .is_ok();
+    if !sent {
+        "Command queued; the bounded network channel is busy.".clone_into(&mut connection.status);
+    }
+    connection.pending_action = Some(PendingAction {
+        request,
+        last_sent: if sent {
+            Instant::now()
+        } else {
+            Instant::now()
+                .checked_sub(ACTION_RESPONSE_TIMEOUT)
+                .unwrap_or_else(Instant::now)
+        },
+        attempts: u32::from(sent),
+    });
+    outbox.locked = true;
+    if sent {
+        "Command pending authoritative acknowledgement.".clone_into(&mut connection.status);
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn retry_timed_out_action(
+    mut connection: ResMut<OnlineConnection>,
+    transport: Res<ConnectionTransport>,
+) {
+    if connection.phase != ConnectionPhase::Connected {
+        return;
+    }
+    let Some(pending) = connection.pending_action.as_mut() else {
+        return;
+    };
+    if pending.last_sent.elapsed() < ACTION_RESPONSE_TIMEOUT {
+        return;
+    }
+    if transport
+        .commands
+        .try_send(ConnectionCommand::Action(pending.request.clone()))
+        .is_ok()
+    {
+        pending.last_sent = Instant::now();
+        pending.attempts = pending.attempts.saturating_add(1);
+        "Command response timed out; retrying the same idempotent intent."
+            .clone_into(&mut connection.status);
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value
+)]
 fn poll_connection_events(
     transport: Res<ConnectionTransport>,
     mut connection: ResMut<OnlineConnection>,
@@ -264,16 +385,28 @@ fn poll_connection_events(
     mut selection: ResMut<OverlaySelection>,
     mut transitions: ResMut<LocalTransitionEventQueue>,
     mut notices: ResMut<LocalTransitionNoticeLog>,
+    mut interaction: ResMut<BoardInteraction>,
+    mut outbox: ResMut<OnlineIntentOutbox>,
 ) {
     let Ok(events) = transport.events.lock() else {
         return;
     };
     while let Ok(event) = events.try_recv() {
         match event {
-            ConnectionEvent::Phase(phase) => connection.phase = phase,
+            ConnectionEvent::Phase(phase) => {
+                if phase == ConnectionPhase::Rejected {
+                    connection.pending_action = None;
+                    outbox.locked = false;
+                    interaction.resolve_online("Online authentication was rejected.");
+                }
+                connection.phase = phase;
+            }
             ConnectionEvent::Notice(message) => connection.status = message,
             ConnectionEvent::Forgotten => {
                 connection.phase = ConnectionPhase::Offline;
+                connection.pending_action = None;
+                outbox.locked = false;
+                interaction.resolve_online("Saved seat credential deleted.");
                 "Saved seat credential deleted.".clone_into(&mut connection.status);
             }
             ConnectionEvent::Persisted(saved, protection) => {
@@ -306,6 +439,51 @@ fn poll_connection_events(
                 *flow = ClientFlow::OnlineLobby;
                 connection.observed_lobby_match = Some(saved.match_id);
                 connection.active_match = Some(saved.match_id);
+            }
+            ConnectionEvent::Acknowledgement(result) => {
+                let matches_pending = connection.pending_action.as_ref().is_some_and(|pending| {
+                    pending.request.context.match_id == result.match_id
+                        && pending.request.context.idempotency_key == result.idempotency_key
+                });
+                if matches_pending {
+                    connection.pending_action = None;
+                    outbox.locked = false;
+                    interaction.resolve_online("Command accepted by the server.");
+                } else {
+                    "Received an acknowledgement for a non-pending command."
+                        .clone_into(&mut connection.status);
+                }
+            }
+            ConnectionEvent::CommandRejected { failure, retryable } => {
+                if matches!(
+                    failure,
+                    CommandFailure::WrongTurn | CommandFailure::ClockExpired
+                ) {
+                    *selection = OverlaySelection::default();
+                }
+                if retryable && failure != CommandFailure::Stale {
+                    if let Some(pending) = connection.pending_action.as_mut() {
+                        pending.last_sent = Instant::now();
+                    }
+                    "The server asked the client to retry the same command."
+                        .clone_into(&mut connection.status);
+                } else {
+                    connection.pending_action = None;
+                    outbox.locked = false;
+                    let message = match failure {
+                        CommandFailure::WrongTurn => {
+                            "Command rejected: it is not this seat's turn."
+                        }
+                        CommandFailure::ClockExpired => {
+                            "Command rejected: the authoritative clock expired."
+                        }
+                        CommandFailure::Stale => {
+                            "Command cancelled because the match revision changed."
+                        }
+                        CommandFailure::Rejected => "Command rejected by the server.",
+                    };
+                    interaction.resolve_online(message);
+                }
             }
             ConnectionEvent::Snapshot(snapshot) => match adopt_snapshot(
                 &snapshot,
@@ -386,6 +564,10 @@ fn sync_connection_status(
         ConnectionPhase::Rejected => "REJECTED".to_owned(),
         ConnectionPhase::Terminal => "TERMINAL".to_owned(),
     };
+    let pending = connection.pending_action.as_ref().map_or_else(
+        || "no command pending".to_owned(),
+        |pending| format!("command pending · attempt {}", pending.attempts),
+    );
     for (mut text, mut visibility) in &mut text {
         *visibility = if settings.saved_online_seat.is_some()
             || !matches!(connection.phase, ConnectionPhase::Offline)
@@ -395,8 +577,8 @@ fn sync_connection_status(
             Visibility::Hidden
         };
         text.0 = format!(
-            "ONLINE {phase} · T retry · X cancel retry · F forget seat\n{}",
-            connection.status
+            "ONLINE {phase} · {pending} · T retry · X cancel retry · F forget seat\n{}",
+            connection.status,
         );
     }
 }
@@ -533,7 +715,10 @@ fn apply_idle_command(
             let _ = events.send(ConnectionEvent::Forgotten);
             false
         }
-        ConnectionCommand::Ready | ConnectionCommand::Retry | ConnectionCommand::Cancel => false,
+        ConnectionCommand::Ready
+        | ConnectionCommand::Action(_)
+        | ConnectionCommand::Retry
+        | ConnectionCommand::Cancel => false,
     }
 }
 
@@ -591,6 +776,10 @@ async fn connect_once(
                             };
                             if send_client_message(&mut socket, &ready).await.is_err() { return SocketOutcome::Transient; }
                         }
+                        ConnectionCommand::Action(request) => {
+                            let action = ClientMessage::Action { protocol_version: PROTOCOL_VERSION, request };
+                            if send_client_message(&mut socket, &action).await.is_err() { return SocketOutcome::Transient; }
+                        }
                         ConnectionCommand::Retry => return SocketOutcome::RetryNow,
                         ConnectionCommand::Cancel => return SocketOutcome::Cancelled,
                         ConnectionCommand::Forget(saved) => {
@@ -615,31 +804,31 @@ fn handle_server_message(bytes: &[u8], events: &mpsc::SyncSender<ConnectionEvent
     };
     let _ = events.send(ConnectionEvent::Phase(ConnectionPhase::Connected));
     match message {
-        ServerMessage::Snapshot { snapshot, .. }
-        | ServerMessage::Error {
-            snapshot: Some(snapshot),
-            ..
-        } => {
+        ServerMessage::Snapshot { snapshot, .. } => {
             let _ = events.send(ConnectionEvent::Snapshot(snapshot));
         }
         ServerMessage::Acknowledgement { result, .. } => {
-            let _ = events.send(ConnectionEvent::Snapshot(Box::new(result.snapshot)));
+            let _ = events.send(ConnectionEvent::Acknowledgement(result.clone()));
+            let _ = events.send(ConnectionEvent::Snapshot(Box::new(result.snapshot.clone())));
         }
         ServerMessage::Error {
-            code: ErrorCode::Unauthorized,
+            code,
+            message,
+            retryable,
+            snapshot,
             ..
         } => {
-            let _ = events.send(ConnectionEvent::Notice(
-                "The saved seat credential was rejected. Forget it or join again.".to_owned(),
-            ));
-            return false;
-        }
-        ServerMessage::Error {
-            retryable: false, ..
-        } => {
-            let _ = events.send(ConnectionEvent::Notice(
-                "The server rejected the online request.".to_owned(),
-            ));
+            if code == ErrorCode::Unauthorized && snapshot.is_none() {
+                let _ = events.send(ConnectionEvent::Notice(
+                    "The saved seat credential was rejected. Forget it or join again.".to_owned(),
+                ));
+                return false;
+            }
+            if let Some(snapshot) = snapshot {
+                let _ = events.send(ConnectionEvent::Snapshot(snapshot));
+            }
+            let failure = classify_command_failure(code, &message);
+            let _ = events.send(ConnectionEvent::CommandRejected { failure, retryable });
         }
         ServerMessage::ConnectionState {
             state: ConnectionState::Finished,
@@ -647,11 +836,21 @@ fn handle_server_message(bytes: &[u8], events: &mpsc::SyncSender<ConnectionEvent
         } => {
             let _ = events.send(ConnectionEvent::Phase(ConnectionPhase::Terminal));
         }
-        ServerMessage::ConnectionState { .. }
-        | ServerMessage::RematchState { .. }
-        | ServerMessage::Error { .. } => {}
+        ServerMessage::ConnectionState { .. } | ServerMessage::RematchState { .. } => {}
     }
     true
+}
+
+fn classify_command_failure(code: ErrorCode, message: &str) -> CommandFailure {
+    if code == ErrorCode::Unauthorized {
+        CommandFailure::WrongTurn
+    } else if code == ErrorCode::StaleRevision {
+        CommandFailure::Stale
+    } else if code == ErrorCode::InvalidAction && message == "Clock expired." {
+        CommandFailure::ClockExpired
+    } else {
+        CommandFailure::Rejected
+    }
 }
 
 async fn send_client_message<S>(
@@ -683,6 +882,7 @@ async fn wait_for_retry(
         if let Ok(command) = commands.try_recv() {
             match command {
                 ConnectionCommand::Retry => return true,
+                ConnectionCommand::Action(_) => continue,
                 ConnectionCommand::Cancel => {
                     *target = None;
                     let _ = events.send(ConnectionEvent::Phase(ConnectionPhase::Offline));
@@ -880,5 +1080,57 @@ mod tests {
         let saved = saved_seat("wss://play.example.com", &seat, Uuid::new_v4());
         let encoded = ron::to_string(&saved).unwrap();
         assert!(!encoded.contains(seat.reconnect_token.expose()));
+    }
+
+    #[test]
+    fn retry_clones_the_original_revision_and_idempotency_key() {
+        let request = ActionRequest {
+            context: MutationContext {
+                match_id: Uuid::new_v4(),
+                expected_revision: 17,
+                idempotency_key: Uuid::new_v4(),
+            },
+            action: Action::Hold {
+                player: Player::North,
+            },
+        };
+        let pending = PendingAction {
+            request: request.clone(),
+            last_sent: Instant::now(),
+            attempts: 1,
+        };
+
+        let ConnectionCommand::Action(first_retry) =
+            ConnectionCommand::Action(pending.request.clone())
+        else {
+            unreachable!();
+        };
+        let ConnectionCommand::Action(second_retry) =
+            ConnectionCommand::Action(pending.request.clone())
+        else {
+            unreachable!();
+        };
+        assert_eq!(first_retry, request);
+        assert_eq!(
+            second_retry.context.idempotency_key,
+            request.context.idempotency_key
+        );
+        assert_eq!(second_retry.context.expected_revision, 17);
+    }
+
+    #[test]
+    fn obsolete_turn_and_clock_failures_are_distinguished() {
+        assert_eq!(
+            classify_command_failure(ErrorCode::Unauthorized, "Wrong seat."),
+            CommandFailure::WrongTurn
+        );
+        assert_eq!(
+            classify_command_failure(ErrorCode::InvalidAction, "Clock expired."),
+            CommandFailure::ClockExpired
+        );
+        assert_eq!(
+            classify_command_failure(ErrorCode::StaleRevision, "ignored"),
+            CommandFailure::Stale
+        );
     }
 }

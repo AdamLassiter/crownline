@@ -8,6 +8,7 @@ use crownline_core::{
 use crate::{
     ChessFontText,
     lifecycle::ClientFlow,
+    online_connection::{OnlineActionIntent, OnlineIntentOutbox},
     rendering::{
         ChessPieceFont, DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue,
         OverlaySelection, PointerCapture, coordinates::BoardGeometry,
@@ -18,11 +19,18 @@ const FOCUS_Z: f32 = 6.0;
 const CHOICE_Z: f32 = 5.8;
 
 #[derive(Debug, Resource, Default)]
-struct BoardInteraction {
+pub(crate) struct BoardInteraction {
     keyboard_focus: Option<Coord>,
     observed_revision: Option<u64>,
     status: String,
     submitting: bool,
+}
+
+impl BoardInteraction {
+    pub(crate) fn resolve_online(&mut self, status: &str) {
+        self.submitting = false;
+        status.clone_into(&mut self.status);
+    }
 }
 
 #[derive(Component)]
@@ -107,7 +115,11 @@ fn spawn_interaction_affordances(mut commands: Commands) {
     ));
 }
 
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value
+)]
 fn handle_board_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -117,16 +129,30 @@ fn handle_board_input(
     mut selection: ResMut<OverlaySelection>,
     mut interaction: ResMut<BoardInteraction>,
     mut transitions: ResMut<LocalTransitionEventQueue>,
+    mut online_outbox: Option<ResMut<OnlineIntentOutbox>>,
     flow: Option<Res<ClientFlow>>,
 ) {
-    if flow.is_some_and(|flow| *flow != ClientFlow::Playing) {
+    let online = flow
+        .as_deref()
+        .is_some_and(|flow| *flow == ClientFlow::OnlinePlaying);
+    if flow
+        .as_deref()
+        .is_some_and(|flow| !matches!(*flow, ClientFlow::Playing | ClientFlow::OnlinePlaying))
+    {
         selection.piece = None;
         return;
     }
     if interaction.observed_revision != Some(game.state.revision) {
         selection.piece = None;
         interaction.observed_revision = Some(game.state.revision);
-        interaction.submitting = false;
+        if !online || !online_outbox.as_deref().is_some_and(|outbox| outbox.locked) {
+            interaction.submitting = false;
+        }
+    }
+    if online && online_outbox.as_deref().is_some_and(|outbox| outbox.locked) {
+        selection.piece = None;
+        "Command pending authoritative acknowledgement.".clone_into(&mut interaction.status);
+        return;
     }
 
     if let TurnPhase::ResolvingChoices { queue } = &game.state.phase {
@@ -142,6 +168,7 @@ fn handle_board_input(
                 &mut selection,
                 &mut interaction,
                 &mut transitions,
+                online.then_some(online_outbox.as_deref_mut()).flatten(),
             );
         } else {
             selection.piece = None;
@@ -173,6 +200,7 @@ fn handle_board_input(
             &mut selection,
             &mut interaction,
             &mut transitions,
+            online.then_some(online_outbox.as_deref_mut()).flatten(),
         );
         return;
     }
@@ -204,6 +232,7 @@ fn handle_board_input(
             &mut selection,
             &mut interaction,
             &mut transitions,
+            online.then_some(online_outbox.as_deref_mut()).flatten(),
         ),
         Activation::Clear => {
             selection.piece = None;
@@ -223,6 +252,7 @@ fn handle_mandatory_choice(
     selection: &mut OverlaySelection,
     interaction: &mut BoardInteraction,
     transitions: &mut LocalTransitionEventQueue,
+    mut online_outbox: Option<&mut OnlineIntentOutbox>,
 ) {
     selection.piece = None;
     if keys.just_pressed(KeyCode::KeyH) {
@@ -254,6 +284,7 @@ fn handle_mandatory_choice(
                     selection,
                     interaction,
                     transitions,
+                    online_outbox.as_deref_mut(),
                 );
             } else if keys.just_pressed(KeyCode::Escape) {
                 "Promotion is mandatory; choose 1, 2, 3, or 4.".clone_into(&mut interaction.status);
@@ -311,6 +342,7 @@ fn handle_mandatory_choice(
                         selection,
                         interaction,
                         transitions,
+                        online_outbox,
                     );
                 } else {
                     "Choose one of the highlighted legal Pawn squares."
@@ -370,6 +402,7 @@ fn submit_hold(
     selection: &mut OverlaySelection,
     interaction: &mut BoardInteraction,
     transitions: &mut LocalTransitionEventQueue,
+    online_outbox: Option<&mut OnlineIntentOutbox>,
 ) {
     match hold_availability(&game.scenario, &game.state) {
         HoldAvailability::Available => submit_action(
@@ -380,6 +413,7 @@ fn submit_hold(
             selection,
             interaction,
             transitions,
+            online_outbox,
         ),
         HoldAvailability::Disabled(reason) => reason.clone_into(&mut interaction.status),
     }
@@ -391,11 +425,25 @@ fn submit_action(
     selection: &mut OverlaySelection,
     interaction: &mut BoardInteraction,
     transitions: &mut LocalTransitionEventQueue,
+    online_outbox: Option<&mut OnlineIntentOutbox>,
 ) {
     if interaction.submitting {
         return;
     }
     interaction.submitting = true;
+    if let Some(outbox) = online_outbox {
+        if outbox.locked {
+            return;
+        }
+        outbox.locked = true;
+        outbox.intent = Some(OnlineActionIntent {
+            action: action.clone(),
+            expected_revision: game.state.revision,
+        });
+        selection.piece = None;
+        "Command pending authoritative acknowledgement.".clone_into(&mut interaction.status);
+        return;
+    }
     match apply_timed_action(&game.scenario, &game.state, action, 0) {
         Ok(transition) => {
             transitions.push_transition(&transition);
@@ -666,10 +714,56 @@ mod tests {
             &mut selection,
             &mut interaction,
             &mut transitions,
+            None,
         );
         assert_eq!(game.state.revision, 1);
         assert_eq!(selection.piece, None);
         assert!(!interaction.submitting);
+    }
+
+    #[test]
+    fn online_submission_locks_one_intent_without_mutating_canonical_state() {
+        let mut game = game();
+        let original = game.state.clone();
+        let legal = legal_moves(&game.scenario, &game.state).unwrap().remove(0);
+        let action = Action::Move {
+            player: game.state.active_player,
+            piece: legal.piece,
+            to: legal.to,
+        };
+        let mut selection = OverlaySelection {
+            piece: Some(legal.piece),
+        };
+        let mut interaction = BoardInteraction::default();
+        let mut transitions = LocalTransitionEventQueue::default();
+        let mut outbox = OnlineIntentOutbox::default();
+
+        submit_action(
+            &action,
+            &mut game,
+            &mut selection,
+            &mut interaction,
+            &mut transitions,
+            Some(&mut outbox),
+        );
+        submit_action(
+            &Action::Hold {
+                player: game.state.active_player,
+            },
+            &mut game,
+            &mut selection,
+            &mut interaction,
+            &mut transitions,
+            Some(&mut outbox),
+        );
+
+        assert_eq!(game.state, original);
+        assert_eq!(selection.piece, None);
+        assert!(interaction.submitting);
+        assert!(outbox.locked);
+        let intent = outbox.intent.unwrap();
+        assert_eq!(intent.action, action);
+        assert_eq!(intent.expected_revision, original.revision);
     }
 
     #[test]
