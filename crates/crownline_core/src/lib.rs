@@ -3,12 +3,17 @@
 //! This crate deliberately has no dependency on Bevy, networking, filesystems, or
 //! wall-clock time. Hosts supply scenarios, actions, and elapsed time explicitly.
 
+pub mod clock;
 pub mod journal;
 pub mod persistence;
 pub mod rules;
 pub mod scenario;
 pub mod state;
 
+pub use clock::{
+    ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES, advance_clock,
+    apply_timed_action, start_clocks,
+};
 pub use journal::{
     ActionJournal, AppendOutcome, IdempotencyKey, JournalError, JournalRecord, ReplayDivergence,
 };

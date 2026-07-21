@@ -430,6 +430,16 @@ pub enum TransitionError {
     InvalidCastlingRoute,
     #[error("Hold is illegal while the active King is in check")]
     CannotHoldInCheck,
+    #[error("clock base must be between 1 and 180 minutes, got {0}")]
+    InvalidClockBase(u16),
+    #[error("clock increment must be between 0 and 60 seconds, got {0}")]
+    InvalidClockIncrement(u8),
+    #[error("clocks have already started")]
+    ClocksAlreadyStarted,
+    #[error("clocks must be configured before the match starts")]
+    ClocksMustStartWithMatch,
+    #[error("clock value overflowed")]
+    ClockOverflow,
     #[error("match revision overflowed")]
     RevisionOverflow,
     #[error("turn number overflowed")]

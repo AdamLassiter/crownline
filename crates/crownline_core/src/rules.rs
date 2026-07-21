@@ -79,6 +79,16 @@ pub enum TransitionEvent {
     TurnHeld {
         player: Player,
     },
+    ClockAdvanced {
+        player: Player,
+        elapsed_millis: u64,
+        remaining_millis: u64,
+    },
+    ClockIncrementApplied {
+        player: Player,
+        increment_millis: u64,
+        remaining_millis: u64,
+    },
     PiecePromoted {
         pawn: PieceId,
         promoted: PieceId,

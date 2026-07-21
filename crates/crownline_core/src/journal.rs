@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    rules::{Transition, TransitionEvent, apply_action},
+    clock::{ClockSettings, apply_timed_action, start_clocks},
+    rules::{Transition, TransitionEvent},
     scenario::{Player, SCENARIO_SCHEMA_VERSION, ScenarioDefinition},
-    state::{Action, MatchState, TransitionError},
+    state::{Action, ClockState, MatchState, TransitionError},
 };
 
 pub const JOURNAL_FORMAT_VERSION: u16 = 1;
@@ -26,6 +27,8 @@ pub struct JournalRecord {
     pub revision_after: u64,
     pub idempotency_key: IdempotencyKey,
     pub action: Action,
+    #[serde(default)]
+    pub elapsed_millis: u64,
     pub events: Vec<TransitionEvent>,
     pub state_hash: String,
 }
@@ -37,6 +40,8 @@ pub struct ActionJournal {
     pub scenario_schema_version: u16,
     pub scenario_id: String,
     pub initial_state_hash: String,
+    #[serde(default)]
+    pub initial_clocks: Option<ClockState>,
     pub records: Vec<JournalRecord>,
 }
 
@@ -50,17 +55,41 @@ impl ActionJournal {
         application_version: impl Into<String>,
         scenario: &ScenarioDefinition,
     ) -> Result<Self, JournalError> {
-        let application_version = application_version.into();
+        Self::new_inner(application_version.into(), scenario, None)
+    }
+
+    /// Starts a journal whose initial state has configured chess clocks.
+    ///
+    /// # Errors
+    ///
+    /// Returns clock-setting, scenario/state, or integrity errors.
+    pub fn new_with_clocks(
+        application_version: impl Into<String>,
+        scenario: &ScenarioDefinition,
+        settings: ClockSettings,
+    ) -> Result<Self, JournalError> {
+        Self::new_inner(application_version.into(), scenario, Some(settings))
+    }
+
+    fn new_inner(
+        application_version: String,
+        scenario: &ScenarioDefinition,
+        settings: Option<ClockSettings>,
+    ) -> Result<Self, JournalError> {
         if application_version.trim().is_empty() {
             return Err(JournalError::MissingApplicationVersion);
         }
-        let initial = MatchState::from_scenario(scenario).map_err(JournalError::Transition)?;
+        let mut initial = MatchState::from_scenario(scenario).map_err(JournalError::Transition)?;
+        if let Some(settings) = settings {
+            initial = start_clocks(&initial, settings).map_err(JournalError::Transition)?;
+        }
         Ok(Self {
             format_version: JOURNAL_FORMAT_VERSION,
             application_version,
             scenario_schema_version: scenario.schema_version,
             scenario_id: scenario.id.clone(),
             initial_state_hash: hash(&initial)?,
+            initial_clocks: initial.clocks,
             records: Vec::new(),
         })
     }
@@ -77,6 +106,23 @@ impl ActionJournal {
         state: &MatchState,
         idempotency_key: IdempotencyKey,
         action: &Action,
+    ) -> Result<AppendOutcome, JournalError> {
+        self.append_timed(scenario, state, idempotency_key, action, 0)
+    }
+
+    /// Applies and records an action after charging host-supplied elapsed time.
+    ///
+    /// # Errors
+    ///
+    /// Returns compatibility, capacity, state-alignment, clock, legality, or
+    /// integrity errors.
+    pub fn append_timed(
+        &mut self,
+        scenario: &ScenarioDefinition,
+        state: &MatchState,
+        idempotency_key: IdempotencyKey,
+        action: &Action,
+        elapsed_millis: u64,
     ) -> Result<AppendOutcome, JournalError> {
         self.validate_header(scenario)?;
         if let Some(record) = self
@@ -95,7 +141,8 @@ impl ActionJournal {
             });
         }
         self.ensure_tail_matches(state)?;
-        let transition = apply_action(scenario, state, action).map_err(JournalError::Transition)?;
+        let transition = apply_timed_action(scenario, state, action, elapsed_millis)
+            .map_err(JournalError::Transition)?;
         let state_hash = hash(&transition.state)?;
         self.records.push(JournalRecord {
             actor: action_actor(action),
@@ -103,6 +150,7 @@ impl ActionJournal {
             revision_after: transition.state.revision,
             idempotency_key,
             action: action.clone(),
+            elapsed_millis,
             events: transition.events.clone(),
             state_hash,
         });
@@ -119,7 +167,7 @@ impl ActionJournal {
     /// Returns compatibility errors or the first divergent recorded revision.
     pub fn replay(&self, scenario: &ScenarioDefinition) -> Result<MatchState, JournalError> {
         self.validate_header(scenario)?;
-        let mut state = MatchState::from_scenario(scenario).map_err(JournalError::Transition)?;
+        let mut state = self.initial_state(scenario)?;
         let actual_initial = hash(&state)?;
         if actual_initial != self.initial_state_hash {
             return Err(divergence(
@@ -154,7 +202,9 @@ impl ActionJournal {
                     hash(&state)?,
                 ));
             }
-            let Ok(transition) = apply_action(scenario, &state, &record.action) else {
+            let Ok(transition) =
+                apply_timed_action(scenario, &state, &record.action, record.elapsed_millis)
+            else {
                 return Err(divergence(
                     record.revision_after,
                     "recorded action is no longer legal",
@@ -224,6 +274,12 @@ impl ActionJournal {
         Ok(())
     }
 
+    fn initial_state(&self, scenario: &ScenarioDefinition) -> Result<MatchState, JournalError> {
+        let mut state = MatchState::from_scenario(scenario).map_err(JournalError::Transition)?;
+        state.clocks = self.initial_clocks;
+        Ok(state)
+    }
+
     fn validate_header(&self, scenario: &ScenarioDefinition) -> Result<(), JournalError> {
         self.validate_static()?;
         if scenario.schema_version != self.scenario_schema_version {
@@ -261,6 +317,13 @@ impl ActionJournal {
             return Err(JournalError::TooManyRecords {
                 maximum: MAX_JOURNAL_RECORDS,
             });
+        }
+        if let Some(clocks) = self.initial_clocks {
+            let valid_base = (60_000..=10_800_000).contains(&clocks.north_millis)
+                && clocks.north_millis == clocks.south_millis;
+            if !valid_base || clocks.increment_millis > 60_000 {
+                return Err(JournalError::InvalidInitialClocks);
+            }
         }
         Ok(())
     }
@@ -301,6 +364,8 @@ pub enum JournalError {
     ScenarioVersionMismatch { expected: u16, actual: u16 },
     #[error("journal reached its record limit of {maximum}")]
     TooManyRecords { maximum: usize },
+    #[error("journal initial clocks are outside supported bounds")]
+    InvalidInitialClocks,
     #[error("state does not match journal tail at revision {expected_revision}")]
     StateDoesNotMatchTail {
         expected_revision: u64,
@@ -446,6 +511,39 @@ mod tests {
             decoded.records.last().unwrap().state_hash,
             replayed.canonical_hash().unwrap()
         );
+    }
+
+    #[test]
+    fn timed_actions_replay_with_initial_clocks_and_elapsed_input() {
+        let scenario = scenario();
+        let settings = ClockSettings {
+            base_minutes: 1,
+            increment_seconds: 2,
+        };
+        let initial =
+            start_clocks(&MatchState::from_scenario(&scenario).unwrap(), settings).unwrap();
+        let mut journal =
+            ActionJournal::new_with_clocks("0.1.0-test", &scenario, settings).unwrap();
+
+        let AppendOutcome::Accepted(transition) = journal
+            .append_timed(
+                &scenario,
+                &initial,
+                IdempotencyKey([3; 16]),
+                &Action::Hold {
+                    player: Player::South,
+                },
+                1_500,
+            )
+            .unwrap()
+        else {
+            panic!("timed Hold must be accepted");
+        };
+        assert_eq!(journal.records[0].elapsed_millis, 1_500);
+        assert_eq!(transition.state.clocks.unwrap().south_millis, 60_500);
+
+        let decoded = ActionJournal::from_json(&journal.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.replay(&scenario).unwrap(), transition.state);
     }
 
     #[test]
