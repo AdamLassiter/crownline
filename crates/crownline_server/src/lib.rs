@@ -1,10 +1,10 @@
 //! Authoritative Crownlines server services.
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::StatusCode,
     routing::{get, post},
 };
@@ -14,20 +14,41 @@ use crownline_protocol::{
 };
 use tokio::sync::Mutex;
 
+pub mod limits;
 pub mod rooms;
 
+use limits::{LimitKind, RequestLimiter, ServerLimits};
 use rooms::{RoomError, RoomService, ScenarioCatalog};
 
 pub type SharedRooms = Arc<Mutex<RoomService>>;
 type HttpError = (StatusCode, Json<ServerMessage>);
 
+#[derive(Clone)]
+struct AppState {
+    rooms: SharedRooms,
+    limiter: Arc<Mutex<RequestLimiter>>,
+    limits: ServerLimits,
+}
+
 pub fn app() -> Router {
-    let rooms = Arc::new(Mutex::new(RoomService::new(ScenarioCatalog::installed())));
+    app_with_limits(ServerLimits::default())
+}
+
+pub fn app_with_limits(limits: ServerLimits) -> Router {
+    let rooms = Arc::new(Mutex::new(
+        RoomService::new(ScenarioCatalog::installed()).with_max_rooms(limits.max_rooms),
+    ));
+    let state = AppState {
+        rooms,
+        limiter: Arc::new(Mutex::new(RequestLimiter::default())),
+        limits,
+    };
     Router::new()
         .route("/health", get(health))
         .route("/rooms", post(create_room))
         .route("/rooms/join", post(join_room))
-        .with_state(rooms)
+        .layer(DefaultBodyLimit::max(limits.max_http_body_bytes))
+        .with_state(state)
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -38,27 +59,66 @@ async fn health() -> Json<HealthResponse> {
 }
 
 async fn create_room(
-    State(rooms): State<SharedRooms>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
     Json(request): Json<CreateRoomRequest>,
 ) -> Result<Json<CreateRoomResponse>, HttpError> {
+    check_limit(
+        &state,
+        LimitKind::Create,
+        peer.ip().to_string(),
+        state.limits.create_per_ip_per_minute,
+    )
+    .await?;
+    let mut rooms = state.rooms.lock().await;
+    rooms.expire_idle_pregame(Instant::now(), state.limits.pregame_idle_timeout);
     rooms
-        .lock()
-        .await
         .create(request)
         .map(|created| Json(created.response))
         .map_err(http_error)
 }
 
 async fn join_room(
-    State(rooms): State<SharedRooms>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
     Json(request): Json<JoinRoomRequest>,
 ) -> Result<Json<JoinRoomResponse>, HttpError> {
+    check_limit(
+        &state,
+        LimitKind::Join,
+        peer.ip().to_string(),
+        state.limits.join_per_ip_per_minute,
+    )
+    .await?;
+    check_limit(
+        &state,
+        LimitKind::RoomOperation,
+        rooms::normalize_code(&request.room_code),
+        state.limits.operations_per_room_per_minute,
+    )
+    .await?;
+    let mut rooms = state.rooms.lock().await;
+    rooms.expire_idle_pregame(Instant::now(), state.limits.pregame_idle_timeout);
     rooms
-        .lock()
-        .await
         .join(request)
         .map(|joined| Json(joined.response))
         .map_err(http_error)
+}
+
+async fn check_limit(
+    state: &AppState,
+    kind: LimitKind,
+    scope: String,
+    maximum: u32,
+) -> Result<(), HttpError> {
+    let mut limiter = state.limiter.lock().await;
+    let now = Instant::now();
+    limiter.discard_expired(now);
+    if limiter.check(kind, scope, maximum, now) {
+        Ok(())
+    } else {
+        Err(http_error(RoomError::RateLimited))
+    }
 }
 
 fn http_error(error: RoomError) -> HttpError {

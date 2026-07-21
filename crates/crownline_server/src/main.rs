@@ -44,16 +44,20 @@ async fn main() -> Result<()> {
     let config = ServerConfig::from_env()?;
     init_tracing(config.json_logs);
 
-    let app = crownline_server::app().layer(TraceLayer::new_for_http());
+    let limits = crownline_server::limits::ServerLimits::from_env().map_err(anyhow::Error::msg)?;
+    let app = crownline_server::app_with_limits(limits).layer(TraceLayer::new_for_http());
     let listener = TcpListener::bind(config.bind_address)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_address))?;
 
     info!(address = %config.bind_address, "Crownlines server listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server terminated unexpectedly")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server terminated unexpectedly")?;
     Ok(())
 }
 

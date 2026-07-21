@@ -11,6 +11,7 @@ Host private-room matches with server-authoritative rules, clocks, durable state
 - Task 08.01.01 establishes the bounded, versioned room and match wire-message contract with typed validation and stable public errors.
 - Task 08.01.02 completes the synchronization contract with authoritative snapshots, revision checks, and bounded idempotent mutation results.
 - Tasks 08.02.01-08.02.02 provide the private-room lifecycle and hashed, redacted, rate-limited reconnect credentials for seat authority.
+- Task 08.02.03 completes bounded room operation with configurable request/connection limits, observable throttling, and cleanup that preserves every started match.
 
 ## Stories
 

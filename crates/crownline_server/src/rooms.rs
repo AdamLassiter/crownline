@@ -96,6 +96,9 @@ pub struct Room {
     pub clock: Option<ClockSettings>,
     pub phase: RoomPhase,
     pub state: Option<MatchState>,
+    created_at: Instant,
+    last_activity: Instant,
+    ever_started: bool,
     north: Seat,
     south: Option<Seat>,
     rematch_acceptances: BTreeSet<Player>,
@@ -166,6 +169,7 @@ pub struct RoomService {
     rooms: BTreeMap<String, Room>,
     failed_token_attempts: BTreeMap<String, FailedTokenWindow>,
     code_seed: u64,
+    max_rooms: usize,
 }
 
 impl RoomService {
@@ -175,7 +179,14 @@ impl RoomService {
             rooms: BTreeMap::new(),
             failed_token_attempts: BTreeMap::new(),
             code_seed: 0,
+            max_rooms: crate::limits::ServerLimits::default().max_rooms,
         }
+    }
+
+    #[must_use]
+    pub fn with_max_rooms(mut self, maximum: usize) -> Self {
+        self.max_rooms = maximum;
+        self
     }
 
     /// Creates a lobby after validating host configuration against installed content.
@@ -186,6 +197,9 @@ impl RoomService {
     #[allow(clippy::needless_pass_by_value)]
     pub fn create(&mut self, request: CreateRoomRequest) -> Result<CreatedRoom, RoomError> {
         validate_create_room(&request).map_err(|_| RoomError::InvalidRequest)?;
+        if self.rooms.len() >= self.max_rooms {
+            return Err(RoomError::RateLimited);
+        }
         let installed = self
             .catalog
             .get(&request.scenario_id)
@@ -195,6 +209,7 @@ impl RoomService {
         let code = self.allocate_code()?;
         let match_id = Uuid::new_v4();
         let raw_token = issue_token();
+        let now = Instant::now();
         let room = Room {
             code: code.clone(),
             match_id,
@@ -203,6 +218,9 @@ impl RoomService {
             clock: request.clock,
             phase: RoomPhase::WaitingForOpponent,
             state: None,
+            created_at: now,
+            last_activity: now,
+            ever_started: false,
             north: Seat {
                 token_hash: hash_token(&raw_token),
                 name: request.player_name.trim().to_owned(),
@@ -248,6 +266,7 @@ impl RoomService {
             ready: false,
         });
         room.phase = RoomPhase::WaitingForReady;
+        room.last_activity = Instant::now();
         Ok(JoinedRoom {
             response: JoinRoomResponse {
                 protocol_version: PROTOCOL_VERSION,
@@ -287,6 +306,8 @@ impl RoomService {
             }
             room.state = Some(state);
             room.phase = RoomPhase::Playing;
+            room.ever_started = true;
+            room.last_activity = Instant::now();
         }
         Ok(room.phase)
     }
@@ -307,6 +328,7 @@ impl RoomService {
             return Err(RoomError::WrongPhase);
         }
         room.phase = RoomPhase::Finished;
+        room.last_activity = Instant::now();
         Ok(())
     }
 
@@ -337,6 +359,8 @@ impl RoomService {
             room.match_id = Uuid::new_v4();
             room.state = Some(state);
             room.phase = RoomPhase::Playing;
+            room.ever_started = true;
+            room.last_activity = Instant::now();
             room.rematch_acceptances.clear();
         }
         Ok(room.phase)
@@ -364,11 +388,30 @@ impl RoomService {
         room.south = None;
         room.north.ready = false;
         room.phase = RoomPhase::WaitingForOpponent;
+        room.last_activity = Instant::now();
         Ok(false)
     }
 
     pub fn room(&self, code: &str) -> Option<&Room> {
         self.rooms.get(&normalize_code(code))
+    }
+
+    /// Removes only never-started rooms whose last activity exceeded the limit.
+    pub fn expire_idle_pregame(&mut self, now: Instant, maximum_idle: Duration) -> usize {
+        let before = self.rooms.len();
+        self.rooms.retain(|code, room| {
+            let expired = !room.ever_started
+                && matches!(room.phase, RoomPhase::WaitingForOpponent | RoomPhase::WaitingForReady)
+                && now.duration_since(room.last_activity) >= maximum_idle;
+            if expired {
+                tracing::info!(%code, age_seconds = now.duration_since(room.created_at).as_secs(), "expired idle pre-game room");
+            }
+            !expired
+        });
+        let removed = before - self.rooms.len();
+        self.failed_token_attempts
+            .retain(|code, _| self.rooms.contains_key(code));
+        removed
     }
 
     fn room_mut(&mut self, code: &str) -> Result<&mut Room, RoomError> {
@@ -660,5 +703,41 @@ mod tests {
             service.ready(&created.response.room_code, "wrong"),
             Err(RoomError::RateLimited)
         );
+    }
+
+    #[test]
+    fn cleanup_expires_only_idle_never_started_rooms_and_room_count_is_bounded() {
+        let mut service = RoomService::new(ScenarioCatalog::installed()).with_max_rooms(2);
+        let idle = service.create(create_request()).unwrap();
+        let active = service.create(create_request()).unwrap();
+        let joined = service
+            .join(join_request(&active.response.room_code))
+            .unwrap();
+        let host_token = active.response.reconnect_token.expose().to_owned();
+        let guest_token = joined.response.reconnect_token.expose().to_owned();
+        service
+            .ready(&active.response.room_code, &host_token)
+            .unwrap();
+        service
+            .ready(&active.response.room_code, &guest_token)
+            .unwrap();
+        assert_eq!(
+            service.create(create_request()).unwrap_err(),
+            RoomError::RateLimited
+        );
+
+        let now = Instant::now();
+        service
+            .room_mut(&idle.response.room_code)
+            .unwrap()
+            .last_activity = now.checked_sub(Duration::from_mins(31)).unwrap();
+        service
+            .room_mut(&active.response.room_code)
+            .unwrap()
+            .last_activity = now.checked_sub(Duration::from_mins(31)).unwrap();
+        assert_eq!(service.expire_idle_pregame(now, Duration::from_mins(30)), 1);
+        assert!(service.room(&idle.response.room_code).is_none());
+        assert!(service.room(&active.response.room_code).is_some());
+        assert!(service.create(create_request()).is_ok());
     }
 }
