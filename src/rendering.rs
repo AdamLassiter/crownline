@@ -8,8 +8,11 @@ use crownline_core::{
 
 use crate::ChessFontText;
 
+mod coordinates;
 mod features;
 
+use bevy::window::PrimaryWindow;
+use coordinates::{BoardGeometry, BoardOrientation};
 use features::{spawn_scenario_features, sync_settlement_visuals};
 
 pub const TILE_SIZE: f32 = 32.0;
@@ -104,13 +107,27 @@ pub(super) struct DisplayedGame {
 #[derive(Resource)]
 struct ChessPieceFont(Handle<Font>);
 
+#[derive(Resource, Default)]
+pub struct HoveredBoardSquare(pub Option<Coord>);
+
+#[derive(Component)]
+struct CoordinateLabel;
+
 pub struct BoardRenderingPlugin;
 
 impl Plugin for BoardRenderingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BoardPalette>()
+            .init_resource::<HoveredBoardSquare>()
             .add_systems(Startup, spawn_default_board)
-            .add_systems(Update, (sync_piece_visuals, sync_settlement_visuals));
+            .add_systems(
+                Update,
+                (
+                    sync_piece_visuals,
+                    sync_settlement_visuals,
+                    update_hovered_square,
+                ),
+            );
     }
 }
 
@@ -128,13 +145,88 @@ fn spawn_default_board(
     let font = asset_server.map_or_else(Handle::default, |assets| {
         assets.load("fonts/NotoSansSymbols2-Regular.ttf")
     });
+    let orientation = if scenario
+        .rules
+        .pawn_forward_y
+        .get(&Player::North)
+        .is_some_and(|direction| *direction > 0)
+    {
+        BoardOrientation::NorthAtTop
+    } else {
+        BoardOrientation::SouthAtTop
+    };
+    let geometry = BoardGeometry::new(scenario.board, TILE_SIZE, orientation);
     spawn_board(&mut commands, &palette, &scenario);
+    spawn_coordinate_labels(&mut commands, &geometry);
     spawn_scenario_features(&mut commands, &scenario, &state);
     for piece in state.pieces.values() {
         spawn_piece(&mut commands, &font, &scenario, piece);
     }
     commands.insert_resource(ChessPieceFont(font));
     commands.insert_resource(DisplayedGame { scenario, state });
+    commands.insert_resource(geometry);
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn update_hovered_square(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    geometry: Res<BoardGeometry>,
+    mut hovered: ResMut<HoveredBoardSquare>,
+) {
+    let Ok(window) = windows.single() else {
+        hovered.0 = None;
+        return;
+    };
+    let Ok((camera, camera_transform)) = cameras.single() else {
+        hovered.0 = None;
+        return;
+    };
+    hovered.0 = window.cursor_position().and_then(|cursor| {
+        camera
+            .viewport_to_world_2d(camera_transform, cursor)
+            .ok()
+            .and_then(|world| geometry.world_to_board(world))
+    });
+}
+
+fn spawn_coordinate_labels(commands: &mut Commands, geometry: &BoardGeometry) {
+    for x in 0..geometry.board.width {
+        let at = Coord::new(x, geometry.board.height - 1);
+        let world = geometry
+            .board_to_world(at)
+            .expect("label coordinate is valid");
+        commands.spawn((
+            Text2d::new(coordinates::file_label(x)),
+            TextFont {
+                font_size: FontSize::Px(9.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.82, 0.84, 0.9)),
+            TextLayout::justify(Justify::Center),
+            Transform::from_xyz(world.x, world.y - TILE_SIZE * 0.68, 4.0),
+            Name::new(format!("coordinate {}", coordinates::coordinate_label(at))),
+            CoordinateLabel,
+        ));
+    }
+    for y in 0..geometry.board.height {
+        let at = Coord::new(0, y);
+        let world = geometry
+            .board_to_world(at)
+            .expect("label coordinate is valid");
+        commands.spawn((
+            Text2d::new((y + 1).to_string()),
+            TextFont {
+                font_size: FontSize::Px(9.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.82, 0.84, 0.9)),
+            TextLayout::justify(Justify::Center),
+            Transform::from_xyz(world.x - TILE_SIZE * 0.68, world.y, 4.0),
+            Name::new(format!("coordinate {}", coordinates::coordinate_label(at))),
+            CoordinateLabel,
+        ));
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -273,12 +365,10 @@ const fn tile_parity(at: Coord) -> TileParity {
 }
 
 pub(super) fn tile_position(at: Coord, scenario: &ScenarioDefinition) -> [f32; 2] {
-    let left = -(f32::from(scenario.board.width) * TILE_SIZE) / 2.0 + TILE_SIZE / 2.0;
-    let top = (f32::from(scenario.board.height) * TILE_SIZE) / 2.0 - TILE_SIZE / 2.0;
-    [
-        left + f32::from(at.x) * TILE_SIZE,
-        top - f32::from(at.y) * TILE_SIZE,
-    ]
+    BoardGeometry::new(scenario.board, TILE_SIZE, BoardOrientation::NorthAtTop)
+        .board_to_world(at)
+        .expect("validated render coordinate is within the board")
+        .to_array()
 }
 
 const fn terrain_index(terrain: TileTerrain) -> usize {
