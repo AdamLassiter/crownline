@@ -2934,6 +2934,194 @@ mod tests {
     }
 
     #[test]
+    fn turn_start_queues_all_choices_in_stable_coordinate_order() {
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 1, 1),
+            deployment(Player::South, PieceKind::Pawn, 2, 2),
+            deployment(Player::South, PieceKind::Pawn, 5, 5),
+            deployment(Player::South, PieceKind::Pawn, 6, 6),
+        ]);
+        scenario.settlements = vec![
+            SettlementSite {
+                id: "west-town".to_owned(),
+                at: Coord::new(1, 1),
+            },
+            SettlementSite {
+                id: "east-town".to_owned(),
+                at: Coord::new(5, 5),
+            },
+        ];
+        scenario.promotion_sites = vec![
+            PromotionSite {
+                id: "west-court".to_owned(),
+                at: Coord::new(2, 2),
+            },
+            PromotionSite {
+                id: "east-court".to_owned(),
+                at: Coord::new(6, 6),
+            },
+        ];
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        for (index, at) in [(0, Coord::new(1, 1)), (1, Coord::new(5, 5))] {
+            state.settlements[index].owner = Some(Player::South);
+            state.settlements[index].founder = Some(piece_id_at(&state, at));
+            state.settlements[index].established = true;
+            state.settlements[index].establishment_progress = scenario.rules.establishment_cycles;
+            state.settlements[index].production_progress = scenario.rules.production_cycles;
+        }
+        let west_candidate = piece_id_at(&state, Coord::new(2, 2));
+        let east_candidate = piece_id_at(&state, Coord::new(6, 6));
+        state.promotion_candidates.insert(west_candidate, 0);
+        state.promotion_candidates.insert(east_candidate, 0);
+
+        let first = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        let second = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(first, second);
+
+        let TurnPhase::ResolvingChoices { queue } = &first.state.phase else {
+            panic!("turn start must queue all ready choices");
+        };
+        assert_eq!(queue.len(), 4);
+        assert!(matches!(
+            queue[0],
+            MandatoryChoice::PlacePawn {
+                settlement_index: 0,
+                ..
+            }
+        ));
+        assert_eq!(
+            queue[1],
+            MandatoryChoice::Promote {
+                pawn: west_candidate,
+                site_index: 0,
+            }
+        );
+        assert!(matches!(
+            queue[2],
+            MandatoryChoice::PlacePawn {
+                settlement_index: 1,
+                ..
+            }
+        ));
+        assert_eq!(
+            queue[3],
+            MandatoryChoice::Promote {
+                pawn: east_candidate,
+                site_index: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn current_turn_choice_cannot_change_completed_cycle_eligibility() {
+        let settlement_at = Coord::new(3, 3);
+        let promotion_at = Coord::new(2, 2);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 2, 2),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, settlement_at);
+        scenario.promotion_sites.push(PromotionSite {
+            id: "court".to_owned(),
+            at: promotion_at,
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let founder = piece_id_at(&state, promotion_at);
+        state.active_player = Player::North;
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(founder);
+        state.promotion_candidates.insert(founder, 0);
+
+        let ready = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert!(ready.state.settlements[0].completed_cycle_continuous);
+        assert_eq!(ready.state.settlements[0].establishment_progress, 1);
+
+        let promoted = apply_action(
+            &scenario,
+            &ready.state,
+            &Action::ChoosePromotion {
+                player: Player::South,
+                pawn: founder,
+                promote_to: PromotionKind::Knight,
+            },
+        )
+        .unwrap();
+        assert!(promoted.state.settlements[0].completed_cycle_continuous);
+        assert_eq!(promoted.state.settlements[0].establishment_progress, 1);
+        assert!(promoted.state.settlements[0].cycle_interrupted);
+    }
+
+    #[test]
+    fn promotion_turn_start_replays_without_clock_input() {
+        use crate::journal::{ActionJournal, AppendOutcome, IdempotencyKey};
+
+        let site = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Pawn, 3, 4)]);
+        scenario.promotion_sites.push(PromotionSite {
+            id: "court".to_owned(),
+            at: site,
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let pawn = piece_id_at(&state, Coord::new(3, 4));
+        let mut journal = ActionJournal::new("turn-start-test", &scenario).unwrap();
+        for (key, action) in [
+            (
+                IdempotencyKey([1; 16]),
+                Action::Move {
+                    player: Player::South,
+                    piece: pawn,
+                    to: site,
+                },
+            ),
+            (
+                IdempotencyKey([2; 16]),
+                Action::Hold {
+                    player: Player::North,
+                },
+            ),
+            (
+                IdempotencyKey([3; 16]),
+                Action::ChoosePromotion {
+                    player: Player::South,
+                    pawn,
+                    promote_to: PromotionKind::Rook,
+                },
+            ),
+        ] {
+            let AppendOutcome::Accepted(transition) =
+                journal.append(&scenario, &state, key, &action).unwrap()
+            else {
+                panic!("unique replay action must be accepted");
+            };
+            state = transition.state;
+        }
+
+        assert_eq!(journal.replay(&scenario).unwrap(), state);
+    }
+
+    #[test]
     fn pawn_landing_claims_neutral_settlement_without_removal() {
         let target = Coord::new(3, 3);
         let mut scenario = scenario_with(vec![
