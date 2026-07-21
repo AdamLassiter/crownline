@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     authority::{AuthoritativeMatch, PreparedAuthorityTransition},
     database::{Database, DatabaseError},
-    rooms::ScenarioCatalog,
+    rooms::{PersistedRoomRecord, PersistedSeatRecord, RoomPhase, ScenarioCatalog},
 };
 
 #[derive(Debug, Error)]
@@ -32,6 +32,7 @@ pub enum RecoveryError {
 pub struct RestoredMatch {
     pub match_id: Uuid,
     pub authority: AuthoritativeMatch,
+    pub room: PersistedRoomRecord,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,11 +62,15 @@ impl MatchRepository {
     /// Returns a serialization or constrained `SQLite` transaction error.
     pub fn register_match(
         &mut self,
-        room_code: &str,
-        scenario_hash: &str,
-        clock_settings: Option<ClockSettings>,
+        room: &PersistedRoomRecord,
         image: &PreparedAuthorityTransition,
     ) -> Result<(), RecoveryError> {
+        if room.match_id != image.match_id
+            || room.scenario_id != image.state.scenario_id
+            || room.phase != RoomPhase::Playing
+        {
+            return Err(RecoveryError::InvalidState);
+        }
         let bytes = serde_json::to_vec(image)?;
         let state_hash = image
             .state
@@ -77,14 +82,27 @@ impl MatchRepository {
             "INSERT INTO rooms(code, scenario_id, scenario_hash, lifecycle, base_minutes, increment_seconds, created_unix_millis, updated_unix_millis)
              VALUES(?1, ?2, ?3, 'playing', ?4, ?5, ?6, ?6)",
             params![
-                room_code,
+                room.code,
                 image.state.scenario_id,
-                scenario_hash,
-                clock_settings.map(|settings| settings.base_minutes),
-                clock_settings.map(|settings| settings.increment_seconds),
+                room.scenario_hash,
+                room.clock.map(|settings| settings.base_minutes),
+                room.clock.map(|settings| settings.increment_seconds),
                 image.received_unix_millis,
             ],
         )?;
+        for seat in &room.seats {
+            transaction.execute(
+                "INSERT INTO seats(room_code, player, display_name, token_hash, ready)
+                 VALUES(?1, ?2, ?3, ?4, ?5)",
+                params![
+                    room.code,
+                    player_label(seat.player),
+                    seat.display_name,
+                    seat.token_hash.as_slice(),
+                    seat.ready,
+                ],
+            )?;
+        }
         transaction.execute(
             "INSERT INTO matches(match_id, room_code, revision, state_hash, current_snapshot_revision,
                                   clock_anchor_unix_millis, deadline_unix_millis, outcome_json,
@@ -92,7 +110,7 @@ impl MatchRepository {
              VALUES(?1, ?2, ?3, ?4, ?3, ?5, ?6, ?7, ?8, ?9)",
             params![
                 image.match_id.to_string(),
-                room_code,
+                room.code,
                 image.state.revision,
                 state_hash,
                 image.clock.as_ref().map(|clock| clock.anchor_unix_millis),
@@ -198,7 +216,14 @@ impl MatchRepository {
         let rows = {
             let mut statement = self.database.connection().prepare(
                 "SELECT m.match_id, m.revision, m.state_hash, s.snapshot_json,
-                        r.scenario_id, r.scenario_hash
+                        r.scenario_id, r.scenario_hash, r.code, r.lifecycle,
+                        r.base_minutes, r.increment_seconds,
+                        (SELECT display_name FROM seats WHERE room_code = r.code AND player = 'north'),
+                        (SELECT token_hash FROM seats WHERE room_code = r.code AND player = 'north'),
+                        (SELECT ready FROM seats WHERE room_code = r.code AND player = 'north'),
+                        (SELECT display_name FROM seats WHERE room_code = r.code AND player = 'south'),
+                        (SELECT token_hash FROM seats WHERE room_code = r.code AND player = 'south'),
+                        (SELECT ready FROM seats WHERE room_code = r.code AND player = 'south')
                  FROM matches m
                  JOIN rooms r ON r.code = m.room_code
                  JOIN match_snapshots s
@@ -216,6 +241,16 @@ impl MatchRepository {
                         snapshot_json: row.get(3)?,
                         scenario_id: row.get(4)?,
                         scenario_hash: row.get(5)?,
+                        room_code: row.get(6)?,
+                        lifecycle: row.get(7)?,
+                        base_minutes: row.get(8)?,
+                        increment_seconds: row.get(9)?,
+                        north_name: row.get(10)?,
+                        north_token_hash: row.get(11)?,
+                        north_ready: row.get(12)?,
+                        south_name: row.get(13)?,
+                        south_token_hash: row.get(14)?,
+                        south_ready: row.get(15)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()?
@@ -262,6 +297,16 @@ struct RawRestoreRow {
     snapshot_json: Vec<u8>,
     scenario_id: String,
     scenario_hash: String,
+    room_code: String,
+    lifecycle: String,
+    base_minutes: Option<u16>,
+    increment_seconds: Option<u8>,
+    north_name: Option<String>,
+    north_token_hash: Option<Vec<u8>>,
+    north_ready: Option<bool>,
+    south_name: Option<String>,
+    south_token_hash: Option<Vec<u8>>,
+    south_ready: Option<bool>,
 }
 
 fn restore_row(
@@ -289,9 +334,57 @@ fn restore_row(
     }
     let authority = AuthoritativeMatch::restore(installed.definition.clone(), persisted)
         .map_err(|_| "journal_replay_mismatch")?;
+    let north_hash: [u8; 32] = row
+        .north_token_hash
+        .as_deref()
+        .ok_or("seat_record_missing")?
+        .try_into()
+        .map_err(|_| "seat_token_hash_invalid")?;
+    let south_hash: [u8; 32] = row
+        .south_token_hash
+        .as_deref()
+        .ok_or("seat_record_missing")?
+        .try_into()
+        .map_err(|_| "seat_token_hash_invalid")?;
+    let phase = match row.lifecycle.as_str() {
+        "playing" => RoomPhase::Playing,
+        "finished" => RoomPhase::Finished,
+        _ => return Err("room_lifecycle_invalid"),
+    };
+    let clock = match (row.base_minutes, row.increment_seconds) {
+        (Some(base_minutes), Some(increment_seconds)) => Some(ClockSettings {
+            base_minutes,
+            increment_seconds,
+        }),
+        (None, None) => None,
+        _ => return Err("room_clock_invalid"),
+    };
+    let room = PersistedRoomRecord {
+        code: row.room_code.clone(),
+        match_id,
+        scenario_id: row.scenario_id.clone(),
+        scenario_hash: row.scenario_hash.clone(),
+        clock,
+        phase,
+        seats: [
+            PersistedSeatRecord {
+                player: Player::North,
+                display_name: row.north_name.clone().ok_or("seat_record_missing")?,
+                token_hash: north_hash,
+                ready: row.north_ready.ok_or("seat_record_missing")?,
+            },
+            PersistedSeatRecord {
+                player: Player::South,
+                display_name: row.south_name.clone().ok_or("seat_record_missing")?,
+                token_hash: south_hash,
+                ready: row.south_ready.ok_or("seat_record_missing")?,
+            },
+        ],
+    };
     Ok(RestoredMatch {
         match_id,
         authority,
+        room,
     })
 }
 
@@ -393,6 +486,42 @@ mod tests {
         (catalog, authority, hash)
     }
 
+    fn room_record(
+        code: &str,
+        authority: &AuthoritativeMatch,
+        scenario_hash: &str,
+        clock: Option<ClockSettings>,
+    ) -> PersistedRoomRecord {
+        let match_id = authority.snapshot().match_id;
+        let mut north_hash = [0_u8; 32];
+        north_hash[..16].copy_from_slice(match_id.as_bytes());
+        north_hash[31] = 1;
+        let mut south_hash = north_hash;
+        south_hash[31] = 2;
+        PersistedRoomRecord {
+            code: code.to_owned(),
+            match_id,
+            scenario_id: "crownlines-standard".to_owned(),
+            scenario_hash: scenario_hash.to_owned(),
+            clock,
+            phase: RoomPhase::Playing,
+            seats: [
+                PersistedSeatRecord {
+                    player: Player::North,
+                    display_name: "North".to_owned(),
+                    token_hash: north_hash,
+                    ready: true,
+                },
+                PersistedSeatRecord {
+                    player: Player::South,
+                    display_name: "South".to_owned(),
+                    token_hash: south_hash,
+                    ready: true,
+                },
+            ],
+        }
+    }
+
     #[test]
     fn snapshot_journal_clock_and_revision_commit_in_one_transaction() {
         let started = UNIX_EPOCH.checked_add(Duration::from_mins(500)).unwrap();
@@ -404,7 +533,10 @@ mod tests {
         let initial = authority.persistence_image(started).unwrap();
         let mut repository = MatchRepository::new(Database::open_in_memory().unwrap());
         repository
-            .register_match("ABC234", &scenario_hash, Some(settings), &initial)
+            .register_match(
+                &room_record("ABC234", &authority, &scenario_hash, Some(settings)),
+                &initial,
+            )
             .unwrap();
         let received = started.checked_add(Duration::from_secs(4)).unwrap();
         authority
@@ -444,7 +576,10 @@ mod tests {
         let initial = authority.persistence_image(started).unwrap();
         let mut repository = MatchRepository::new(Database::open_in_memory().unwrap());
         repository
-            .register_match("CDE345", &scenario_hash, None, &initial)
+            .register_match(
+                &room_record("CDE345", &authority, &scenario_hash, None),
+                &initial,
+            )
             .unwrap();
         let received = started.checked_add(Duration::from_secs(1)).unwrap();
         authority
@@ -493,7 +628,10 @@ mod tests {
         let initial = authority.persistence_image(started).unwrap();
         let mut repository = MatchRepository::new(Database::open_in_memory().unwrap());
         repository
-            .register_match("DEF567", &scenario_hash, Some(settings), &initial)
+            .register_match(
+                &room_record("DEF567", &authority, &scenario_hash, Some(settings)),
+                &initial,
+            )
             .unwrap();
         let first_receipt = started.checked_add(Duration::from_secs(10)).unwrap();
         authority
@@ -545,17 +683,13 @@ mod tests {
         let mut repository = MatchRepository::new(Database::open_in_memory().unwrap());
         repository
             .register_match(
-                "GHJ678",
-                &hash,
-                None,
+                &room_record("GHJ678", &first, &hash, None),
                 &first.persistence_image(started).unwrap(),
             )
             .unwrap();
         repository
             .register_match(
-                "KLM789",
-                &hash,
-                None,
+                &room_record("KLM789", &second, &hash, None),
                 &second.persistence_image(started).unwrap(),
             )
             .unwrap();
@@ -571,6 +705,30 @@ mod tests {
     }
 
     #[test]
+    fn missing_persisted_seat_quarantines_only_that_match() {
+        let started = UNIX_EPOCH.checked_add(Duration::from_secs(55_000)).unwrap();
+        let (catalog, authority, hash) = fixture(None, started);
+        let mut repository = MatchRepository::new(Database::open_in_memory().unwrap());
+        repository
+            .register_match(
+                &room_record("RST345", &authority, &hash, None),
+                &authority.persistence_image(started).unwrap(),
+            )
+            .unwrap();
+        repository
+            .database()
+            .connection()
+            .execute(
+                "DELETE FROM seats WHERE room_code = 'RST345' AND player = 'south'",
+                [],
+            )
+            .unwrap();
+        let report = repository.restore_active(&catalog).unwrap();
+        assert!(report.matches.is_empty());
+        assert_eq!(report.quarantined[0].reason_code, "seat_record_missing");
+    }
+
+    #[test]
     fn file_restart_reopens_the_same_committed_state() {
         let path =
             std::env::temp_dir().join(format!("crownline-recovery-{}.sqlite3", Uuid::new_v4()));
@@ -582,9 +740,7 @@ mod tests {
             let mut repository = MatchRepository::new(database);
             repository
                 .register_match(
-                    "NPQ234",
-                    &hash,
-                    None,
+                    &room_record("NPQ234", &authority, &hash, None),
                     &authority.persistence_image(started).unwrap(),
                 )
                 .unwrap();

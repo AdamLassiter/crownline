@@ -21,6 +21,7 @@ pub mod limits;
 pub mod recovery;
 pub mod rooms;
 
+use crate::actors::MatchExecutor as _;
 use limits::{LimitKind, RequestLimiter, ServerLimits};
 use recovery::{MatchRepository, RecoveryError};
 use rooms::{RoomError, RoomService, ScenarioCatalog};
@@ -77,14 +78,16 @@ fn app_with_repository(
         quarantined = restored.quarantined.len(),
         "startup match recovery complete"
     );
-    let restored_authorities = restored
-        .matches
-        .into_iter()
-        .map(|restored| (restored.match_id, restored.authority))
-        .collect();
-    let rooms = Arc::new(Mutex::new(
-        RoomService::new(catalog).with_max_rooms(limits.max_rooms),
-    ));
+    let mut room_service = RoomService::new(catalog).with_max_rooms(limits.max_rooms);
+    let mut restored_authorities = BTreeMap::new();
+    for restored in restored.matches {
+        let state = restored.authority.snapshot().state;
+        room_service
+            .restore_started_room(restored.room, state)
+            .map_err(|_| RecoveryError::InvalidState)?;
+        restored_authorities.insert(restored.match_id, restored.authority);
+    }
+    let rooms = Arc::new(Mutex::new(room_service));
     let state = AppState {
         rooms,
         limiter: Arc::new(Mutex::new(RequestLimiter::default())),

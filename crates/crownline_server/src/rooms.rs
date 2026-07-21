@@ -72,6 +72,25 @@ impl std::fmt::Debug for TokenHash {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedSeatRecord {
+    pub player: Player,
+    pub display_name: String,
+    pub token_hash: [u8; 32],
+    pub ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersistedRoomRecord {
+    pub code: String,
+    pub match_id: Uuid,
+    pub scenario_id: String,
+    pub scenario_hash: String,
+    pub clock: Option<ClockSettings>,
+    pub phase: RoomPhase,
+    pub seats: [PersistedSeatRecord; 2],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RoomPhase {
     WaitingForOpponent,
@@ -394,6 +413,100 @@ impl RoomService {
 
     pub fn room(&self, code: &str) -> Option<&Room> {
         self.rooms.get(&normalize_code(code))
+    }
+
+    pub fn persisted_room(&self, code: &str) -> Option<PersistedRoomRecord> {
+        let room = self.room(code)?;
+        let south = room.south.as_ref()?;
+        Some(PersistedRoomRecord {
+            code: room.code.clone(),
+            match_id: room.match_id,
+            scenario_id: room.scenario_id.clone(),
+            scenario_hash: room.scenario_hash.clone(),
+            clock: room.clock,
+            phase: room.phase,
+            seats: [
+                PersistedSeatRecord {
+                    player: Player::North,
+                    display_name: room.north.name.clone(),
+                    token_hash: room.north.token_hash.0,
+                    ready: room.north.ready,
+                },
+                PersistedSeatRecord {
+                    player: Player::South,
+                    display_name: south.name.clone(),
+                    token_hash: south.token_hash.0,
+                    ready: south.ready,
+                },
+            ],
+        })
+    }
+
+    /// Authenticates a seat secret without exposing whether a room or seat exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns unauthorized or rate-limited errors for invalid credentials.
+    pub fn authenticate_seat(
+        &mut self,
+        code: &str,
+        token: &str,
+    ) -> Result<(Uuid, Player, RoomPhase), RoomError> {
+        let code = normalize_code(code);
+        let player = self.authenticate(&code, token)?;
+        let room = self.rooms.get(&code).ok_or(RoomError::Unauthorized)?;
+        Ok((room.match_id, player, room.phase))
+    }
+
+    /// Reconstructs a started room from validated database records.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-request error for inconsistent seats, phase, scenario, or state.
+    pub fn restore_started_room(
+        &mut self,
+        record: PersistedRoomRecord,
+        state: MatchState,
+    ) -> Result<(), RoomError> {
+        if self.rooms.contains_key(&record.code)
+            || state.scenario_id != record.scenario_id
+            || !matches!(record.phase, RoomPhase::Playing | RoomPhase::Finished)
+            || record.seats[0].player != Player::North
+            || record.seats[1].player != Player::South
+            || record.seats[0].token_hash == record.seats[1].token_hash
+        {
+            return Err(RoomError::InvalidRequest);
+        }
+        let now = Instant::now();
+        let north = &record.seats[0];
+        let south = &record.seats[1];
+        self.rooms.insert(
+            record.code.clone(),
+            Room {
+                code: record.code,
+                match_id: record.match_id,
+                scenario_id: record.scenario_id,
+                scenario_hash: record.scenario_hash,
+                clock: record.clock,
+                phase: record.phase,
+                state: Some(state),
+                created_at: now,
+                last_activity: now,
+                ever_started: true,
+                north: Seat {
+                    token_hash: TokenHash(north.token_hash),
+                    name: north.display_name.clone(),
+                    ready: north.ready,
+                },
+                south: Some(Seat {
+                    token_hash: TokenHash(south.token_hash),
+                    name: south.display_name.clone(),
+                    ready: south.ready,
+                }),
+                rematch_acceptances: BTreeSet::new(),
+            },
+        );
+        Ok(())
     }
 
     /// Removes only never-started rooms whose last activity exceeded the limit.
@@ -739,5 +852,47 @@ mod tests {
         assert!(service.room(&idle.response.room_code).is_none());
         assert!(service.room(&active.response.room_code).is_some());
         assert!(service.create(create_request()).is_ok());
+    }
+
+    #[test]
+    fn persisted_hashes_reconstruct_both_authenticated_seats_without_raw_tokens() {
+        let catalog = ScenarioCatalog::installed();
+        let mut service = RoomService::new(catalog.clone());
+        let created = service.create(create_request()).unwrap();
+        let joined = service
+            .join(join_request(&created.response.room_code))
+            .unwrap();
+        let host_token = created.response.reconnect_token.expose().to_owned();
+        let guest_token = joined.response.reconnect_token.expose().to_owned();
+        service
+            .ready(&created.response.room_code, &host_token)
+            .unwrap();
+        service
+            .ready(&created.response.room_code, &guest_token)
+            .unwrap();
+        let record = service.persisted_room(&created.response.room_code).unwrap();
+        let state = service
+            .room(&created.response.room_code)
+            .unwrap()
+            .state
+            .clone()
+            .unwrap();
+
+        let mut restored = RoomService::new(catalog);
+        restored.restore_started_room(record, state).unwrap();
+        assert_eq!(
+            restored
+                .authenticate_seat(&created.response.room_code, &host_token)
+                .unwrap()
+                .1,
+            Player::North
+        );
+        assert_eq!(
+            restored
+                .authenticate_seat(&created.response.room_code, &guest_token)
+                .unwrap()
+                .1,
+            Player::South
+        );
     }
 }
