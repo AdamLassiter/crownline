@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 pub mod actors;
 pub mod authority;
+pub mod database;
 pub mod limits;
 pub mod rooms;
 
