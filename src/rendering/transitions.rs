@@ -83,7 +83,6 @@ pub struct TransitionEventQueue {
 }
 
 impl TransitionEventQueue {
-    #[allow(dead_code, reason = "local-action task will call this boundary")]
     pub fn push_transition(&mut self, transition: &Transition) {
         self.events.extend(transition.events.iter().cloned());
     }

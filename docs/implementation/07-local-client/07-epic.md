@@ -2,6 +2,14 @@
 
 Deliver a complete desktop hot-seat game with previews, information panels, setup, clocks, and save/load.
 
+## Status
+
+- [ ] In progress
+
+## Implementation notes
+
+- Local select/reselect/cancel, reducer-confirmed Move and Hold commands, and visible keyboard board focus are complete in Task 07.01.01.
+
 ## Stories
 
 - [07.01 Board interaction](07.01-interaction/07.01-story.md)
@@ -21,4 +29,3 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 ## Cross-cutting concerns
 
 - Input accessibility, state/UI separation, atomic saves, and clear destructive confirmations.
-

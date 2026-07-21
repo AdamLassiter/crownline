@@ -9,7 +9,7 @@ use crownline_core::{
 use crate::ChessFontText;
 
 mod camera;
-mod coordinates;
+pub(crate) mod coordinates;
 mod features;
 mod overlays;
 mod transitions;
@@ -17,7 +17,9 @@ mod transitions;
 use bevy::window::PrimaryWindow;
 use coordinates::{BoardGeometry, BoardOrientation};
 use features::{spawn_scenario_features, sync_settlement_visuals};
-use overlays::{OverlayCache, OverlayLegend, OverlaySelection, OverlayText, sync_overlays};
+use overlays::{OverlayCache, OverlayLegend, sync_overlays};
+pub(crate) use overlays::{OverlaySelection, OverlayText};
+pub(crate) use transitions::TransitionEventQueue as LocalTransitionEventQueue;
 use transitions::{
     PiecePresentation, PresentationMotionQueue, PresentationPlayback, TransitionEventQueue,
     TransitionNoticeLog, animate_piece_presentations, animate_transition_notices,
@@ -110,9 +112,9 @@ pub struct PieceVisual {
 struct PieceBackplate;
 
 #[derive(Resource)]
-pub(super) struct DisplayedGame {
-    pub(super) scenario: ScenarioDefinition,
-    pub(super) state: MatchState,
+pub(crate) struct DisplayedGame {
+    pub(crate) scenario: ScenarioDefinition,
+    pub(crate) state: MatchState,
 }
 
 #[derive(Resource)]
