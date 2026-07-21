@@ -1,13 +1,51 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::scenario::{Coord, PieceKind, Player, ScenarioDefinition};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PieceId(pub u32);
+
+impl<'de> Deserialize<'de> for PieceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PieceIdVisitor;
+
+        impl Visitor<'_> for PieceIdVisitor {
+            type Value = PieceId;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a numeric piece ID or numeric JSON object key")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                u32::try_from(value)
+                    .map(PieceId)
+                    .map_err(|_| E::custom("piece ID exceeds u32"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                value
+                    .parse::<u32>()
+                    .map(PieceId)
+                    .map_err(|_| E::custom("piece ID key is not a u32"))
+            }
+        }
+
+        deserializer.deserialize_any(PieceIdVisitor)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -514,6 +552,18 @@ mod tests {
         assert_eq!(
             first.canonical_hash().unwrap(),
             second.canonical_hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn populated_state_round_trips_piece_ids_through_json_object_keys() {
+        let state = MatchState::from_scenario(&scenario()).expect("valid state");
+        let bytes = serde_json::to_vec(&state).unwrap();
+        let decoded: MatchState = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, state);
+        assert_eq!(
+            decoded.canonical_hash().unwrap(),
+            state.canonical_hash().unwrap()
         );
     }
 
