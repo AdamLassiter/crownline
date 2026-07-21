@@ -12,6 +12,7 @@ Integrate private-room networking into the Bevy client while keeping server snap
 - Story 09.01 completes private room connection and recovery with OS-backed credential storage, a documented user-only fallback, authenticated restart restoration, bounded jittered reconnect, explicit connection status/recovery controls, and authoritative snapshot adoption.
 - Task 09.02.01 adds server-authoritative board submission with one locked pending intent and same-key idempotent retries; canonical board state remains unchanged until an authoritative response arrives.
 - Story 09.02 completes monotonic authoritative synchronization: validated newer snapshots replace canonical resources, older/equal state cannot roll the board back, divergence forces authenticated resync, and ECS projections rebuild without deserializing network entities.
+- Task 09.03.01 adds a server-anchored presentation clock and explicit online seat, phase, pending-command, transport, and opponent status without granting the client clock or outcome authority.
 
 ## Stories
 

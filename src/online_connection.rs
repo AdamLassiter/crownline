@@ -24,6 +24,7 @@ use crate::{
     lifecycle::{ClientFlow, ScenarioCatalog},
     local_interaction::BoardInteraction,
     online_lobby::{LobbyScreen, OnlineLobby, OnlineSeat},
+    online_status::{AuthoritativePresentationSnapshot, OnlineRoomStateChanged},
     rendering::{
         DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection,
@@ -127,6 +128,7 @@ enum ConnectionEvent {
         failure: CommandFailure,
         retryable: bool,
     },
+    RoomState(ConnectionState),
     Persisted(SavedOnlineSeat, CredentialProtection),
     Restored {
         saved: SavedOnlineSeat,
@@ -425,6 +427,8 @@ fn poll_connection_events(
     mut notices: ResMut<LocalTransitionNoticeLog>,
     mut interaction: ResMut<BoardInteraction>,
     mut outbox: ResMut<OnlineIntentOutbox>,
+    mut presentation_snapshots: MessageWriter<AuthoritativePresentationSnapshot>,
+    mut room_states: MessageWriter<OnlineRoomStateChanged>,
 ) {
     let Ok(events) = transport.events.lock() else {
         return;
@@ -525,6 +529,9 @@ fn poll_connection_events(
                     interaction.resolve_online(message);
                 }
             }
+            ConnectionEvent::RoomState(state) => {
+                room_states.write(OnlineRoomStateChanged(state));
+            }
             ConnectionEvent::Snapshot(snapshot) => match reconcile_snapshot(
                 &snapshot,
                 connection.active_match,
@@ -547,6 +554,14 @@ fn poll_connection_events(
                         ConnectionPhase::Connected
                     };
                     *flow = ClientFlow::OnlinePlaying;
+                    presentation_snapshots.write(AuthoritativePresentationSnapshot {
+                        clocks: snapshot.state.clocks,
+                        active_player: snapshot.state.active_player,
+                        phase: snapshot.state.phase.clone(),
+                        terminal: snapshot.state.outcome.is_some()
+                            || snapshot.room_state == ConnectionState::Finished,
+                        room_state: snapshot.room_state,
+                    });
                 }
                 Ok(SnapshotDisposition::Older) => {
                     tracing::debug!(
@@ -977,9 +992,13 @@ fn handle_server_message(bytes: &[u8], events: &mpsc::SyncSender<ConnectionEvent
             state: ConnectionState::Finished,
             ..
         } => {
+            let _ = events.send(ConnectionEvent::RoomState(ConnectionState::Finished));
             let _ = events.send(ConnectionEvent::Phase(ConnectionPhase::Terminal));
         }
-        ServerMessage::ConnectionState { .. } | ServerMessage::RematchState { .. } => {}
+        ServerMessage::ConnectionState { state, .. } => {
+            let _ = events.send(ConnectionEvent::RoomState(state));
+        }
+        ServerMessage::RematchState { .. } => {}
     }
     true
 }

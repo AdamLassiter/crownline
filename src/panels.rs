@@ -10,6 +10,7 @@ use crownline_core::{
 
 use crate::{
     help::{HelpLink, HelpSection},
+    lifecycle::ClientFlow,
     local_persistence::LocalPersistenceStatus,
     rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection, PointerCapture},
 };
@@ -35,6 +36,7 @@ struct PanelContentCache {
     selected: Option<PieceId>,
     history_len: usize,
     clocks: Option<ClockState>,
+    online: bool,
     persistence_message: String,
 }
 
@@ -297,6 +299,7 @@ fn update_panel_text(
     selection: Res<OverlaySelection>,
     history: Res<LocalTransitionNoticeLog>,
     persistence: Option<Res<LocalPersistenceStatus>>,
+    flow: Option<Res<ClientFlow>>,
     mut cache: ResMut<PanelContentCache>,
     mut texts: Query<(
         &mut Text,
@@ -308,15 +311,20 @@ fn update_panel_text(
     let persistence_message = persistence
         .as_deref()
         .map_or("", |status| status.message.as_str());
+    let online = flow
+        .as_deref()
+        .is_some_and(|flow| *flow == ClientFlow::OnlinePlaying);
     if cache.revision == Some(game.state.revision)
         && cache.selected == selection.piece
         && cache.history_len == history.entries.len()
         && cache.clocks == game.state.clocks
+        && cache.online == online
         && cache.persistence_message == persistence_message
     {
         return;
     }
-    let mut match_text = match_panel_text(&game.scenario, &game.state, selection.piece);
+    let mut match_text =
+        match_panel_text_with_clock_context(&game.scenario, &game.state, selection.piece, online);
     if let Some(status) = persistence.as_deref() {
         let _ = write!(
             match_text,
@@ -339,6 +347,7 @@ fn update_panel_text(
     cache.selected = selection.piece;
     cache.history_len = history.entries.len();
     cache.clocks = game.state.clocks;
+    cache.online = online;
     persistence_message.clone_into(&mut cache.persistence_message);
 }
 
@@ -352,10 +361,20 @@ fn update_pointer_capture(
         .any(|interaction| *interaction != Interaction::None);
 }
 
+#[cfg(test)]
 fn match_panel_text(
     scenario: &ScenarioDefinition,
     state: &MatchState,
     selected: Option<PieceId>,
+) -> String {
+    match_panel_text_with_clock_context(scenario, state, selected, false)
+}
+
+fn match_panel_text_with_clock_context(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    selected: Option<PieceId>,
+    online: bool,
 ) -> String {
     let mut lines = vec![format!(
         "TURN {} · {:?} to act",
@@ -374,8 +393,13 @@ fn match_panel_text(
         }
     }
     if let Some(clocks) = state.clocks {
+        let heading = if online {
+            "Clocks at last server snapshot"
+        } else {
+            "Clocks"
+        };
         lines.push(format!(
-            "Clocks: North {} · South {}",
+            "{heading}: North {} · South {}",
             format_clock(clocks.north_millis),
             format_clock(clocks.south_millis)
         ));

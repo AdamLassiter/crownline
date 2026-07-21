@@ -5,6 +5,7 @@ mod local_interaction;
 mod local_persistence;
 mod online_connection;
 mod online_lobby;
+mod online_status;
 mod panels;
 mod rendering;
 
@@ -16,6 +17,7 @@ use local_interaction::LocalInteractionPlugin;
 use local_persistence::LocalPersistencePlugin;
 use online_connection::OnlineConnectionPlugin;
 use online_lobby::OnlineLobbyPlugin;
+use online_status::OnlineStatusPlugin;
 use panels::InformationPanelsPlugin;
 use rendering::{BoardRenderingPlugin, CameraControlPlugin};
 
@@ -43,6 +45,7 @@ fn main() {
         .add_plugins(LocalLifecyclePlugin)
         .add_plugins(OnlineLobbyPlugin)
         .add_plugins(OnlineConnectionPlugin)
+        .add_plugins(OnlineStatusPlugin)
         .add_plugins(LocalPersistencePlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
