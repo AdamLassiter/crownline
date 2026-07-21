@@ -235,9 +235,19 @@ mod tests {
     #[test]
     fn fit_scale_covers_all_authored_map_sizes_with_readable_bounds() {
         for size in [16, 20, 24] {
-            let scale = fit_scale(geometry(size), Vec2::new(1280.0, 800.0));
-            assert!((MIN_SCALE..=MAX_SCALE).contains(&scale));
-            assert!(f32::from(size) * TILE_SIZE <= 800.0 * FIT_FRACTION * scale + 0.01);
+            for viewport in [
+                Vec2::new(800.0, 600.0),
+                Vec2::new(1280.0, 720.0),
+                Vec2::new(1920.0, 1080.0),
+                Vec2::new(2560.0, 1440.0),
+            ] {
+                let scale = fit_scale(geometry(size), viewport);
+                assert!((MIN_SCALE..=MAX_SCALE).contains(&scale));
+                assert!(
+                    f32::from(size) * TILE_SIZE
+                        <= viewport.min_element() * FIT_FRACTION * scale + 0.01
+                );
+            }
         }
     }
 

@@ -212,13 +212,13 @@ fn handle_board_input(
         return;
     }
 
-    let activated = if keys.just_pressed(KeyCode::Enter) {
-        interaction.keyboard_focus
-    } else if mouse.just_pressed(MouseButton::Left) && !capture.ui_has_pointer {
-        hovered.0
-    } else {
-        None
-    };
+    let activated = activated_square(
+        &keys,
+        &mouse,
+        interaction.keyboard_focus,
+        hovered.0,
+        capture.ui_has_pointer,
+    );
     let Some(at) = activated else {
         return;
     };
@@ -245,6 +245,22 @@ fn handle_board_input(
             selection.piece = None;
             "Selection cleared.".clone_into(&mut interaction.status);
         }
+    }
+}
+
+fn activated_square(
+    keys: &ButtonInput<KeyCode>,
+    mouse: &ButtonInput<MouseButton>,
+    keyboard_focus: Option<Coord>,
+    hovered: Option<Coord>,
+    ui_has_pointer: bool,
+) -> Option<Coord> {
+    if keys.just_pressed(KeyCode::Enter) {
+        keyboard_focus
+    } else if mouse.just_pressed(MouseButton::Left) && !ui_has_pointer {
+        hovered
+    } else {
+        None
     }
 }
 
@@ -858,6 +874,25 @@ mod tests {
             .world_mut()
             .query_filtered::<Entity, With<KeyboardFocusVisual>>();
         assert_eq!(query.iter(app.world()).count(), 1);
+    }
+
+    #[test]
+    fn ui_captured_pointer_input_never_activates_a_board_command() {
+        let keys = ButtonInput::<KeyCode>::default();
+        let mut mouse = ButtonInput::<MouseButton>::default();
+        mouse.press(MouseButton::Left);
+        let hovered = Some(Coord::new(3, 4));
+
+        assert_eq!(
+            activated_square(&keys, &mouse, None, hovered, true),
+            None,
+            "a UI-owned click must not reach board selection or submission"
+        );
+        assert_eq!(
+            activated_square(&keys, &mouse, None, hovered, false),
+            hovered,
+            "the same uncaptured click remains a board activation"
+        );
     }
 
     #[test]

@@ -1457,6 +1457,7 @@ mod tests {
     use crownline_core::{
         MatchState,
         scenario::{Coord, Player, ScenarioDefinition},
+        state::{MandatoryChoice, MatchOutcome, OutcomeReason, TurnPhase},
     };
 
     fn fixture_snapshot() -> (ScenarioDefinition, MatchSnapshot) {
@@ -1678,6 +1679,128 @@ mod tests {
             SnapshotDisposition::Replace
         );
         assert_eq!(selection.piece, None);
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the reconnect matrix keeps all canonical turn surfaces visible together"
+    )]
+    fn authoritative_reconnect_reconstructs_every_canonical_turn_surface() {
+        let (scenario, template) = fixture_snapshot();
+        let south_pawn = template
+            .state
+            .pieces
+            .values()
+            .find(|piece| {
+                piece.owner == Player::South
+                    && piece.kind == crownline_core::scenario::PieceKind::Pawn
+            })
+            .unwrap()
+            .id;
+        let mut variants = Vec::new();
+
+        let mut promotion = template.state.clone();
+        promotion.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::Promote {
+                pawn: south_pawn,
+                site_index: 0,
+            }],
+        };
+        variants.push(("promotion", promotion));
+
+        let mut placement = template.state.clone();
+        placement.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::PlacePawn {
+                settlement_index: 0,
+                legal_squares: [Coord::new(5, 5)].into_iter().collect(),
+            }],
+        };
+        variants.push(("placement", placement));
+
+        let mut draw = template.state.clone();
+        draw.outstanding_draw_offer = Some(Player::South);
+        variants.push(("draw", draw));
+
+        let mut checked = template.state.clone();
+        let south_king = checked
+            .pieces
+            .values()
+            .find(|piece| {
+                piece.owner == Player::South
+                    && piece.kind == crownline_core::scenario::PieceKind::King
+            })
+            .unwrap()
+            .id;
+        let north_king = checked
+            .pieces
+            .values()
+            .find(|piece| {
+                piece.owner == Player::North
+                    && piece.kind == crownline_core::scenario::PieceKind::King
+            })
+            .unwrap()
+            .id;
+        let north_rook = checked
+            .pieces
+            .values()
+            .find(|piece| {
+                piece.owner == Player::North
+                    && piece.kind == crownline_core::scenario::PieceKind::Rook
+            })
+            .unwrap()
+            .id;
+        checked
+            .pieces
+            .retain(|id, _| [south_king, north_king, north_rook].contains(id));
+        checked.pieces.get_mut(&south_king).unwrap().at = Coord::new(0, 5);
+        checked.pieces.get_mut(&north_rook).unwrap().at = Coord::new(0, 6);
+        checked.pieces.get_mut(&north_king).unwrap().at = Coord::new(19, 0);
+        variants.push(("check", checked));
+
+        let mut terminal = template.state.clone();
+        terminal.outcome = Some(MatchOutcome {
+            winner: Some(Player::North),
+            reason: OutcomeReason::Resignation,
+        });
+        variants.push(("terminal", terminal));
+
+        for (name, state) in variants {
+            let mut snapshot = template.clone();
+            snapshot.state = state.clone();
+            snapshot.revision = state.revision;
+            snapshot.state_hash = state.canonical_hash().unwrap();
+            snapshot.room_state = if state.outcome.is_some() {
+                ConnectionState::Finished
+            } else {
+                ConnectionState::Connected
+            };
+            let mut game = DisplayedGame {
+                scenario: scenario.clone(),
+                state: template.state.clone(),
+            };
+            let mut selection = OverlaySelection::default();
+            let mut hovered = HoveredBoardSquare::default();
+            let mut transitions = LocalTransitionEventQueue::default();
+            let mut notices = LocalTransitionNoticeLog::default();
+
+            assert_eq!(
+                reconcile_snapshot(
+                    &snapshot,
+                    None,
+                    None,
+                    &ScenarioCatalog(vec![scenario.clone()]),
+                    &mut game,
+                    &mut selection,
+                    &mut hovered,
+                    &mut transitions,
+                    &mut notices,
+                )
+                .unwrap_or_else(|error| panic!("{name} reconnect failed: {error}")),
+                SnapshotDisposition::Replace
+            );
+            assert_eq!(game.state, state, "{name} canonical surface");
+        }
     }
 
     #[test]
