@@ -2,6 +2,14 @@
 
 Host private-room matches with server-authoritative rules, clocks, durable state, and secure reconnection.
 
+## Status
+
+- [ ] In progress
+
+## Implementation notes
+
+- Task 08.01.01 establishes the bounded, versioned room and match wire-message contract with typed validation and stable public errors.
+
 ## Stories
 
 - [08.01 Versioned protocol](08.01-protocol/08.01-story.md)
@@ -22,4 +30,3 @@ Host private-room matches with server-authoritative rules, clocks, durable state
 ## Cross-cutting concerns
 
 - Hostile-input handling, credential secrecy, idempotency, transactionality, rate limits, and observability.
-
