@@ -19,7 +19,7 @@ pub use persistence::{
 pub use rules::{
     AttackLine, BlockedGovernanceLine, GovernanceBlocker, GovernanceReport, LegalMove, MoveKind,
     Transition, TransitionEvent, apply_action, attack_lines_on, governance_report, is_in_check,
-    legal_moves,
+    legal_moves, pawn_placement_squares,
 };
 pub use scenario::{ScenarioDefinition, ScenarioError, ScenarioHashError};
 pub use state::{Action, MatchState, TransitionError};

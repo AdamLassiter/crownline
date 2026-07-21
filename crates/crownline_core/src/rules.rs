@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +126,17 @@ pub enum TransitionEvent {
     },
     SettlementEstablished {
         settlement_index: u16,
+    },
+    SettlementProductionAdvanced {
+        settlement_index: u16,
+        progress: u8,
+    },
+    SettlementProductionReset {
+        settlement_index: u16,
+    },
+    PawnPlacementReady {
+        settlement_index: u16,
+        legal_squares: BTreeSet<Coord>,
     },
     DrawOffered {
         player: Player,
@@ -297,6 +308,45 @@ pub fn governance_report(
         }
     }
     Ok(report)
+}
+
+/// Returns every currently legal adjacent square for a ready settlement Pawn.
+///
+/// # Errors
+///
+/// Returns typed scenario, state, identity, settlement, or readiness errors.
+pub fn pawn_placement_squares(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    settlement_index: u16,
+) -> Result<BTreeSet<Coord>, TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    state.validate_invariants()?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+    let settlement = state
+        .settlements
+        .iter()
+        .find(|settlement| settlement.site_index == settlement_index)
+        .ok_or(TransitionError::MissingSettlement(settlement_index))?;
+    if !settlement.established
+        || settlement.owner.is_none()
+        || settlement.produced_pawn.is_some()
+        || settlement.production_progress < scenario.rules.production_cycles
+    {
+        return Err(TransitionError::SettlementCannotProduce(settlement_index));
+    }
+    Ok(pawn_placement_squares_unchecked(
+        scenario,
+        state,
+        settlement_index,
+    ))
 }
 
 /// Applies one action transactionally through the canonical rules engine.
@@ -541,6 +591,7 @@ fn transition_events(
         Action::Resign { .. } => Vec::new(),
     };
     events.extend(settlement_change_events(before, after));
+    events.extend(new_mandatory_choice_events(before, after));
     if before.active_player != after.active_player && after.outcome.is_none() {
         for settlement in after
             .settlements
@@ -642,9 +693,46 @@ fn settlement_change_events(before: &MatchState, after: &MatchState) -> Vec<Tran
                     settlement_index: settlement_after.site_index,
                 });
             }
+            if settlement_before.production_progress != settlement_after.production_progress {
+                if settlement_after.production_progress == 0 {
+                    events.push(TransitionEvent::SettlementProductionReset {
+                        settlement_index: settlement_after.site_index,
+                    });
+                } else {
+                    events.push(TransitionEvent::SettlementProductionAdvanced {
+                        settlement_index: settlement_after.site_index,
+                        progress: settlement_after.production_progress,
+                    });
+                }
+            }
         }
     }
     events
+}
+
+fn new_mandatory_choice_events(before: &MatchState, after: &MatchState) -> Vec<TransitionEvent> {
+    let before_queue = match &before.phase {
+        TurnPhase::ResolvingChoices { queue } => queue.as_slice(),
+        TurnPhase::Command => &[],
+    };
+    let after_queue = match &after.phase {
+        TurnPhase::ResolvingChoices { queue } => queue.as_slice(),
+        TurnPhase::Command => &[],
+    };
+    after_queue
+        .iter()
+        .filter(|choice| !before_queue.contains(choice))
+        .filter_map(|choice| match choice {
+            MandatoryChoice::PlacePawn {
+                settlement_index,
+                legal_squares,
+            } => Some(TransitionEvent::PawnPlacementReady {
+                settlement_index: *settlement_index,
+                legal_squares: legal_squares.clone(),
+            }),
+            MandatoryChoice::Promote { .. } => None,
+        })
+        .collect()
 }
 
 fn apply_settlement_landing_effect(
@@ -808,6 +896,12 @@ fn settlement_cycle_requirements_met(
 }
 
 fn complete_owner_cycles(scenario: &ScenarioDefinition, state: &mut MatchState, owner: Player) {
+    let previously_established: BTreeSet<_> = state
+        .settlements
+        .iter()
+        .filter(|settlement| settlement.established)
+        .map(|settlement| settlement.site_index)
+        .collect();
     for settlement in &mut state.settlements {
         if settlement.owner == Some(owner) {
             let continuous = !settlement.cycle_interrupted;
@@ -825,9 +919,83 @@ fn complete_owner_cycles(scenario: &ScenarioDefinition, state: &mut MatchState, 
                     settlement.establishment_progress = 0;
                 }
             }
+            if previously_established.contains(&settlement.site_index)
+                && settlement.produced_pawn.is_none()
+                && settlement.production_progress < scenario.rules.production_cycles
+            {
+                if continuous {
+                    settlement.production_progress = settlement
+                        .production_progress
+                        .saturating_add(1)
+                        .min(scenario.rules.production_cycles);
+                } else if scenario.rules.development_resets_when_interrupted {
+                    settlement.production_progress = 0;
+                }
+            }
             settlement.cycle_interrupted = false;
         }
     }
+
+    let choices: Vec<_> = state
+        .settlements
+        .iter()
+        .filter(|settlement| {
+            settlement.owner == Some(owner)
+                && settlement.established
+                && settlement.produced_pawn.is_none()
+                && settlement.production_progress >= scenario.rules.production_cycles
+        })
+        .filter_map(|settlement| {
+            let legal_squares =
+                pawn_placement_squares_unchecked(scenario, state, settlement.site_index);
+            (!legal_squares.is_empty()).then_some(MandatoryChoice::PlacePawn {
+                settlement_index: settlement.site_index,
+                legal_squares,
+            })
+        })
+        .collect();
+    if !choices.is_empty() {
+        match &mut state.phase {
+            TurnPhase::ResolvingChoices { queue } => queue.extend(choices),
+            TurnPhase::Command => {
+                state.phase = TurnPhase::ResolvingChoices { queue: choices };
+            }
+        }
+    }
+}
+
+fn pawn_placement_squares_unchecked(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    settlement_index: u16,
+) -> BTreeSet<Coord> {
+    let Some(settlement) = state
+        .settlements
+        .iter()
+        .find(|settlement| settlement.site_index == settlement_index)
+    else {
+        return BTreeSet::new();
+    };
+    let (Some(owner), Some(site)) = (
+        settlement.owner,
+        scenario.settlements.get(usize::from(settlement_index)),
+    ) else {
+        return BTreeSet::new();
+    };
+    let board = Board::new(scenario, state);
+    let source = Piece {
+        id: PieceId(u32::MAX),
+        owner,
+        kind: PieceKind::Pawn,
+        at: site.at,
+        origin: PieceOrigin::Deployed,
+        has_moved: true,
+    };
+    KING_OFFSETS
+        .into_iter()
+        .filter_map(|offset| board.step(&source, offset))
+        .filter(|at| !board.occupancy.contains_key(at))
+        .collect()
 }
 
 fn move_transition_events(
@@ -1771,6 +1939,20 @@ mod tests {
             .expect("fixture piece exists")
     }
 
+    fn assert_piece_has_no_move_to(
+        scenario: &ScenarioDefinition,
+        state: &MatchState,
+        piece: PieceId,
+        target: Coord,
+    ) {
+        assert!(
+            !legal_moves(scenario, state)
+                .unwrap()
+                .iter()
+                .any(|mv| mv.piece == piece && mv.to == target)
+        );
+    }
+
     fn add_south_fortification(scenario: &mut ScenarioDefinition, tower: Coord, outside: Coord) {
         let wall = Edge::new(tower, outside);
         scenario.edges.insert(wall, EdgeKind::Wall);
@@ -2198,6 +2380,210 @@ mod tests {
             transition.state.settlements[0].establishment_progress,
             scenario.rules.establishment_cycles
         );
+    }
+
+    #[test]
+    fn established_settlement_queues_and_places_a_produced_pawn() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+        state.settlements[0].established = true;
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles;
+        state.settlements[0].production_progress = scenario.rules.production_cycles - 1;
+
+        let ready = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ready.state.settlements[0].production_progress,
+            scenario.rules.production_cycles
+        );
+        let legal_squares = pawn_placement_squares(&scenario, &ready.state, 0).unwrap();
+        assert!(legal_squares.contains(&Coord::new(2, 2)));
+        assert_eq!(
+            ready.state.phase,
+            TurnPhase::ResolvingChoices {
+                queue: vec![MandatoryChoice::PlacePawn {
+                    settlement_index: 0,
+                    legal_squares: legal_squares.clone(),
+                }]
+            }
+        );
+        assert!(
+            ready
+                .events
+                .contains(&TransitionEvent::SettlementProductionAdvanced {
+                    settlement_index: 0,
+                    progress: scenario.rules.production_cycles,
+                })
+        );
+        assert!(ready.events.contains(&TransitionEvent::PawnPlacementReady {
+            settlement_index: 0,
+            legal_squares: legal_squares.clone(),
+        }));
+
+        let produced = PieceId(ready.state.next_piece_id);
+        let placed = apply_action(
+            &scenario,
+            &ready.state,
+            &Action::PlacePawn {
+                player: Player::South,
+                settlement_index: 0,
+                at: Coord::new(2, 2),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            placed.state.pieces[&produced].origin,
+            PieceOrigin::Settlement {
+                settlement_index: 0
+            }
+        );
+        assert_eq!(placed.state.settlements[0].produced_pawn, Some(produced));
+        assert_eq!(placed.state.settlements[0].production_progress, 0);
+        assert_eq!(placed.state.phase, TurnPhase::Command);
+        assert_piece_has_no_move_to(&scenario, &placed.state, produced, Coord::new(2, 0));
+
+        let mut capacity = placed.state.clone();
+        capacity.active_player = Player::North;
+        let next_cycle = apply_action(
+            &scenario,
+            &capacity,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(next_cycle.state.settlements[0].production_progress, 0);
+        assert!(matches!(next_cycle.state.phase, TurnPhase::Command));
+
+        let mut promoting = placed.state;
+        promoting.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::Promote {
+                pawn: produced,
+                site_index: 0,
+            }],
+        };
+        let promoted = apply_action(
+            &scenario,
+            &promoting,
+            &Action::ChoosePromotion {
+                player: Player::South,
+                pawn: produced,
+                promote_to: PromotionKind::Queen,
+            },
+        )
+        .unwrap();
+        assert_eq!(promoted.state.settlements[0].produced_pawn, None);
+    }
+
+    #[test]
+    fn production_readiness_persists_until_a_legal_square_opens() {
+        let target = Coord::new(3, 3);
+        let mut deployments = vec![
+            deployment(Player::South, PieceKind::King, 4, 4),
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+        ];
+        for at in [
+            Coord::new(2, 2),
+            Coord::new(3, 2),
+            Coord::new(4, 2),
+            Coord::new(2, 3),
+            Coord::new(4, 3),
+            Coord::new(2, 4),
+            Coord::new(3, 4),
+        ] {
+            deployments.push(deployment(Player::South, PieceKind::Pawn, at.x, at.y));
+        }
+        let mut scenario = scenario_with(deployments);
+        add_settlement(&mut scenario, target);
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+        state.settlements[0].established = true;
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles;
+        state.settlements[0].production_progress = scenario.rules.production_cycles - 1;
+
+        let blocked = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            blocked.state.settlements[0].production_progress,
+            scenario.rules.production_cycles
+        );
+        assert!(matches!(blocked.state.phase, TurnPhase::Command));
+
+        let mut opened = blocked.state;
+        let occupant = piece_id_at(&opened, Coord::new(2, 3));
+        opened.pieces.remove(&occupant);
+        opened.active_player = Player::North;
+        let ready = apply_action(
+            &scenario,
+            &opened,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ready.state.settlements[0].production_progress,
+            scenario.rules.production_cycles
+        );
+        assert!(matches!(
+            ready.state.phase,
+            TurnPhase::ResolvingChoices { .. }
+        ));
+    }
+
+    #[test]
+    fn pawn_placement_respects_mountains_and_edge_barriers() {
+        let target = Coord::new(3, 3);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, target);
+        scenario
+            .terrain
+            .insert(Coord::new(2, 2), TileTerrain::Mountain);
+        scenario.edges.insert(
+            Edge::new(Coord::new(3, 3), Coord::new(3, 2)),
+            EdgeKind::Wall,
+        );
+        scenario.edges.insert(
+            Edge::new(Coord::new(3, 3), Coord::new(4, 3)),
+            EdgeKind::River,
+        );
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(piece_id_at(&state, target));
+        state.settlements[0].established = true;
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles;
+        state.settlements[0].production_progress = scenario.rules.production_cycles;
+
+        let squares = pawn_placement_squares(&scenario, &state, 0).unwrap();
+        assert!(!squares.contains(&Coord::new(2, 2)));
+        assert!(!squares.contains(&Coord::new(3, 2)));
+        assert!(!squares.contains(&Coord::new(4, 3)));
+        assert!(squares.contains(&Coord::new(2, 3)));
     }
 
     #[test]
