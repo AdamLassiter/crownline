@@ -1,0 +1,117 @@
+(
+    schema_version: 1,
+    id: "golden-combined-realms",
+    metadata: (
+        name: "golden-combined-realms",
+        description: "Golden replay fixture",
+        expected_minutes: (1, 2),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 7,
+                y: 0,
+            ),
+        ),
+        (
+            player: north,
+            kind: pawn,
+            at: (
+                x: 7,
+                y: 1,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 3,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 7,
+                y: 3,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 3,
+                y: 5,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 0,
+                y: 2,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 4,
+                y: 6,
+            ),
+        ),
+    ],
+    settlements: [
+        (
+            id: "golden-town",
+            at: (
+                x: 3,
+                y: 4,
+            ),
+        ),
+    ],
+    promotion_sites: [
+        (
+            id: "golden-court",
+            at: (
+                x: 0,
+                y: 1,
+            ),
+        ),
+    ],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 1,
+        production_cycles: 1,
+        promotion_cycles: 1,
+        development_resets_when_interrupted: false,
+    ),
+)
+

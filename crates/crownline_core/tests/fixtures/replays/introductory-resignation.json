@@ -1,0 +1,51 @@
+{
+  "format_version": 1,
+  "application_version": "0.1.0-golden",
+  "scenario_schema_version": 1,
+  "scenario_id": "introductory-crossing",
+  "initial_state_hash": "9968af11e0e92a39dec3e2e3e0ce4fc00ac21ff81e977e778bb16203a8b4d1c8",
+  "initial_clocks": null,
+  "records": [
+    {
+      "actor": "south",
+      "revision_before": 0,
+      "revision_after": 1,
+      "idempotency_key": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "action": {
+        "resign": {
+          "player": "south"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "match_ended": {
+            "outcome": {
+              "winner": "north",
+              "reason": "resignation"
+            }
+          }
+        }
+      ],
+      "state_hash": "28368f41359dd39f198641ad8226f3d6a8290e67abd5720c694734d14760d6cf"
+    }
+  ]
+}
+

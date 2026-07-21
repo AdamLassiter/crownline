@@ -1,0 +1,95 @@
+{
+  "format_version": 1,
+  "application_version": "0.1.0-golden",
+  "scenario_schema_version": 1,
+  "scenario_id": "crownlines-standard",
+  "initial_state_hash": "830e10a978db2c5e9bf2019d750c19e62f6dae91e740fdab518658ff50f0a526",
+  "initial_clocks": null,
+  "records": [
+    {
+      "actor": "south",
+      "revision_before": 0,
+      "revision_after": 1,
+      "idempotency_key": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "action": {
+        "offer_draw": {
+          "player": "south"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "draw_offered": {
+            "player": "south"
+          }
+        }
+      ],
+      "state_hash": "48d41ea229ea69137208986bf6857768804a51e2ed29c7788bf1e90ecd4674bf"
+    },
+    {
+      "actor": "north",
+      "revision_before": 1,
+      "revision_after": 2,
+      "idempotency_key": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "action": {
+        "respond_to_draw": {
+          "player": "north",
+          "accept": true
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "draw_answered": {
+            "player": "north",
+            "accepted": true
+          }
+        },
+        {
+          "match_ended": {
+            "outcome": {
+              "winner": null,
+              "reason": "agreed_draw"
+            }
+          }
+        }
+      ],
+      "state_hash": "aad04047aff016b54e624303ce5bff643137b837ea64f8dbc7863f27a1e7a146"
+    }
+  ]
+}
+

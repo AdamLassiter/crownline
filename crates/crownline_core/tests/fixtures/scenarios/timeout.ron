@@ -1,0 +1,53 @@
+(
+    schema_version: 1,
+    id: "golden-timeout",
+    metadata: (
+        name: "golden-timeout",
+        description: "Golden replay fixture",
+        expected_minutes: (1, 2),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 4,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 4,
+                y: 7,
+            ),
+        ),
+    ],
+    settlements: [],
+    promotion_sites: [],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        development_resets_when_interrupted: false,
+    ),
+)
+

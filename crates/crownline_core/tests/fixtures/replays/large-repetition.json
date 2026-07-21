@@ -1,0 +1,185 @@
+{
+  "format_version": 1,
+  "application_version": "0.1.0-golden",
+  "scenario_schema_version": 1,
+  "scenario_id": "three-theatres",
+  "initial_state_hash": "c621d67a54fd1572e457bebcb1cdb8bd3c091622391c428e179f8208dca821a5",
+  "initial_clocks": null,
+  "records": [
+    {
+      "actor": "south",
+      "revision_before": 0,
+      "revision_after": 1,
+      "idempotency_key": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "action": {
+        "hold": {
+          "player": "south"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "turn_held": {
+            "player": "south"
+          }
+        },
+        {
+          "turn_started": {
+            "player": "north",
+            "turn_number": 2
+          }
+        }
+      ],
+      "state_hash": "cfee4dc7e319e69879135924796a253c10414c358df297427e6f2c30cbbc3e50"
+    },
+    {
+      "actor": "north",
+      "revision_before": 1,
+      "revision_after": 2,
+      "idempotency_key": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "action": {
+        "hold": {
+          "player": "north"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "turn_held": {
+            "player": "north"
+          }
+        },
+        {
+          "turn_started": {
+            "player": "south",
+            "turn_number": 3
+          }
+        }
+      ],
+      "state_hash": "dec42f8069c9bc6a4dbcf4f45ca2f1b5b42df05b01d4f83e9ba5cf08059e9251"
+    },
+    {
+      "actor": "south",
+      "revision_before": 2,
+      "revision_after": 3,
+      "idempotency_key": [
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "action": {
+        "hold": {
+          "player": "south"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "turn_held": {
+            "player": "south"
+          }
+        },
+        {
+          "turn_started": {
+            "player": "north",
+            "turn_number": 4
+          }
+        }
+      ],
+      "state_hash": "fb3efaaf570300898e178830a275faa239b3a89c26314d43b3e266418f78ef0c"
+    },
+    {
+      "actor": "north",
+      "revision_before": 3,
+      "revision_after": 4,
+      "idempotency_key": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "action": {
+        "hold": {
+          "player": "north"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "turn_held": {
+            "player": "north"
+          }
+        },
+        {
+          "match_ended": {
+            "outcome": {
+              "winner": null,
+              "reason": "threefold_repetition"
+            }
+          }
+        }
+      ],
+      "state_hash": "ab4752b0a7074697cfbcf235635b6e632ecd55c70ea9f78b80baaec09020a37e"
+    }
+  ]
+}
+

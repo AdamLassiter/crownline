@@ -1,0 +1,69 @@
+{
+  "format_version": 1,
+  "application_version": "0.1.0-golden",
+  "scenario_schema_version": 1,
+  "scenario_id": "golden-checkmate",
+  "initial_state_hash": "d49d7e661d1bd7cca8fbf7bb9e992f78c0ea4a440291fc7fe4160c6feb07ac9c",
+  "initial_clocks": null,
+  "records": [
+    {
+      "actor": "south",
+      "revision_before": 0,
+      "revision_after": 1,
+      "idempotency_key": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "action": {
+        "move": {
+          "player": "south",
+          "piece": 1,
+          "to": {
+            "x": 1,
+            "y": 1
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_moved": {
+            "piece": 1,
+            "from": {
+              "x": 1,
+              "y": 2
+            },
+            "to": {
+              "x": 1,
+              "y": 1
+            }
+          }
+        },
+        {
+          "match_ended": {
+            "outcome": {
+              "winner": "south",
+              "reason": "checkmate"
+            }
+          }
+        }
+      ],
+      "state_hash": "1de8ec999354ccda81418ecd595b43ff85359ade9da430b9035defe9c5a7681e"
+    }
+  ]
+}
+

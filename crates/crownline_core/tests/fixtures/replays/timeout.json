@@ -1,0 +1,62 @@
+{
+  "format_version": 1,
+  "application_version": "0.1.0-golden",
+  "scenario_schema_version": 1,
+  "scenario_id": "golden-timeout",
+  "initial_state_hash": "ddb6f977ed328c314c268d2f16353bbfc2c9e7001ee9299cfdc5d0cc9fef7da8",
+  "initial_clocks": {
+    "north_millis": 60000,
+    "south_millis": 60000,
+    "increment_millis": 0
+  },
+  "records": [
+    {
+      "actor": "south",
+      "revision_before": 0,
+      "revision_after": 1,
+      "idempotency_key": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "action": {
+        "hold": {
+          "player": "south"
+        }
+      },
+      "elapsed_millis": 60000,
+      "events": [
+        {
+          "clock_advanced": {
+            "player": "south",
+            "elapsed_millis": 60000,
+            "remaining_millis": 0
+          }
+        },
+        {
+          "match_ended": {
+            "outcome": {
+              "winner": "north",
+              "reason": "timeout"
+            }
+          }
+        }
+      ],
+      "state_hash": "884cfcc98c8d74d7df6dbee0b4532c32d3583768321538a1306261a4fe0ab2e2"
+    }
+  ]
+}
+

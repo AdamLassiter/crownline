@@ -1,0 +1,735 @@
+{
+  "format_version": 1,
+  "application_version": "0.1.0-golden",
+  "scenario_schema_version": 1,
+  "scenario_id": "golden-combined-realms",
+  "initial_state_hash": "2a0139b379fb79f548554d59abc743e749b8f1446d262439e6814da27dbe5d9c",
+  "initial_clocks": null,
+  "records": [
+    {
+      "actor": "south",
+      "revision_before": 0,
+      "revision_after": 1,
+      "idempotency_key": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "action": {
+        "move": {
+          "player": "south",
+          "piece": 3,
+          "to": {
+            "x": 3,
+            "y": 4
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_moved": {
+            "piece": 3,
+            "from": {
+              "x": 3,
+              "y": 5
+            },
+            "to": {
+              "x": 3,
+              "y": 4
+            }
+          }
+        },
+        {
+          "settlement_claimed": {
+            "settlement_index": 0,
+            "owner": "south",
+            "founder": 3
+          }
+        },
+        {
+          "turn_started": {
+            "player": "north",
+            "turn_number": 2
+          }
+        }
+      ],
+      "state_hash": "151056540457369f18d14f60f6bde4c2d123cdac35a69b2d68527051cb826381"
+    },
+    {
+      "actor": "north",
+      "revision_before": 1,
+      "revision_after": 2,
+      "idempotency_key": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ],
+      "action": {
+        "hold": {
+          "player": "north"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "turn_held": {
+            "player": "north"
+          }
+        },
+        {
+          "settlement_development_advanced": {
+            "settlement_index": 0,
+            "progress": 1
+          }
+        },
+        {
+          "settlement_established": {
+            "settlement_index": 0
+          }
+        },
+        {
+          "settlement_cycle_started": {
+            "settlement_index": 0,
+            "player": "south",
+            "previous_continuous": true
+          }
+        },
+        {
+          "turn_started": {
+            "player": "south",
+            "turn_number": 3
+          }
+        }
+      ],
+      "state_hash": "5572f65f5fe85aeb891f88561f85f17b5a7bce57cacbba3ece3087eb8c0df965"
+    },
+    {
+      "actor": "south",
+      "revision_before": 2,
+      "revision_after": 3,
+      "idempotency_key": [
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "action": {
+        "move": {
+          "player": "south",
+          "piece": 2,
+          "to": {
+            "x": 0,
+            "y": 1
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_moved": {
+            "piece": 2,
+            "from": {
+              "x": 0,
+              "y": 2
+            },
+            "to": {
+              "x": 0,
+              "y": 1
+            }
+          }
+        },
+        {
+          "promotion_candidate_started": {
+            "pawn": 2
+          }
+        },
+        {
+          "turn_started": {
+            "player": "north",
+            "turn_number": 4
+          }
+        }
+      ],
+      "state_hash": "d805b37a0592023eae623cf19417460bce3a66e41839cf91d33e8cfc186db5e8"
+    },
+    {
+      "actor": "north",
+      "revision_before": 3,
+      "revision_after": 4,
+      "idempotency_key": [
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4,
+        4
+      ],
+      "action": {
+        "hold": {
+          "player": "north"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "turn_held": {
+            "player": "north"
+          }
+        },
+        {
+          "settlement_production_advanced": {
+            "settlement_index": 0,
+            "progress": 1
+          }
+        },
+        {
+          "promotion_candidate_advanced": {
+            "pawn": 2,
+            "progress": 1
+          }
+        },
+        {
+          "promotion_ready": {
+            "pawn": 2,
+            "site_index": 0
+          }
+        },
+        {
+          "pawn_placement_ready": {
+            "settlement_index": 0,
+            "legal_squares": [
+              {
+                "x": 2,
+                "y": 3
+              },
+              {
+                "x": 2,
+                "y": 4
+              },
+              {
+                "x": 2,
+                "y": 5
+              },
+              {
+                "x": 3,
+                "y": 3
+              },
+              {
+                "x": 3,
+                "y": 5
+              },
+              {
+                "x": 4,
+                "y": 3
+              },
+              {
+                "x": 4,
+                "y": 4
+              },
+              {
+                "x": 4,
+                "y": 5
+              }
+            ]
+          }
+        },
+        {
+          "settlement_cycle_started": {
+            "settlement_index": 0,
+            "player": "south",
+            "previous_continuous": true
+          }
+        },
+        {
+          "turn_started": {
+            "player": "south",
+            "turn_number": 5
+          }
+        }
+      ],
+      "state_hash": "d888f4561a1c92f380c05c2f5952a59b42d2739f05aac22d7483d0c2a24e2314"
+    },
+    {
+      "actor": "south",
+      "revision_before": 4,
+      "revision_after": 5,
+      "idempotency_key": [
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5,
+        5
+      ],
+      "action": {
+        "choose_promotion": {
+          "player": "south",
+          "pawn": 2,
+          "promote_to": "knight"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_promoted": {
+            "pawn": 2,
+            "promoted": 8,
+            "kind": "knight",
+            "at": {
+              "x": 0,
+              "y": 1
+            }
+          }
+        }
+      ],
+      "state_hash": "4686a36e588883ff9bf1d4e9711e911ec12a71d7b5ee5501538eb7b34b9255a6"
+    },
+    {
+      "actor": "south",
+      "revision_before": 5,
+      "revision_after": 6,
+      "idempotency_key": [
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6
+      ],
+      "action": {
+        "place_pawn": {
+          "player": "south",
+          "settlement_index": 0,
+          "at": {
+            "x": 2,
+            "y": 3
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "pawn_produced": {
+            "settlement_index": 0,
+            "pawn": 9,
+            "at": {
+              "x": 2,
+              "y": 3
+            }
+          }
+        },
+        {
+          "settlement_production_reset": {
+            "settlement_index": 0
+          }
+        }
+      ],
+      "state_hash": "9533e4abb821671af525970646f0d2861715b0c8247f51e6d3c4a83c5ba4643d"
+    },
+    {
+      "actor": "south",
+      "revision_before": 6,
+      "revision_after": 7,
+      "idempotency_key": [
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7,
+        7
+      ],
+      "action": {
+        "move": {
+          "player": "south",
+          "piece": 5,
+          "to": {
+            "x": 4,
+            "y": 4
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_moved": {
+            "piece": 5,
+            "from": {
+              "x": 4,
+              "y": 6
+            },
+            "to": {
+              "x": 4,
+              "y": 4
+            }
+          }
+        },
+        {
+          "turn_started": {
+            "player": "north",
+            "turn_number": 6
+          }
+        }
+      ],
+      "state_hash": "f2b369bba7aba3872e57a6cec829223c68054a06759dd951a3a9a81ef19e8014"
+    },
+    {
+      "actor": "north",
+      "revision_before": 7,
+      "revision_after": 8,
+      "idempotency_key": [
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "action": {
+        "hold": {
+          "player": "north"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "turn_held": {
+            "player": "north"
+          }
+        },
+        {
+          "settlement_cycle_started": {
+            "settlement_index": 0,
+            "player": "south",
+            "previous_continuous": true
+          }
+        },
+        {
+          "turn_started": {
+            "player": "south",
+            "turn_number": 7
+          }
+        }
+      ],
+      "state_hash": "e029ae75722b3bcaf8d4d2e71ff8f357d2bd5f232325334d5e8bef52cce63873"
+    },
+    {
+      "actor": "south",
+      "revision_before": 8,
+      "revision_after": 9,
+      "idempotency_key": [
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9,
+        9
+      ],
+      "action": {
+        "move": {
+          "player": "south",
+          "piece": 6,
+          "to": {
+            "x": 7,
+            "y": 1
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_captured": {
+            "piece": 1,
+            "at": {
+              "x": 7,
+              "y": 1
+            }
+          }
+        },
+        {
+          "piece_moved": {
+            "piece": 6,
+            "from": {
+              "x": 7,
+              "y": 3
+            },
+            "to": {
+              "x": 7,
+              "y": 1
+            }
+          }
+        },
+        {
+          "turn_started": {
+            "player": "north",
+            "turn_number": 8
+          }
+        }
+      ],
+      "state_hash": "daa87a27900b08ead442289286a95a2ea4926e011500ce240624b264489e29d2"
+    },
+    {
+      "actor": "north",
+      "revision_before": 9,
+      "revision_after": 10,
+      "idempotency_key": [
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10,
+        10
+      ],
+      "action": {
+        "move": {
+          "player": "north",
+          "piece": 0,
+          "to": {
+            "x": 6,
+            "y": 0
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_moved": {
+            "piece": 0,
+            "from": {
+              "x": 7,
+              "y": 0
+            },
+            "to": {
+              "x": 6,
+              "y": 0
+            }
+          }
+        },
+        {
+          "settlement_cycle_started": {
+            "settlement_index": 0,
+            "player": "south",
+            "previous_continuous": true
+          }
+        },
+        {
+          "turn_started": {
+            "player": "south",
+            "turn_number": 9
+          }
+        }
+      ],
+      "state_hash": "0a8ca07daeaf7b121a89f715bd24260cad8550632bc67f2b7f70b9c9f2c8cc10"
+    },
+    {
+      "actor": "south",
+      "revision_before": 10,
+      "revision_after": 11,
+      "idempotency_key": [
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11,
+        11
+      ],
+      "action": {
+        "move": {
+          "player": "south",
+          "piece": 4,
+          "to": {
+            "x": 2,
+            "y": 7
+          }
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "piece_moved": {
+            "piece": 4,
+            "from": {
+              "x": 3,
+              "y": 7
+            },
+            "to": {
+              "x": 2,
+              "y": 7
+            }
+          }
+        },
+        {
+          "settlement_continuity_interrupted": {
+            "settlement_index": 0
+          }
+        },
+        {
+          "turn_started": {
+            "player": "north",
+            "turn_number": 10
+          }
+        }
+      ],
+      "state_hash": "32c0d5bf7829a3d42c4606bc730e360682b6dfe45f775161e61f3cb85736182a"
+    },
+    {
+      "actor": "north",
+      "revision_before": 11,
+      "revision_after": 12,
+      "idempotency_key": [
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12,
+        12
+      ],
+      "action": {
+        "resign": {
+          "player": "north"
+        }
+      },
+      "elapsed_millis": 0,
+      "events": [
+        {
+          "match_ended": {
+            "outcome": {
+              "winner": "south",
+              "reason": "resignation"
+            }
+          }
+        }
+      ],
+      "state_hash": "e7ca22e7714a6b12f563663e1a5ba51118a7e9fecf84af0f2568ab0ded73216e"
+    }
+  ]
+}
+
