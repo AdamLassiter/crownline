@@ -244,6 +244,7 @@ fn event_message(event: &TransitionEvent) -> String {
     match event {
         TransitionEvent::PieceMoved { from, to, .. } => format!("Move {from:?} to {to:?}"),
         TransitionEvent::PieceCaptured { at, .. } => format!("Capture at {at:?}"),
+        TransitionEvent::TurnHeld { player } => format!("{player:?} held the turn"),
         TransitionEvent::PiecePromoted { kind, at, .. } => {
             format!("Promotion to {kind:?} at {at:?}")
         }
@@ -266,6 +267,11 @@ fn event_message(event: &TransitionEvent) -> String {
         TransitionEvent::PromotionReady { pawn, .. } => {
             format!("Pawn {pawn:?} is ready to promote")
         }
+        TransitionEvent::DrawOffered { player } => format!("{player:?} offered a draw"),
+        TransitionEvent::DrawAnswered { player, accepted } => format!(
+            "{player:?} {} the draw",
+            if *accepted { "accepted" } else { "declined" }
+        ),
         TransitionEvent::TurnStarted {
             player,
             turn_number,
@@ -280,7 +286,7 @@ mod tests {
     use crownline_core::{
         rules::Transition,
         scenario::{Coord, Player},
-        state::MatchState,
+        state::{MatchOutcome, MatchState, OutcomeReason},
     };
 
     use super::*;
@@ -311,6 +317,45 @@ mod tests {
         assert_eq!(messages[0], "Settlement 2 established");
         assert_eq!(messages[1], "Settlement 2 produced a Pawn");
         assert_eq!(messages[2], "Turn 7: North");
+    }
+
+    #[test]
+    fn history_messages_distinguish_hold_draw_promotion_production_and_terminal_events() {
+        let events = [
+            TransitionEvent::TurnHeld {
+                player: Player::South,
+            },
+            TransitionEvent::DrawOffered {
+                player: Player::North,
+            },
+            TransitionEvent::PiecePromoted {
+                pawn: PieceId(1),
+                promoted: PieceId(2),
+                kind: PieceKind::Queen,
+                at: Coord::new(4, 4),
+            },
+            TransitionEvent::PawnProduced {
+                settlement_index: 3,
+                pawn: PieceId(4),
+                at: Coord::new(5, 5),
+            },
+            TransitionEvent::MatchEnded {
+                outcome: MatchOutcome {
+                    winner: None,
+                    reason: OutcomeReason::AgreedDraw,
+                },
+            },
+        ];
+        let messages: Vec<_> = events.iter().map(event_message).collect();
+        for expected in [
+            "held",
+            "offered a draw",
+            "Promotion",
+            "produced",
+            "Match ended",
+        ] {
+            assert!(messages.iter().any(|message| message.contains(expected)));
+        }
     }
 
     #[test]

@@ -20,10 +20,11 @@ use features::{spawn_scenario_features, sync_settlement_visuals};
 use overlays::{OverlayCache, OverlayLegend, sync_overlays};
 pub(crate) use overlays::{OverlaySelection, OverlayText};
 pub(crate) use transitions::TransitionEventQueue as LocalTransitionEventQueue;
+pub(crate) use transitions::TransitionNoticeLog as LocalTransitionNoticeLog;
 use transitions::{
     PiecePresentation, PresentationMotionQueue, PresentationPlayback, TransitionEventQueue,
-    TransitionNoticeLog, animate_piece_presentations, animate_transition_notices,
-    process_piece_motion_requests, process_transition_events,
+    animate_piece_presentations, animate_transition_notices, process_piece_motion_requests,
+    process_transition_events,
 };
 
 pub use camera::CameraControlPlugin;
@@ -145,7 +146,7 @@ impl Plugin for BoardRenderingPlugin {
             .init_resource::<PresentationMotionQueue>()
             .init_resource::<PresentationPlayback>()
             .init_resource::<TransitionEventQueue>()
-            .init_resource::<TransitionNoticeLog>()
+            .init_resource::<LocalTransitionNoticeLog>()
             .add_systems(Startup, spawn_default_board)
             .add_systems(
                 Update,

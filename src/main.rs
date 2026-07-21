@@ -1,10 +1,12 @@
 mod config;
 mod local_interaction;
+mod panels;
 mod rendering;
 
 use bevy::{asset::LoadState, prelude::*, window::WindowResolution};
 use config::ClientSettings;
 use local_interaction::LocalInteractionPlugin;
+use panels::InformationPanelsPlugin;
 use rendering::{BoardRenderingPlugin, CameraControlPlugin};
 
 const WINDOW_TITLE: &str = "Crownlines";
@@ -26,6 +28,7 @@ fn main() {
         .add_plugins(BoardRenderingPlugin)
         .add_plugins(CameraControlPlugin)
         .add_plugins(LocalInteractionPlugin)
+        .add_plugins(InformationPanelsPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();
