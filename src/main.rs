@@ -1,7 +1,9 @@
 mod config;
+mod rendering;
 
 use bevy::{asset::LoadState, prelude::*, window::WindowResolution};
 use config::ClientSettings;
+use rendering::BoardRenderingPlugin;
 
 const WINDOW_TITLE: &str = "Crownlines";
 
@@ -19,6 +21,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(BoardRenderingPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();
@@ -49,6 +52,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
         TextColor(Color::srgb(0.88, 0.72, 0.25)),
         TextLayout::justify(Justify::Center),
+        Transform::from_xyz(0.0, 0.0, 10.0),
         ChessFontText,
     ));
     commands.spawn((
@@ -61,6 +65,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
         TextColor(Color::srgb(0.95, 0.75, 0.3)),
         TextLayout::justify(Justify::Center),
+        Transform::from_xyz(0.0, 0.0, 10.0),
         Visibility::Hidden,
         FontFallbackText,
     ));
