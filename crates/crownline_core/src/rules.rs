@@ -413,6 +413,13 @@ pub fn apply_action(
             at,
         } => apply_pawn_placement(state, player, settlement_index, at),
     }?;
+    if !matches!(action, Action::RespondToDraw { .. })
+        && state
+            .outstanding_draw_offer
+            .is_some_and(|offering| offering != action_player(action))
+    {
+        next.outstanding_draw_offer = None;
+    }
     apply_settlement_landing_effect(scenario, &mut next, action)?;
     apply_promotion_landing_effect(scenario, &mut next, action);
     cancel_invalid_transfer_candidates(scenario, &mut next)?;
@@ -435,6 +442,18 @@ pub fn apply_action(
         state: next,
         events,
     })
+}
+
+const fn action_player(action: &Action) -> Player {
+    match *action {
+        Action::Move { player, .. }
+        | Action::Hold { player }
+        | Action::ChoosePromotion { player, .. }
+        | Action::PlacePawn { player, .. }
+        | Action::Resign { player }
+        | Action::OfferDraw { player }
+        | Action::RespondToDraw { player, .. } => player,
+    }
 }
 
 fn apply_promotion_choice(
@@ -622,6 +641,15 @@ fn transition_events(
         }
         Action::Resign { .. } => Vec::new(),
     };
+    if !matches!(action, Action::RespondToDraw { .. })
+        && before.outstanding_draw_offer.is_some()
+        && after.outstanding_draw_offer.is_none()
+    {
+        events.push(TransitionEvent::DrawAnswered {
+            player: action_player(action),
+            accepted: false,
+        });
+    }
     events.extend(settlement_change_events(before, after));
     events.extend(promotion_candidate_events(before, after, action));
     events.extend(new_mandatory_choice_events(before, after));
@@ -3902,7 +3930,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_are_rejected_after_match_termination() {
+    fn terminal_states_reject_all_gameplay_actions() {
         let scenario = scenario_with(Vec::new());
         let mut state = MatchState::from_scenario(&scenario).unwrap();
         let king = piece_id_at(&state, Coord::new(4, 7));
@@ -3921,6 +3949,26 @@ mod tests {
                 piece: king,
                 to: Coord::new(4, 6),
             },
+            Action::ChoosePromotion {
+                player: Player::South,
+                pawn: king,
+                promote_to: PromotionKind::Queen,
+            },
+            Action::PlacePawn {
+                player: Player::South,
+                settlement_index: 0,
+                at: Coord::new(0, 0),
+            },
+            Action::OfferDraw {
+                player: Player::South,
+            },
+            Action::RespondToDraw {
+                player: Player::North,
+                accept: true,
+            },
+            Action::Resign {
+                player: Player::South,
+            },
         ] {
             assert!(matches!(
                 apply_action(&scenario, &state, &action),
@@ -3928,6 +3976,184 @@ mod tests {
             ));
         }
         assert_eq!(state, before);
+    }
+
+    #[test]
+    fn draw_offer_lifecycle_handles_rejection_acceptance_and_opponent_choices() {
+        let mut scenario = scenario_with(Vec::new());
+        add_settlement(&mut scenario, Coord::new(3, 3));
+        let state = MatchState::from_scenario(&scenario).unwrap();
+
+        let offered = apply_action(
+            &scenario,
+            &state,
+            &Action::OfferDraw {
+                player: Player::South,
+            },
+        )
+        .unwrap()
+        .state;
+        assert_eq!(offered.outstanding_draw_offer, Some(Player::South));
+        assert!(matches!(
+            apply_action(
+                &scenario,
+                &offered,
+                &Action::OfferDraw {
+                    player: Player::South,
+                },
+            ),
+            Err(TransitionError::DrawOfferAlreadyPending)
+        ));
+
+        let rejected = apply_action(
+            &scenario,
+            &offered,
+            &Action::RespondToDraw {
+                player: Player::North,
+                accept: false,
+            },
+        )
+        .unwrap()
+        .state;
+        assert_eq!(rejected.outstanding_draw_offer, None);
+        assert_eq!(rejected.outcome, None);
+
+        let offered = apply_action(
+            &scenario,
+            &rejected,
+            &Action::OfferDraw {
+                player: Player::South,
+            },
+        )
+        .unwrap()
+        .state;
+        let accepted = apply_action(
+            &scenario,
+            &offered,
+            &Action::RespondToDraw {
+                player: Player::North,
+                accept: true,
+            },
+        )
+        .unwrap();
+        let outcome = MatchOutcome {
+            winner: None,
+            reason: OutcomeReason::AgreedDraw,
+        };
+        assert_eq!(accepted.state.outcome, Some(outcome));
+        assert!(
+            accepted
+                .events
+                .contains(&TransitionEvent::MatchEnded { outcome })
+        );
+
+        let mut choice_state = offered;
+        choice_state.active_player = Player::North;
+        choice_state.settlements[0].owner = Some(Player::North);
+        choice_state.settlements[0].established = true;
+        choice_state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::PlacePawn {
+                settlement_index: 0,
+                legal_squares: BTreeSet::from([Coord::new(3, 4)]),
+            }],
+        };
+        let choice = apply_action(
+            &scenario,
+            &choice_state,
+            &Action::PlacePawn {
+                player: Player::North,
+                settlement_index: 0,
+                at: Coord::new(3, 4),
+            },
+        )
+        .unwrap();
+        assert_eq!(choice.state.outstanding_draw_offer, None);
+        assert!(choice.events.contains(&TransitionEvent::DrawAnswered {
+            player: Player::North,
+            accepted: false,
+        }));
+    }
+
+    #[test]
+    fn third_full_state_repetition_ends_the_match() {
+        let scenario = scenario_with(Vec::new());
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+
+        for player in [Player::South, Player::North, Player::South] {
+            state = apply_action(&scenario, &state, &Action::Hold { player })
+                .unwrap()
+                .state;
+            assert_eq!(state.outcome, None);
+        }
+        let transition = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        let outcome = MatchOutcome {
+            winner: None,
+            reason: OutcomeReason::ThreefoldRepetition,
+        };
+        assert_eq!(transition.state.outcome, Some(outcome));
+        assert!(
+            transition
+                .events
+                .contains(&TransitionEvent::MatchEnded { outcome })
+        );
+    }
+
+    #[test]
+    fn timeout_and_checkmate_are_ordered_by_explicit_receipt_time() {
+        use crate::clock::{ClockSettings, apply_timed_action, start_clocks};
+
+        let scenario = scenario_with(vec![
+            deployment(Player::North, PieceKind::King, 0, 0),
+            deployment(Player::South, PieceKind::King, 2, 2),
+            deployment(Player::South, PieceKind::Queen, 1, 2),
+        ]);
+        let initial = start_clocks(
+            &MatchState::from_scenario(&scenario).unwrap(),
+            ClockSettings {
+                base_minutes: 1,
+                increment_seconds: 0,
+            },
+        )
+        .unwrap();
+        let queen = piece_id_at(&initial, Coord::new(1, 2));
+        let action = Action::Move {
+            player: Player::South,
+            piece: queen,
+            to: Coord::new(1, 1),
+        };
+
+        let mut deadline_state = initial.clone();
+        deadline_state.clocks.as_mut().unwrap().south_millis = 500;
+        let timeout = apply_timed_action(&scenario, &deadline_state, &action, 500).unwrap();
+        assert_eq!(timeout.state.pieces[&queen].at, Coord::new(1, 2));
+        assert_eq!(
+            timeout.state.outcome,
+            Some(MatchOutcome {
+                winner: Some(Player::North),
+                reason: OutcomeReason::Timeout,
+            })
+        );
+
+        let checkmate = apply_timed_action(&scenario, &deadline_state, &action, 499).unwrap();
+        assert_eq!(checkmate.state.pieces[&queen].at, Coord::new(1, 1));
+        assert_eq!(
+            checkmate.state.outcome,
+            Some(MatchOutcome {
+                winner: Some(Player::South),
+                reason: OutcomeReason::Checkmate,
+            })
+        );
+        assert!(matches!(
+            crate::clock::advance_clock(&checkmate.state, 1),
+            Err(TransitionError::MatchFinished)
+        ));
     }
 
     #[test]

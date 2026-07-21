@@ -517,6 +517,82 @@ mod tests {
     }
 
     #[test]
+    fn repetition_identity_covers_gameplay_state_but_excludes_clocks_and_revision() {
+        let state = MatchState::from_scenario(&scenario()).unwrap();
+        let key = state.repetition_key().unwrap();
+
+        let mut metadata_only = state.clone();
+        metadata_only.revision = 42;
+        metadata_only.turn_number = 99;
+        metadata_only.clocks = Some(ClockState {
+            north_millis: 1,
+            south_millis: 2,
+            increment_millis: 3,
+        });
+        assert_eq!(metadata_only.repetition_key().unwrap(), key);
+
+        let first_piece = *state.pieces.keys().next().unwrap();
+        let mut variants = Vec::new();
+
+        let mut changed = state.clone();
+        changed.active_player = changed.active_player.opponent();
+        variants.push(changed);
+
+        let mut changed = state.clone();
+        changed.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::Promote {
+                pawn: first_piece,
+                site_index: 0,
+            }],
+        };
+        variants.push(changed);
+
+        let mut changed = state.clone();
+        changed.pieces.get_mut(&first_piece).unwrap().origin =
+            PieceOrigin::Promoted { from: PieceId(99) };
+        variants.push(changed);
+
+        let mut changed = state.clone();
+        changed.pieces.get_mut(&first_piece).unwrap().has_moved = true;
+        variants.push(changed);
+
+        let mut changed = state.clone();
+        changed.en_passant = Some(EnPassantState {
+            pawn: first_piece,
+            capture_destination: Coord::new(4, 2),
+            expires_for: Player::South,
+        });
+        variants.push(changed);
+
+        let mut changed = state.clone();
+        changed.available_castling_routes.insert("route".to_owned());
+        variants.push(changed);
+
+        let mut changed = state.clone();
+        changed.settlements.push(SettlementState {
+            site_index: 0,
+            owner: Some(Player::South),
+            founder: Some(first_piece),
+            establishment_progress: 1,
+            established: false,
+            production_progress: 0,
+            produced_pawn: None,
+            cycle_interrupted: false,
+            completed_cycle_continuous: true,
+            transfer_candidate: None,
+        });
+        variants.push(changed);
+
+        let mut changed = state.clone();
+        changed.promotion_candidates.insert(first_piece, 1);
+        variants.push(changed);
+
+        for changed in variants {
+            assert_ne!(changed.repetition_key().unwrap(), key);
+        }
+    }
+
+    #[test]
     fn invalid_action_is_transactional() {
         let state = MatchState::from_scenario(&scenario()).expect("valid state");
         let before = state.clone();
