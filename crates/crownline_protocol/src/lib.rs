@@ -52,7 +52,7 @@ pub struct CreateRoomResponse {
     pub match_id: Uuid,
     pub room_code: String,
     pub seat: Player,
-    pub reconnect_token: String,
+    pub reconnect_token: ReconnectToken,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +67,28 @@ pub struct JoinRoomResponse {
     pub protocol_version: u16,
     pub match_id: Uuid,
     pub seat: Player,
-    pub reconnect_token: String,
+    pub reconnect_token: ReconnectToken,
+}
+
+/// A seat secret that serializes for issuance but always redacts debug output.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ReconnectToken(String);
+
+impl ReconnectToken {
+    pub fn issued(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ReconnectToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ReconnectToken([REDACTED])")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

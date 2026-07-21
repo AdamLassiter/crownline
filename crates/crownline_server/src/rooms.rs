@@ -1,17 +1,24 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::{Duration, Instant},
+};
 
 use crownline_core::{
     ClockSettings, MatchState, ScenarioDefinition, scenario::Player, start_clocks,
 };
 use crownline_protocol::{
     CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, PROTOCOL_VERSION,
-    validate_create_room, validate_join_room,
+    ReconnectToken, validate_create_room, validate_join_room,
 };
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
 const ROOM_CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const MAX_CODE_ATTEMPTS: usize = 32;
+const TOKEN_PARTS: usize = 2;
+const MAX_INVALID_TOKEN_ATTEMPTS: u8 = 8;
+const TOKEN_ATTEMPT_WINDOW: Duration = Duration::from_mins(1);
 
 #[derive(Debug, Clone)]
 pub struct InstalledScenario {
@@ -56,22 +63,12 @@ impl ScenarioCatalog {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SeatKey(Uuid);
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TokenHash([u8; 32]);
 
-impl SeatKey {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    pub fn expose(self) -> String {
-        self.0.to_string()
-    }
-}
-
-impl Default for SeatKey {
-    fn default() -> Self {
-        Self::new()
+impl std::fmt::Debug for TokenHash {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TokenHash([REDACTED])")
     }
 }
 
@@ -85,7 +82,7 @@ pub enum RoomPhase {
 
 #[derive(Debug, Clone)]
 struct Seat {
-    key: SeatKey,
+    token_hash: TokenHash,
     name: String,
     ready: bool,
 }
@@ -112,10 +109,15 @@ impl Room {
         }
     }
 
-    fn player_for_key(&self, key: SeatKey) -> Option<Player> {
-        if self.north.key == key {
+    fn player_for_token(&self, token: &str) -> Option<Player> {
+        let candidate = hash_token(token);
+        if constant_time_eq(&self.north.token_hash.0, &candidate.0) {
             Some(Player::North)
-        } else if self.south.as_ref().is_some_and(|seat| seat.key == key) {
+        } else if self
+            .south
+            .as_ref()
+            .is_some_and(|seat| constant_time_eq(&seat.token_hash.0, &candidate.0))
+        {
             Some(Player::South)
         } else {
             None
@@ -126,13 +128,11 @@ impl Room {
 #[derive(Debug)]
 pub struct CreatedRoom {
     pub response: CreateRoomResponse,
-    pub seat_key: SeatKey,
 }
 
 #[derive(Debug)]
 pub struct JoinedRoom {
     pub response: JoinRoomResponse,
-    pub seat_key: SeatKey,
 }
 
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -151,11 +151,20 @@ pub enum RoomError {
     WrongPhase,
     #[error("room code allocation failed")]
     CodeSpaceExhausted,
+    #[error("too many credential attempts")]
+    RateLimited,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FailedTokenWindow {
+    started: Instant,
+    attempts: u8,
 }
 
 pub struct RoomService {
     catalog: ScenarioCatalog,
     rooms: BTreeMap<String, Room>,
+    failed_token_attempts: BTreeMap<String, FailedTokenWindow>,
     code_seed: u64,
 }
 
@@ -164,6 +173,7 @@ impl RoomService {
         Self {
             catalog,
             rooms: BTreeMap::new(),
+            failed_token_attempts: BTreeMap::new(),
             code_seed: 0,
         }
     }
@@ -184,7 +194,7 @@ impl RoomService {
         let scenario_hash = installed.hash.clone();
         let code = self.allocate_code()?;
         let match_id = Uuid::new_v4();
-        let seat_key = SeatKey::new();
+        let raw_token = issue_token();
         let room = Room {
             code: code.clone(),
             match_id,
@@ -194,7 +204,7 @@ impl RoomService {
             phase: RoomPhase::WaitingForOpponent,
             state: None,
             north: Seat {
-                key: seat_key,
+                token_hash: hash_token(&raw_token),
                 name: request.player_name.trim().to_owned(),
                 ready: false,
             },
@@ -208,9 +218,8 @@ impl RoomService {
                 match_id,
                 room_code: code,
                 seat: Player::North,
-                reconnect_token: seat_key.expose(),
+                reconnect_token: ReconnectToken::issued(raw_token),
             },
-            seat_key,
         })
     }
 
@@ -232,9 +241,9 @@ impl RoomService {
         if room.phase != RoomPhase::WaitingForOpponent {
             return Err(RoomError::WrongPhase);
         }
-        let seat_key = SeatKey::new();
+        let raw_token = issue_token();
         room.south = Some(Seat {
-            key: seat_key,
+            token_hash: hash_token(&raw_token),
             name: request.player_name.trim().to_owned(),
             ready: false,
         });
@@ -244,9 +253,8 @@ impl RoomService {
                 protocol_version: PROTOCOL_VERSION,
                 match_id: room.match_id,
                 seat: Player::South,
-                reconnect_token: seat_key.expose(),
+                reconnect_token: ReconnectToken::issued(raw_token),
             },
-            seat_key,
         })
     }
 
@@ -255,10 +263,10 @@ impl RoomService {
     /// # Errors
     ///
     /// Returns an error for a missing room, bad credential/phase, or invalid state.
-    pub fn ready(&mut self, code: &str, key: SeatKey) -> Result<RoomPhase, RoomError> {
+    pub fn ready(&mut self, code: &str, token: &str) -> Result<RoomPhase, RoomError> {
         let code = normalize_code(code);
-        let room = self.rooms.get_mut(&code).ok_or(RoomError::NotFound)?;
-        let player = room.player_for_key(key).ok_or(RoomError::Unauthorized)?;
+        let player = self.authenticate(&code, token)?;
+        let room = self.rooms.get_mut(&code).ok_or(RoomError::Unauthorized)?;
         if room.phase != RoomPhase::WaitingForReady {
             return Err(RoomError::WrongPhase);
         }
@@ -307,10 +315,10 @@ impl RoomService {
     /// # Errors
     ///
     /// Returns an error for a missing room, bad credential/phase, or invalid state.
-    pub fn accept_rematch(&mut self, code: &str, key: SeatKey) -> Result<RoomPhase, RoomError> {
+    pub fn accept_rematch(&mut self, code: &str, token: &str) -> Result<RoomPhase, RoomError> {
         let code = normalize_code(code);
-        let room = self.rooms.get_mut(&code).ok_or(RoomError::NotFound)?;
-        let player = room.player_for_key(key).ok_or(RoomError::Unauthorized)?;
+        let player = self.authenticate(&code, token)?;
+        let room = self.rooms.get_mut(&code).ok_or(RoomError::Unauthorized)?;
         if room.phase != RoomPhase::Finished {
             return Err(RoomError::WrongPhase);
         }
@@ -339,10 +347,10 @@ impl RoomService {
     /// # Errors
     ///
     /// Returns an error for a missing room, bad credential, or active match.
-    pub fn leave_lobby(&mut self, code: &str, key: SeatKey) -> Result<bool, RoomError> {
+    pub fn leave_lobby(&mut self, code: &str, token: &str) -> Result<bool, RoomError> {
         let code = normalize_code(code);
-        let room = self.rooms.get_mut(&code).ok_or(RoomError::NotFound)?;
-        let player = room.player_for_key(key).ok_or(RoomError::Unauthorized)?;
+        let player = self.authenticate(&code, token)?;
+        let room = self.rooms.get_mut(&code).ok_or(RoomError::Unauthorized)?;
         if !matches!(
             room.phase,
             RoomPhase::WaitingForOpponent | RoomPhase::WaitingForReady
@@ -367,6 +375,37 @@ impl RoomService {
         self.rooms
             .get_mut(&normalize_code(code))
             .ok_or(RoomError::NotFound)
+    }
+
+    fn authenticate(&mut self, code: &str, token: &str) -> Result<Player, RoomError> {
+        let now = Instant::now();
+        if let Some(window) = self.failed_token_attempts.get_mut(code) {
+            if now.duration_since(window.started) >= TOKEN_ATTEMPT_WINDOW {
+                *window = FailedTokenWindow {
+                    started: now,
+                    attempts: 0,
+                };
+            } else if window.attempts >= MAX_INVALID_TOKEN_ATTEMPTS {
+                return Err(RoomError::RateLimited);
+            }
+        }
+        if let Some(player) = self
+            .rooms
+            .get(code)
+            .and_then(|room| room.player_for_token(token))
+        {
+            self.failed_token_attempts.remove(code);
+            return Ok(player);
+        }
+        let window =
+            self.failed_token_attempts
+                .entry(code.to_owned())
+                .or_insert(FailedTokenWindow {
+                    started: now,
+                    attempts: 0,
+                });
+        window.attempts = window.attempts.saturating_add(1);
+        Err(RoomError::Unauthorized)
     }
 
     fn allocate_code(&mut self) -> Result<String, RoomError> {
@@ -400,6 +439,25 @@ fn code_from_uuid(uuid: Uuid, seed: u64) -> String {
         .collect()
 }
 
+fn issue_token() -> String {
+    (0..TOKEN_PARTS)
+        .map(|_| Uuid::new_v4().simple().to_string())
+        .collect()
+}
+
+fn hash_token(token: &str) -> TokenHash {
+    TokenHash(Sha256::digest(token.as_bytes()).into())
+}
+
+fn constant_time_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
+}
+
 #[cfg(test)]
 mod tests {
     use crownline_core::state::{MatchOutcome, OutcomeReason};
@@ -430,6 +488,7 @@ mod tests {
     fn create_join_and_ready_starts_validated_scenario_and_clocks_once() {
         let mut service = RoomService::new(ScenarioCatalog::installed());
         let created = service.create(create_request()).unwrap();
+        let host_token = created.response.reconnect_token.expose().to_owned();
         assert_eq!(
             created.response.room_code.len(),
             crownline_protocol::ROOM_CODE_CHARS
@@ -444,8 +503,9 @@ mod tests {
         let joined = service
             .join(join_request(&created.response.room_code))
             .unwrap();
+        let guest_token = joined.response.reconnect_token.expose().to_owned();
         assert_eq!(
-            service.ready(&created.response.room_code, created.seat_key),
+            service.ready(&created.response.room_code, &host_token),
             Ok(RoomPhase::WaitingForReady)
         );
         assert!(
@@ -456,7 +516,7 @@ mod tests {
                 .is_none()
         );
         assert_eq!(
-            service.ready(&created.response.room_code, joined.seat_key),
+            service.ready(&created.response.room_code, &guest_token),
             Ok(RoomPhase::Playing)
         );
         let room = service.room(&created.response.room_code).unwrap();
@@ -473,9 +533,11 @@ mod tests {
     fn full_room_and_wrong_seat_credentials_cannot_join_or_ready() {
         let mut service = RoomService::new(ScenarioCatalog::installed());
         let created = service.create(create_request()).unwrap();
+        let host_token = created.response.reconnect_token.expose().to_owned();
         let joined = service
             .join(join_request(&created.response.room_code))
             .unwrap();
+        let guest_token = joined.response.reconnect_token.expose().to_owned();
         assert_eq!(
             service
                 .join(join_request(&created.response.room_code))
@@ -483,31 +545,34 @@ mod tests {
             RoomError::Full
         );
         assert_eq!(
-            service.ready(&created.response.room_code, SeatKey::new()),
+            service.ready(&created.response.room_code, "invalid-token"),
             Err(RoomError::Unauthorized)
         );
-        assert_ne!(created.seat_key, joined.seat_key);
+        assert_ne!(host_token, guest_token);
     }
 
     #[test]
     fn lobby_leave_and_terminal_rematch_are_deterministic() {
         let mut service = RoomService::new(ScenarioCatalog::installed());
         let created = service.create(create_request()).unwrap();
+        let host_token = created.response.reconnect_token.expose().to_owned();
         let joined = service
             .join(join_request(&created.response.room_code))
             .unwrap();
+        let first_guest_token = joined.response.reconnect_token.expose().to_owned();
         assert_eq!(
-            service.leave_lobby(&created.response.room_code, joined.seat_key),
+            service.leave_lobby(&created.response.room_code, &first_guest_token),
             Ok(false)
         );
         let joined = service
             .join(join_request(&created.response.room_code))
             .unwrap();
+        let guest_token = joined.response.reconnect_token.expose().to_owned();
         service
-            .ready(&created.response.room_code, created.seat_key)
+            .ready(&created.response.room_code, &host_token)
             .unwrap();
         service
-            .ready(&created.response.room_code, joined.seat_key)
+            .ready(&created.response.room_code, &guest_token)
             .unwrap();
         let old_match = service.room(&created.response.room_code).unwrap().match_id;
         service
@@ -522,11 +587,11 @@ mod tests {
         });
         service.mark_finished(&created.response.room_code).unwrap();
         assert_eq!(
-            service.accept_rematch(&created.response.room_code, created.seat_key),
+            service.accept_rematch(&created.response.room_code, &host_token),
             Ok(RoomPhase::Finished)
         );
         assert_eq!(
-            service.accept_rematch(&created.response.room_code, joined.seat_key),
+            service.accept_rematch(&created.response.room_code, &guest_token),
             Ok(RoomPhase::Playing)
         );
         let room = service.room(&created.response.room_code).unwrap();
@@ -548,6 +613,52 @@ mod tests {
         assert_eq!(
             service.create(request).unwrap_err(),
             RoomError::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn issued_tokens_are_distinct_high_entropy_and_redacted_at_rest() {
+        let mut service = RoomService::new(ScenarioCatalog::installed());
+        let created = service.create(create_request()).unwrap();
+        let joined = service
+            .join(join_request(&created.response.room_code))
+            .unwrap();
+        let host_token = created.response.reconnect_token.expose();
+        let guest_token = joined.response.reconnect_token.expose();
+        assert_eq!(host_token.len(), TOKEN_PARTS * 32);
+        assert_eq!(guest_token.len(), TOKEN_PARTS * 32);
+        assert_ne!(host_token, guest_token);
+        assert_eq!(
+            format!("{:?}", created.response.reconnect_token),
+            "ReconnectToken([REDACTED])"
+        );
+        let stored = format!("{:?}", service.room(&created.response.room_code).unwrap());
+        assert!(!stored.contains(host_token));
+        assert!(!stored.contains(guest_token));
+        assert!(stored.contains("TokenHash([REDACTED])"));
+    }
+
+    #[test]
+    fn invalid_tokens_are_indistinguishable_and_rate_limited_per_room_locator() {
+        let mut service = RoomService::new(ScenarioCatalog::installed());
+        let created = service.create(create_request()).unwrap();
+        assert_eq!(
+            service.ready(&created.response.room_code, "wrong"),
+            Err(RoomError::Unauthorized)
+        );
+        assert_eq!(
+            service.ready("ZZZZZZ", "wrong"),
+            Err(RoomError::Unauthorized)
+        );
+        for _ in 1..MAX_INVALID_TOKEN_ATTEMPTS {
+            assert_eq!(
+                service.ready(&created.response.room_code, "wrong"),
+                Err(RoomError::Unauthorized)
+            );
+        }
+        assert_eq!(
+            service.ready(&created.response.room_code, "wrong"),
+            Err(RoomError::RateLimited)
         );
     }
 }

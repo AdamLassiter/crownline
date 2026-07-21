@@ -93,6 +93,11 @@ fn http_error(error: RoomError) -> HttpError {
             ErrorCode::Internal,
             "A room code is temporarily unavailable.",
         ),
+        RoomError::RateLimited => (
+            StatusCode::TOO_MANY_REQUESTS,
+            ErrorCode::RateLimited,
+            "Too many credential attempts.",
+        ),
     };
     (
         status,
