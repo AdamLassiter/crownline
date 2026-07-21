@@ -4,7 +4,7 @@ Host private-room matches with server-authoritative rules, clocks, durable state
 
 ## Status
 
-- [ ] In progress
+- [x] Done
 
 ## Implementation notes
 
@@ -17,6 +17,7 @@ Host private-room matches with server-authoritative rules, clocks, durable state
 - Task 08.03.03 completes the live authority path with authenticated WebSockets, durable commit-before-broadcast ordering, bounded snapshot/event delivery, reconnect state, and terminal rematch synchronization.
 - Task 08.04.01 establishes migration-controlled SQLite storage with explicit durability, bounded data, hashed-seat records, and revision/snapshot/action integrity constraints.
 - Task 08.04.02 adds atomic snapshot/journal/deadline commits, startup replay validation, isolated quarantine, restart-equivalent clocks, and WAL-safe operator recovery procedures.
+- Task 08.04.03 completes production operations with a non-root multi-stage container, persistent volume, split liveness/readiness, bounded signal drain, deployment/upgrade documentation, and release vulnerability scanning.
 
 ## Stories
 

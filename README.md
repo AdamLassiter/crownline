@@ -36,5 +36,11 @@ Start the desktop shell with `cargo run -p crownline`. Start the server with
 Override that with `CROWNLINE_BIND`, select `CROWNLINE_LOG_FORMAT=json` for JSON
 logs, and use `RUST_LOG` for filtering.
 
+Build and run the production container with `docker compose up --build`. The
+example binds only `127.0.0.1:5000`; place a TLS-terminating reverse proxy in
+front before publishing it. Runtime configuration, health probes, volume
+ownership, backup, graceful shutdown, and upgrade steps are documented in the
+operations guide.
+
 Database durability, backup, and restore procedures are documented in
 [docs/server-operations.md](docs/server-operations.md).

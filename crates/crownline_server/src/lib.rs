@@ -128,6 +128,8 @@ fn app_with_repository(
     };
     Ok(Router::new()
         .route("/health", get(health))
+        .route("/health/live", get(health_live))
+        .route("/health/ready", get(health))
         .route("/rooms", post(create_room))
         .route("/rooms/join", post(join_room))
         .route("/ws", get(websocket_upgrade))
@@ -171,11 +173,49 @@ async fn websocket_upgrade(
         })
 }
 
-async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse {
+async fn health_live() -> Json<HealthResponse> {
+    Json(health_response(
+        ServiceStatus::Ok,
+        ServiceStatus::NotChecked,
+    ))
+}
+
+async fn health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let repository = Arc::clone(&state.repository);
+    let database = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        tokio::task::spawn_blocking(move || {
+            repository
+                .lock()
+                .ok()
+                .and_then(|repository| repository.database().is_ready().ok())
+                .unwrap_or(false)
+        }),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or(false);
+    let status = if database {
+        ServiceStatus::Ok
+    } else {
+        ServiceStatus::Degraded
+    };
+    let http_status = if database {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (http_status, Json(health_response(status, status)))
+}
+
+const fn health_response(status: ServiceStatus, database: ServiceStatus) -> HealthResponse {
+    HealthResponse {
         protocol_version: PROTOCOL_VERSION,
-        status: ServiceStatus::Ok,
-    })
+        status,
+        liveness: ServiceStatus::Ok,
+        database,
+    }
 }
 
 async fn create_room(

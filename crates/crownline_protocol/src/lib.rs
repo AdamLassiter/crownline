@@ -29,6 +29,8 @@ pub struct HealthRequest {
 pub struct HealthResponse {
     pub protocol_version: u16,
     pub status: ServiceStatus,
+    pub liveness: ServiceStatus,
+    pub database: ServiceStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +38,7 @@ pub struct HealthResponse {
 pub enum ServiceStatus {
     Ok,
     Degraded,
+    NotChecked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -550,6 +553,18 @@ mod tests {
 
     #[test]
     fn example_http_json_round_trips_and_validates_limits() {
+        let health = HealthResponse {
+            protocol_version: PROTOCOL_VERSION,
+            status: ServiceStatus::Ok,
+            liveness: ServiceStatus::Ok,
+            database: ServiceStatus::NotChecked,
+        };
+        assert_eq!(
+            serde_json::from_str::<HealthResponse>(&serde_json::to_string(&health).unwrap())
+                .unwrap(),
+            health
+        );
+
         let create = CreateRoomRequest {
             protocol_version: PROTOCOL_VERSION,
             player_name: "Ada".to_owned(),

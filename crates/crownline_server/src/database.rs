@@ -65,6 +65,19 @@ impl Database {
         )?)
     }
 
+    /// Verifies that the connection responds and the expected schema is present.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `SQLite` error when the readiness query cannot complete.
+    pub fn is_ready(&self) -> Result<bool, DatabaseError> {
+        let version = self.schema_version()?;
+        let result: String = self
+            .connection
+            .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
+        Ok(version == CURRENT_SCHEMA_VERSION && result == "ok")
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.connection
     }
@@ -233,6 +246,7 @@ mod tests {
         {
             let mut database = Database::open(&path, Durability::Full).unwrap();
             assert_eq!(database.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+            assert!(database.is_ready().unwrap());
             database.migrate().unwrap();
             let migrations: i64 = database
                 .connection()
@@ -325,5 +339,6 @@ mod tests {
                 .unwrap(),
             3
         );
+        assert!(!database.is_ready().unwrap());
     }
 }
