@@ -3,6 +3,7 @@ mod help;
 mod lifecycle;
 mod local_interaction;
 mod local_persistence;
+mod online_connection;
 mod online_lobby;
 mod panels;
 mod rendering;
@@ -13,6 +14,7 @@ use help::RulesHelpPlugin;
 use lifecycle::LocalLifecyclePlugin;
 use local_interaction::LocalInteractionPlugin;
 use local_persistence::LocalPersistencePlugin;
+use online_connection::OnlineConnectionPlugin;
 use online_lobby::OnlineLobbyPlugin;
 use panels::InformationPanelsPlugin;
 use rendering::{BoardRenderingPlugin, CameraControlPlugin};
@@ -40,6 +42,7 @@ fn main() {
         .add_plugins(RulesHelpPlugin)
         .add_plugins(LocalLifecyclePlugin)
         .add_plugins(OnlineLobbyPlugin)
+        .add_plugins(OnlineConnectionPlugin)
         .add_plugins(LocalPersistencePlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)

@@ -28,7 +28,7 @@ const NETWORK_QUEUE_CAPACITY: usize = 1;
 const MAX_HTTP_RESPONSE_BYTES: usize = MAX_HTTP_REQUEST_BYTES * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum LobbyScreen {
+pub(crate) enum LobbyScreen {
     #[default]
     Closed,
     Menu,
@@ -53,16 +53,16 @@ impl OnlineSeat {
 
 #[derive(Resource)]
 pub(crate) struct OnlineLobby {
-    screen: LobbyScreen,
-    server_url: String,
+    pub(crate) screen: LobbyScreen,
+    pub(crate) server_url: String,
     player_name: String,
     room_code: String,
     selected_scenario: usize,
     clock: Option<ClockSettings>,
     share_server_address: bool,
     request_pending: bool,
-    ready_requested: bool,
-    status: String,
+    pub(crate) ready_requested: bool,
+    pub(crate) status: String,
     pub(crate) seat: Option<OnlineSeat>,
 }
 

@@ -1,9 +1,15 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write as _,
+    path::PathBuf,
+};
 
 use bevy::prelude::Resource;
+use crownline_core::scenario::Player;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 const SETTINGS_FILE: &str = "settings.ron";
 
@@ -16,6 +22,16 @@ pub struct ClientSettings {
     pub server_url: String,
     pub reduced_motion: bool,
     pub camera_bindings: CameraBindingsSettings,
+    pub saved_online_seat: Option<SavedOnlineSeat>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SavedOnlineSeat {
+    pub server_url: String,
+    pub room_code: String,
+    pub match_id: Uuid,
+    pub seat: Player,
+    pub credential_id: Uuid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +87,7 @@ impl Default for ClientSettings {
             server_url: "ws://127.0.0.1:5000".to_owned(),
             reduced_motion: false,
             camera_bindings: CameraBindingsSettings::default(),
+            saved_online_seat: None,
         }
     }
 }
@@ -101,6 +118,41 @@ impl ClientSettings {
         })?;
         settings.validate()?;
         Ok(settings)
+    }
+
+    pub fn save(&self) -> Result<(), SettingsError> {
+        self.validate()?;
+        let path = settings_path()?;
+        let parent = path.parent().ok_or(SettingsError::NoProjectDirectory)?;
+        fs::create_dir_all(parent).map_err(|error| SettingsError::Write {
+            path: path.clone(),
+            error,
+        })?;
+        let source = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .map_err(|error| SettingsError::Serialize(error.to_string()))?;
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&path).map_err(|error| SettingsError::Write {
+            path: path.clone(),
+            error,
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|error| SettingsError::Write {
+                    path: path.clone(),
+                    error,
+                })?;
+        }
+        file.write_all(source.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| SettingsError::Write { path, error })
     }
 
     fn validate(&self) -> Result<(), SettingsError> {
@@ -149,6 +201,14 @@ pub enum SettingsError {
         path: PathBuf,
         #[source]
         error: ron::error::SpannedError,
+    },
+    #[error("could not serialize client settings: {0}")]
+    Serialize(String),
+    #[error("could not write settings at {path}: {error}")]
+    Write {
+        path: PathBuf,
+        #[source]
+        error: std::io::Error,
     },
     #[error("invalid client setting: {0}")]
     InvalidField(&'static str),

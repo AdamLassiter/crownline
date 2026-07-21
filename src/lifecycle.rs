@@ -20,6 +20,7 @@ pub(crate) enum ClientFlow {
     #[default]
     Setup,
     OnlineLobby,
+    OnlinePlaying,
     Playing,
     Paused,
     ConfirmResign,
@@ -237,7 +238,7 @@ fn handle_lifecycle_input(
                 }
             }
         }
-        ClientFlow::OnlineLobby => {}
+        ClientFlow::OnlineLobby | ClientFlow::OnlinePlaying => {}
         ClientFlow::Playing => {
             if game.state.outcome.is_some() {
                 *flow = ClientFlow::Outcome;
