@@ -1,8 +1,17 @@
 use bevy::prelude::*;
-use crownline_core::scenario::{Coord, ScenarioDefinition, TileTerrain};
+use std::collections::BTreeSet;
+
+use crownline_core::{
+    scenario::{Coord, PieceKind, Player, ScenarioDefinition, TileTerrain},
+    state::{MatchState, Piece, PieceId},
+};
+
+use crate::ChessFontText;
 
 pub const TILE_SIZE: f32 = 32.0;
 const TILE_Z: f32 = 0.0;
+const PIECE_Z: f32 = 2.0;
+const PIECE_FONT_SIZE: f32 = 26.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub enum TileParity {
@@ -71,21 +80,151 @@ impl BoardPalette {
 #[derive(Component)]
 struct BoardRoot;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+pub struct PieceVisual {
+    pub id: PieceId,
+    pub kind: PieceKind,
+    pub owner: Player,
+}
+
+#[derive(Component)]
+struct PieceBackplate;
+
+#[derive(Resource)]
+struct DisplayedGame {
+    scenario: ScenarioDefinition,
+    state: MatchState,
+}
+
+#[derive(Resource)]
+struct ChessPieceFont(Handle<Font>);
+
 pub struct BoardRenderingPlugin;
 
 impl Plugin for BoardRenderingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BoardPalette>()
-            .add_systems(Startup, spawn_default_board);
+            .add_systems(Startup, spawn_default_board)
+            .add_systems(Update, sync_piece_visuals);
     }
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn spawn_default_board(mut commands: Commands, palette: Res<BoardPalette>) {
+fn spawn_default_board(
+    mut commands: Commands,
+    palette: Res<BoardPalette>,
+    asset_server: Option<Res<AssetServer>>,
+) {
     let scenario: ScenarioDefinition =
         ron::from_str(include_str!("../assets/scenarios/standard.ron"))
             .expect("bundled standard scenario must pass build-time fixture tests");
+    let state = MatchState::from_scenario(&scenario)
+        .expect("bundled standard scenario must construct canonical state");
+    let font = asset_server.map_or_else(Handle::default, |assets| {
+        assets.load("fonts/NotoSansSymbols2-Regular.ttf")
+    });
     spawn_board(&mut commands, &palette, &scenario);
+    for piece in state.pieces.values() {
+        spawn_piece(&mut commands, &font, &scenario, piece);
+    }
+    commands.insert_resource(ChessPieceFont(font));
+    commands.insert_resource(DisplayedGame { scenario, state });
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn sync_piece_visuals(
+    mut commands: Commands,
+    game: Res<DisplayedGame>,
+    font: Res<ChessPieceFont>,
+    mut visuals: Query<(Entity, &mut PieceVisual, &mut Transform)>,
+) {
+    let mut existing = BTreeSet::new();
+    for (entity, visual, mut transform) in &mut visuals {
+        let Some(piece) = game.state.pieces.get(&visual.id) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if piece.kind != visual.kind || piece.owner != visual.owner {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let [x, y] = tile_position(piece.at, &game.scenario);
+        transform.translation = Vec3::new(x, y, PIECE_Z);
+        existing.insert(piece.id);
+    }
+    for piece in game
+        .state
+        .pieces
+        .values()
+        .filter(|piece| !existing.contains(&piece.id))
+    {
+        spawn_piece(&mut commands, &font.0, &game.scenario, piece);
+    }
+}
+
+fn spawn_piece(
+    commands: &mut Commands,
+    font: &Handle<Font>,
+    scenario: &ScenarioDefinition,
+    piece: &Piece,
+) {
+    let [x, y] = tile_position(piece.at, scenario);
+    let (text, backplate, rotation) = player_piece_style(piece.owner);
+    commands
+        .spawn((
+            PieceVisual {
+                id: piece.id,
+                kind: piece.kind,
+                owner: piece.owner,
+            },
+            Transform::from_xyz(x, y, PIECE_Z),
+            Visibility::default(),
+        ))
+        .with_children(|visual| {
+            visual.spawn((
+                Sprite::from_color(backplate, Vec2::splat(TILE_SIZE * 0.72)),
+                Transform::from_rotation(rotation),
+                PieceBackplate,
+            ));
+            visual.spawn((
+                Text2d::new(piece_glyph(piece.kind)),
+                TextFont {
+                    font: FontSource::Handle(font.clone()),
+                    font_size: FontSize::Px(PIECE_FONT_SIZE),
+                    ..default()
+                },
+                TextColor(text),
+                TextLayout::justify(Justify::Center),
+                Transform::from_xyz(0.0, 0.0, 1.0),
+                ChessFontText,
+            ));
+        });
+}
+
+fn player_piece_style(player: Player) -> (Color, Color, Quat) {
+    match player {
+        Player::North => (
+            Color::srgb(0.94, 0.97, 1.0),
+            Color::srgba(0.04, 0.09, 0.18, 0.88),
+            Quat::IDENTITY,
+        ),
+        Player::South => (
+            Color::srgb(0.12, 0.07, 0.03),
+            Color::srgba(0.94, 0.72, 0.25, 0.9),
+            Quat::from_rotation_z(std::f32::consts::FRAC_PI_4),
+        ),
+    }
+}
+
+const fn piece_glyph(kind: PieceKind) -> &'static str {
+    match kind {
+        PieceKind::King => "♔",
+        PieceKind::Queen => "♕",
+        PieceKind::Rook => "♖",
+        PieceKind::Bishop => "♗",
+        PieceKind::Knight => "♘",
+        PieceKind::Pawn => "♙",
+    }
 }
 
 fn spawn_board(commands: &mut Commands, palette: &BoardPalette, scenario: &ScenarioDefinition) {
@@ -204,5 +343,91 @@ mod tests {
             );
         }
         assert_eq!(count, 20 * 20);
+    }
+
+    #[test]
+    fn piece_kinds_use_the_unfilled_unicode_silhouette_range() {
+        assert_eq!(piece_glyph(PieceKind::King), "♔");
+        assert_eq!(piece_glyph(PieceKind::Queen), "♕");
+        assert_eq!(piece_glyph(PieceKind::Rook), "♖");
+        assert_eq!(piece_glyph(PieceKind::Bishop), "♗");
+        assert_eq!(piece_glyph(PieceKind::Knight), "♘");
+        assert_eq!(piece_glyph(PieceKind::Pawn), "♙");
+    }
+
+    #[test]
+    fn default_pieces_spawn_once_and_follow_stable_ids() {
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+
+        let (entity, piece_id) = {
+            let world = app.world_mut();
+            let mut visuals = world.query::<(Entity, &PieceVisual)>();
+            let all: Vec<_> = visuals
+                .iter(world)
+                .map(|(entity, visual)| (entity, visual.id))
+                .collect();
+            assert_eq!(all.len(), 32);
+            assert_eq!(
+                all.iter().map(|(_, id)| *id).collect::<BTreeSet<_>>().len(),
+                32
+            );
+            all[0]
+        };
+
+        let destination = Coord::new(0, 10);
+        app.world_mut()
+            .resource_mut::<DisplayedGame>()
+            .state
+            .pieces
+            .get_mut(&piece_id)
+            .unwrap()
+            .at = destination;
+        app.update();
+
+        let game = app.world().resource::<DisplayedGame>();
+        let expected = tile_position(destination, &game.scenario);
+        let transform = app.world().entity(entity).get::<Transform>().unwrap();
+        assert!((transform.translation.x - expected[0]).abs() < f32::EPSILON);
+        assert!((transform.translation.y - expected[1]).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn promotion_replaces_only_the_retired_stable_piece_id() {
+        use crownline_core::state::PieceOrigin;
+
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        let retired = {
+            let world = app.world_mut();
+            let mut visuals = world.query::<&PieceVisual>();
+            visuals.iter(world).next().unwrap().id
+        };
+        let promoted = PieceId(10_000);
+        {
+            let mut game = app.world_mut().resource_mut::<DisplayedGame>();
+            let pawn = game.state.pieces.remove(&retired).unwrap();
+            game.state.pieces.insert(
+                promoted,
+                Piece {
+                    id: promoted,
+                    owner: pawn.owner,
+                    kind: PieceKind::Queen,
+                    at: pawn.at,
+                    origin: PieceOrigin::Promoted { from: retired },
+                    has_moved: true,
+                },
+            );
+        }
+        app.update();
+
+        let world = app.world_mut();
+        let mut visuals = world.query::<&PieceVisual>();
+        let ids: BTreeSet<_> = visuals.iter(world).map(|visual| visual.id).collect();
+        assert_eq!(ids.len(), 32);
+        assert!(!ids.contains(&retired));
+        assert!(ids.contains(&promoted));
     }
 }

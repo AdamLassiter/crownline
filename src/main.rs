@@ -28,7 +28,7 @@ fn main() {
 }
 
 #[derive(Component)]
-struct ChessFontText;
+pub(crate) struct ChessFontText;
 
 #[derive(Component)]
 struct FontFallbackText;
@@ -43,18 +43,6 @@ struct ChessFontStatus {
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(Camera2d);
     let chess_font = asset_server.load("fonts/NotoSansSymbols2-Regular.ttf");
-    commands.spawn((
-        Text2d::new("CROWNLINES\n♔ ♕ ♖ ♗ ♘ ♙"),
-        TextFont {
-            font: FontSource::Handle(chess_font.clone()),
-            font_size: FontSize::Px(64.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.88, 0.72, 0.25)),
-        TextLayout::justify(Justify::Center),
-        Transform::from_xyz(0.0, 0.0, 10.0),
-        ChessFontText,
-    ));
     commands.spawn((
         Text2d::new(
             "CROWNLINES\nChess font could not be loaded.\nCheck the assets/fonts installation.",
@@ -85,20 +73,21 @@ fn monitor_chess_font(
         Option<&FontFallbackText>,
     )>,
 ) {
-    if status.fallback_active
-        || !matches!(
-            asset_server.load_state(status.handle.id()),
-            LoadState::Failed(_)
-        )
-    {
+    if !matches!(
+        asset_server.load_state(status.handle.id()),
+        LoadState::Failed(_)
+    ) {
         return;
     }
 
+    let first_failure = !status.fallback_active;
     status.fallback_active = true;
     for (mut visibility, chess, fallback) in &mut text {
         *visibility = font_visibility(true, chess.is_some(), fallback.is_some());
     }
-    error!("bundled chess font failed to load; showing readable fallback");
+    if first_failure {
+        error!("bundled chess font failed to load; showing readable fallback");
+    }
 }
 
 fn font_visibility(load_failed: bool, chess_text: bool, fallback_text: bool) -> Visibility {
