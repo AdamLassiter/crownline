@@ -2185,6 +2185,7 @@ name = "crownline_protocol"
 version = "0.1.0"
 dependencies = [
  "crownline_core",
+ "ron 0.10.1",
  "serde",
  "serde_json",
  "thiserror 2.0.19",

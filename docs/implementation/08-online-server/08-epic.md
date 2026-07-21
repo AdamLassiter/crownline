@@ -9,6 +9,7 @@ Host private-room matches with server-authoritative rules, clocks, durable state
 ## Implementation notes
 
 - Task 08.01.01 establishes the bounded, versioned room and match wire-message contract with typed validation and stable public errors.
+- Task 08.01.02 completes the synchronization contract with authoritative snapshots, revision checks, and bounded idempotent mutation results.
 
 ## Stories
 
