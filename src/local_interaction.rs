@@ -7,6 +7,7 @@ use crownline_core::{
 
 use crate::{
     ChessFontText,
+    lifecycle::ClientFlow,
     rendering::{
         ChessPieceFont, DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue,
         OverlaySelection, PointerCapture, coordinates::BoardGeometry,
@@ -116,7 +117,12 @@ fn handle_board_input(
     mut selection: ResMut<OverlaySelection>,
     mut interaction: ResMut<BoardInteraction>,
     mut transitions: ResMut<LocalTransitionEventQueue>,
+    flow: Option<Res<ClientFlow>>,
 ) {
+    if flow.is_some_and(|flow| *flow != ClientFlow::Playing) {
+        selection.piece = None;
+        return;
+    }
     if interaction.observed_revision != Some(game.state.revision) {
         selection.piece = None;
         interaction.observed_revision = Some(game.state.revision);

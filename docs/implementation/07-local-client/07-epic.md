@@ -13,6 +13,7 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 - Focused promotion and produced-Pawn placement controls, forced queue resolution, and choice-time clock labels are complete in Task 07.01.03.
 - Responsive, collapsible match, recent-history, and settlement information panels are complete in Task 07.02.01.
 - Scenario-aware rules help, complete visual legends, and state-preserving context links are complete in Task 07.02.02.
+- Keyboard-driven local setup, scenario switching, pause/settings, match controls, outcomes, and fresh rematches are complete in Task 07.03.01.
 
 ## Stories
 

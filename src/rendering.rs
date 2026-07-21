@@ -102,6 +102,12 @@ impl BoardPalette {
 #[derive(Component)]
 struct BoardRoot;
 
+#[derive(Component)]
+pub(super) struct ScenarioVisual;
+
+#[derive(Resource)]
+struct RenderedScenarioId(String);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
 pub struct PieceVisual {
     pub id: PieceId,
@@ -151,6 +157,7 @@ impl Plugin for BoardRenderingPlugin {
             .add_systems(
                 Update,
                 (
+                    rebuild_changed_scenario,
                     sync_piece_visuals,
                     sync_settlement_visuals,
                     update_hovered_square,
@@ -195,9 +202,48 @@ fn spawn_default_board(
     for piece in state.pieces.values() {
         spawn_piece(&mut commands, &font, &scenario, piece);
     }
+    let scenario_id = scenario.id.clone();
     commands.insert_resource(ChessPieceFont(font));
     commands.insert_resource(DisplayedGame { scenario, state });
     commands.insert_resource(geometry);
+    commands.insert_resource(RenderedScenarioId(scenario_id));
+}
+
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+fn rebuild_changed_scenario(
+    mut commands: Commands,
+    game: Res<DisplayedGame>,
+    palette: Res<BoardPalette>,
+    font: Res<ChessPieceFont>,
+    mut rendered: ResMut<RenderedScenarioId>,
+    mut geometry: ResMut<BoardGeometry>,
+    existing: Query<Entity, With<ScenarioVisual>>,
+) {
+    if rendered.0 == game.scenario.id {
+        return;
+    }
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    let orientation = if game
+        .scenario
+        .rules
+        .pawn_forward_y
+        .get(&Player::North)
+        .is_some_and(|direction| *direction > 0)
+    {
+        BoardOrientation::NorthAtTop
+    } else {
+        BoardOrientation::SouthAtTop
+    };
+    *geometry = BoardGeometry::new(game.scenario.board, TILE_SIZE, orientation);
+    spawn_board(&mut commands, &palette, &game.scenario);
+    spawn_coordinate_labels(&mut commands, &geometry);
+    spawn_scenario_features(&mut commands, &game.scenario, &game.state);
+    for piece in game.state.pieces.values() {
+        spawn_piece(&mut commands, &font.0, &game.scenario, piece);
+    }
+    rendered.0.clone_from(&game.scenario.id);
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -245,6 +291,7 @@ fn spawn_coordinate_labels(commands: &mut Commands, geometry: &BoardGeometry) {
             Transform::from_xyz(world.x, world.y - TILE_SIZE * 0.68, 4.0),
             Name::new(format!("coordinate {}", coordinates::coordinate_label(at))),
             CoordinateLabel,
+            ScenarioVisual,
         ));
     }
     for y in 0..geometry.board.height {
@@ -263,6 +310,7 @@ fn spawn_coordinate_labels(commands: &mut Commands, geometry: &BoardGeometry) {
             Transform::from_xyz(world.x - TILE_SIZE * 0.68, world.y, 4.0),
             Name::new(format!("coordinate {}", coordinates::coordinate_label(at))),
             CoordinateLabel,
+            ScenarioVisual,
         ));
     }
 }
@@ -323,6 +371,7 @@ fn spawn_piece(
             },
             Transform::from_xyz(x, y, PIECE_Z),
             Visibility::default(),
+            ScenarioVisual,
         ))
         .with_children(|visual| {
             visual
@@ -381,7 +430,12 @@ pub(super) const fn piece_glyph(kind: PieceKind) -> &'static str {
 
 fn spawn_board(commands: &mut Commands, palette: &BoardPalette, scenario: &ScenarioDefinition) {
     commands
-        .spawn((BoardRoot, Transform::default(), Visibility::default()))
+        .spawn((
+            BoardRoot,
+            ScenarioVisual,
+            Transform::default(),
+            Visibility::default(),
+        ))
         .with_children(|board| {
             for y in 0..scenario.board.height {
                 for x in 0..scenario.board.width {
@@ -579,5 +633,33 @@ mod tests {
         assert_eq!(ids.len(), 32);
         assert!(!ids.contains(&retired));
         assert!(ids.contains(&promoted));
+    }
+
+    #[test]
+    fn changing_scenario_rebuilds_tiles_features_and_geometry_without_stale_visuals() {
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        let scenario: ScenarioDefinition =
+            ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap();
+        let expected_tiles = usize::from(scenario.board.width) * usize::from(scenario.board.height);
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        {
+            let mut game = app.world_mut().resource_mut::<DisplayedGame>();
+            game.scenario = scenario.clone();
+            game.state = state;
+        }
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world.query::<&BoardTile>().iter(world).count(),
+            expected_tiles
+        );
+        assert_eq!(world.resource::<BoardGeometry>().board, scenario.board);
+        assert_eq!(
+            world.query::<&BoardRoot>().iter(world).count(),
+            1,
+            "old scenario root must be despawned"
+        );
     }
 }

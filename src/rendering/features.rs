@@ -6,7 +6,7 @@ use crownline_core::{
     state::{MatchState, SettlementState},
 };
 
-use super::{DisplayedGame, TILE_SIZE, tile_position};
+use super::{DisplayedGame, ScenarioVisual, TILE_SIZE, tile_position};
 
 pub(super) const KEEP_Z: f32 = 0.1;
 pub(super) const SITE_Z: f32 = 0.6;
@@ -61,6 +61,7 @@ pub(super) fn spawn_scenario_features(
                     owner: keep.owner,
                     at: *at,
                 },
+                ScenarioVisual,
             ));
         }
     }
@@ -133,6 +134,7 @@ fn spawn_settlement(
                 index: settlement.site_index,
                 owner: settlement.owner,
             },
+            ScenarioVisual,
         ))
         .with_children(|ring| {
             for offset in [-SITE_SPAN / 2.0, SITE_SPAN / 2.0] {
@@ -171,6 +173,7 @@ fn spawn_promotion_site(
             Transform::from_xyz(x, y, SITE_Z),
             Visibility::default(),
             PromotionSiteVisual { index },
+            ScenarioVisual,
         ))
         .with_children(|mark| {
             for rotation in [std::f32::consts::FRAC_PI_4, -std::f32::consts::FRAC_PI_4] {
@@ -203,6 +206,7 @@ fn spawn_fortification(
         TextLayout::justify(Justify::Center),
         Transform::from_xyz(x, y, EDGE_Z + 0.1),
         FortificationVisual { index },
+        ScenarioVisual,
     ));
 }
 
@@ -224,6 +228,7 @@ fn spawn_edge(commands: &mut Commands, scenario: &ScenarioDefinition, edge: Edge
                 EDGE_Z,
             ),
             EdgeVisual { edge, kind },
+            ScenarioVisual,
         ))
         .with_children(|barrier| {
             if let Some(label) = edge_label(kind) {
