@@ -18,8 +18,8 @@ pub use journal::{
     ActionJournal, AppendOutcome, IdempotencyKey, JournalError, JournalRecord, ReplayDivergence,
 };
 pub use persistence::{
-    AtomicSaveStorage, AtomicWriteStage, PersistenceError, SaveEnvelope, SaveReader,
-    SnapshotEnvelope, write_save_atomically,
+    AtomicSaveStorage, AtomicWriteStage, MAX_PERSISTED_BYTES, PersistenceError, SaveEnvelope,
+    SaveReader, SnapshotEnvelope, write_bytes_atomically, write_save_atomically,
 };
 pub use rules::{
     AttackLine, BlockedGovernanceLine, GovernanceBlocker, GovernanceReport, LegalMove,

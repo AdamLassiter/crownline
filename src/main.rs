@@ -2,6 +2,7 @@ mod config;
 mod help;
 mod lifecycle;
 mod local_interaction;
+mod local_persistence;
 mod panels;
 mod rendering;
 
@@ -10,6 +11,7 @@ use config::ClientSettings;
 use help::RulesHelpPlugin;
 use lifecycle::LocalLifecyclePlugin;
 use local_interaction::LocalInteractionPlugin;
+use local_persistence::LocalPersistencePlugin;
 use panels::InformationPanelsPlugin;
 use rendering::{BoardRenderingPlugin, CameraControlPlugin};
 
@@ -35,6 +37,7 @@ fn main() {
         .add_plugins(InformationPanelsPlugin)
         .add_plugins(RulesHelpPlugin)
         .add_plugins(LocalLifecyclePlugin)
+        .add_plugins(LocalPersistencePlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();

@@ -86,6 +86,10 @@ impl TransitionEventQueue {
     pub fn push_transition(&mut self, transition: &Transition) {
         self.events.extend(transition.events.iter().cloned());
     }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
 }
 
 #[derive(Resource, Default)]

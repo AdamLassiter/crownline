@@ -237,8 +237,29 @@ pub fn write_save_atomically<S: AtomicSaveStorage>(
     envelope: &SaveEnvelope,
 ) -> Result<(), PersistenceError> {
     let bytes = envelope.to_json()?;
+    write_bytes_atomically(storage, &bytes, |temporary| {
+        SaveReader::new().read(temporary).map(|_| ())
+    })
+}
+
+/// Writes arbitrary bounded host payload bytes and validates the read-back
+/// value before replacing an existing file.
+///
+/// # Errors
+///
+/// Returns the failed atomic stage or the validator's recoverable error.
+pub fn write_bytes_atomically<S, V>(
+    storage: &mut S,
+    bytes: &[u8],
+    validate: V,
+) -> Result<(), PersistenceError>
+where
+    S: AtomicSaveStorage,
+    V: FnOnce(&[u8]) -> Result<(), PersistenceError>,
+{
+    check_size(bytes)?;
     storage
-        .write_temporary(&bytes)
+        .write_temporary(bytes)
         .map_err(|message| atomic_error(AtomicWriteStage::WriteTemporary, message))?;
     let temporary = match storage.read_temporary() {
         Ok(bytes) => bytes,
@@ -247,7 +268,7 @@ pub fn write_save_atomically<S: AtomicSaveStorage>(
             return Err(atomic_error(AtomicWriteStage::ReadTemporary, message));
         }
     };
-    if let Err(error) = SaveReader::new().read(&temporary) {
+    if let Err(error) = validate(&temporary) {
         storage.discard_temporary();
         return Err(PersistenceError::TemporaryValidation(Box::new(error)));
     }

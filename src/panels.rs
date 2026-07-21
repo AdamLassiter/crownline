@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use bevy::prelude::*;
 use crownline_core::{
     governance_report, is_in_check,
@@ -8,6 +10,7 @@ use crownline_core::{
 
 use crate::{
     help::{HelpLink, HelpSection},
+    local_persistence::LocalPersistenceStatus,
     rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection, PointerCapture},
 };
 
@@ -32,6 +35,7 @@ struct PanelContentCache {
     selected: Option<PieceId>,
     history_len: usize,
     clocks: Option<ClockState>,
+    persistence_message: String,
 }
 
 impl PanelState {
@@ -292,6 +296,7 @@ fn update_panel_text(
     game: Res<DisplayedGame>,
     selection: Res<OverlaySelection>,
     history: Res<LocalTransitionNoticeLog>,
+    persistence: Option<Res<LocalPersistenceStatus>>,
     mut cache: ResMut<PanelContentCache>,
     mut texts: Query<(
         &mut Text,
@@ -300,14 +305,25 @@ fn update_panel_text(
         Option<&HistoryPanelText>,
     )>,
 ) {
+    let persistence_message = persistence
+        .as_deref()
+        .map_or("", |status| status.message.as_str());
     if cache.revision == Some(game.state.revision)
         && cache.selected == selection.piece
         && cache.history_len == history.entries.len()
         && cache.clocks == game.state.clocks
+        && cache.persistence_message == persistence_message
     {
         return;
     }
-    let match_text = match_panel_text(&game.scenario, &game.state, selection.piece);
+    let mut match_text = match_panel_text(&game.scenario, &game.state, selection.piece);
+    if let Some(status) = persistence.as_deref() {
+        let _ = write!(
+            match_text,
+            "\nSave slot {}: {}",
+            status.slot, status.message
+        );
+    }
     let settlement_text = settlement_panel_text(&game.scenario, &game.state);
     let history_text = bounded_history(&history.entries);
     for (mut text, match_marker, settlement_marker, history_marker) in &mut texts {
@@ -323,6 +339,7 @@ fn update_panel_text(
     cache.selected = selection.piece;
     cache.history_len = history.entries.len();
     cache.clocks = game.state.clocks;
+    persistence_message.clone_into(&mut cache.persistence_message);
 }
 
 #[allow(clippy::needless_pass_by_value)]

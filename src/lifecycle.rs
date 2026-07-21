@@ -29,13 +29,13 @@ pub(crate) enum ClientFlow {
 struct ScenarioCatalog(Vec<ScenarioDefinition>);
 
 #[derive(Resource)]
-struct LocalSetup {
-    selected_scenario: usize,
-    session_id: u64,
-    north_name: String,
-    south_name: String,
-    error: String,
-    clock: Option<ClockSettings>,
+pub(crate) struct LocalSetup {
+    pub(crate) selected_scenario: usize,
+    pub(crate) session_id: u64,
+    pub(crate) north_name: String,
+    pub(crate) south_name: String,
+    pub(crate) error: String,
+    pub(crate) clock: Option<ClockSettings>,
 }
 
 impl Default for LocalSetup {
@@ -52,8 +52,8 @@ impl Default for LocalSetup {
 }
 
 #[derive(Resource, Default)]
-struct LocalClockRuntime {
-    sub_millisecond_nanos: u32,
+pub(crate) struct LocalClockRuntime {
+    pub(crate) sub_millisecond_nanos: u32,
 }
 
 #[derive(Component)]

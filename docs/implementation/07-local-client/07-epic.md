@@ -4,7 +4,7 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 
 ## Status
 
-- [ ] In progress
+- [x] Done
 
 ## Implementation notes
 
@@ -15,6 +15,7 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 - Scenario-aware rules help, complete visual legends, and state-preserving context links are complete in Task 07.02.02.
 - Keyboard-driven local setup, scenario switching, pause/settings, match controls, outcomes, and fresh rematches are complete in Task 07.03.01.
 - Optional monotonic local clocks with bounded setup, pause semantics, exact expiration, and Move/Hold increment handling are complete in Task 07.03.02.
+- Atomic platform-local save slots, validated canonical restoration, pending-choice recovery, and user-facing failure guidance are complete in Task 07.03.03.
 
 ## Stories
 
