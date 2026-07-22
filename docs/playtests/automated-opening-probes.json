@@ -1,0 +1,134 @@
+[
+  {
+    "scenario_id": "introductory-crossing",
+    "scenario_hash": "40dcc81b2df40b0b0fc2a75212a392e1cdc7a7acb1b9e12865c5f927c1028bff",
+    "flank": "west",
+    "north_target_settlement": "south-crossroads",
+    "south_target_settlement": "north-homestead",
+    "first_crossing_turn": {
+      "north": 12,
+      "south": 27
+    },
+    "first_claim_turn": {
+      "north": 14,
+      "south": 24
+    },
+    "first_contact_turn": 14,
+    "immediate_mate_moves": 0,
+    "completed_plies": 27,
+    "final_turn": 28,
+    "outcome": null,
+    "final_state_hash": "6e2333b069834010b615f7938d92cf20dba26c492d531748a23e84fef1daf62d",
+    "trace_digest": "cad6a7c391fbe35028ae878516c5d8f86cb921ab864127de0837a87d6483214f"
+  },
+  {
+    "scenario_id": "introductory-crossing",
+    "scenario_hash": "40dcc81b2df40b0b0fc2a75212a392e1cdc7a7acb1b9e12865c5f927c1028bff",
+    "flank": "east",
+    "north_target_settlement": "south-homestead",
+    "south_target_settlement": "north-crossroads",
+    "first_crossing_turn": {
+      "north": 28,
+      "south": 11
+    },
+    "first_claim_turn": {
+      "north": 23,
+      "south": 13
+    },
+    "first_contact_turn": 13,
+    "immediate_mate_moves": 0,
+    "completed_plies": 28,
+    "final_turn": 29,
+    "outcome": null,
+    "final_state_hash": "ac777c57d8e30051e6a1323a14709eb042a027fc7b2ad8cb0e3744f0e6dea997",
+    "trace_digest": "f96dffebba751f7a7b804e06f839392b3bea988a7cb8f5a7d963c54dd30fe87f"
+  },
+  {
+    "scenario_id": "crownlines-standard",
+    "scenario_hash": "2eb804d4b738631214d17e291b7e3fa5d38fda1dd5d4051765d165e75bc61118",
+    "flank": "west",
+    "north_target_settlement": "south-west-market",
+    "south_target_settlement": "north-gate-town",
+    "first_crossing_turn": {
+      "north": 24,
+      "south": 61
+    },
+    "first_claim_turn": {
+      "north": 6,
+      "south": null
+    },
+    "first_contact_turn": 6,
+    "immediate_mate_moves": 0,
+    "completed_plies": 63,
+    "final_turn": 62,
+    "outcome": null,
+    "final_state_hash": "d11c41d7863630509a5892ac8face83c214da7843b36007c90b90c3388f47b8c",
+    "trace_digest": "47b072a7094c290aed3cf679376bd8328740246e17522849e947d6e98827982b"
+  },
+  {
+    "scenario_id": "crownlines-standard",
+    "scenario_hash": "2eb804d4b738631214d17e291b7e3fa5d38fda1dd5d4051765d165e75bc61118",
+    "flank": "east",
+    "north_target_settlement": "south-gate-town",
+    "south_target_settlement": "north-east-market",
+    "first_crossing_turn": {
+      "north": 62,
+      "south": 23
+    },
+    "first_claim_turn": {
+      "north": null,
+      "south": 5
+    },
+    "first_contact_turn": 5,
+    "immediate_mate_moves": 0,
+    "completed_plies": 65,
+    "final_turn": 63,
+    "outcome": null,
+    "final_state_hash": "c4b57799eef57085396c0330148caa2494e6ec6e7aee4139008a5f91c990dc22",
+    "trace_digest": "7fe3022a7d18ff5fbe8c0fbe904c2f1b634d0192adc7324cccc2ad3434dc790b"
+  },
+  {
+    "scenario_id": "three-theatres",
+    "scenario_hash": "9f67ed7f28e660ead5bbcb5be93c941e8d0692e1ed51162dfc1385b9f8e97248",
+    "flank": "west",
+    "north_target_settlement": "south-west-front",
+    "south_target_settlement": "north-west-front",
+    "first_crossing_turn": {
+      "north": 36,
+      "south": 37
+    },
+    "first_claim_turn": {
+      "north": null,
+      "south": null
+    },
+    "first_contact_turn": 36,
+    "immediate_mate_moves": 0,
+    "completed_plies": 37,
+    "final_turn": 38,
+    "outcome": null,
+    "final_state_hash": "423b28e663b8cf2188350ef6e6c3f753fead96a19f6cfc571bab6e49dfed1fbe",
+    "trace_digest": "2842090c1ff6497d3c392ad4d4681f4adcce18387445c3100a922ac5203c5e29"
+  },
+  {
+    "scenario_id": "three-theatres",
+    "scenario_hash": "9f67ed7f28e660ead5bbcb5be93c941e8d0692e1ed51162dfc1385b9f8e97248",
+    "flank": "east",
+    "north_target_settlement": "south-east-front",
+    "south_target_settlement": "north-east-front",
+    "first_crossing_turn": {
+      "north": 36,
+      "south": 37
+    },
+    "first_claim_turn": {
+      "north": null,
+      "south": null
+    },
+    "first_contact_turn": 36,
+    "immediate_mate_moves": 0,
+    "completed_plies": 37,
+    "final_turn": 38,
+    "outcome": null,
+    "final_state_hash": "ed5d4a5bbb7b04476a232fe477e31b591c5d236959c50cb2a526573e3c9a8b08",
+    "trace_digest": "264cee903567c1f02036f70230e63512bacb52e1c1ce16a31d17cf1dba2fefde"
+  }
+]

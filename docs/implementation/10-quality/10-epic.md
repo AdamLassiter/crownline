@@ -16,6 +16,7 @@ Prove rules correctness, online durability, UI readability, map balance, and max
 - Story 10.04 completes performance evidence with a scheduled multi-room server soak that crosses the bounded event window, exercises reconnect and invalid input, accounts for WAL persistence growth, restores an online backup, and verifies recovered canonical hashes and cleanup RSS.
 - Task 10.03.02 establishes reproducible accessibility evidence for non-hue semantics, complete keyboard paths, configured UI scaling and scroll bounds, common resolutions, and reduced-motion ordered feedback.
 - Task 10.03.00 establishes explicit, name-free local playtest capture with canonical traces, required quantitative metrics, qualitative prototype prompts, side-swapped pairing, and hypothesis/follow-up tuning discipline without telemetry.
+- Task 10.03.03 archives deterministic West/East opening probes for every shipped scenario, with canonical evidence for bounded crossings, objective interaction, and immediate-mate prevention while retaining human playtests as a separate release gate.
 
 ## Stories
 
