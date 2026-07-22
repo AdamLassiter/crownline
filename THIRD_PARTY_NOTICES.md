@@ -14,6 +14,16 @@ The desktop archive bundles `assets/fonts/NotoSansSymbols2-Regular.ttf`.
 - Upstream and file checksum: `assets/fonts/README.md`.
 - Complete license text: `assets/fonts/OFL.txt`.
 
+## Fira Mono subset
+
+The desktop executable embeds Bevy's minimal Fira Mono subset as the default UI
+font.
+
+- Copyright The Mozilla Foundation and Telefonica S.A.
+- Licensed under the SIL Open Font License, Version 1.1.
+- The complete SIL Open Font License text is distributed at
+  `assets/fonts/OFL.txt`.
+
 Project source is offered under either `LICENSE-MIT` or `LICENSE-APACHE` at the
 recipient's option. This notice does not replace the license text distributed
 with any component.

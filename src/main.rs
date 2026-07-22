@@ -217,4 +217,20 @@ mod tests {
         assert!(line.contains("revision"));
         assert!(window_title().contains(env!("CARGO_PKG_VERSION")));
     }
+
+    #[test]
+    fn startup_ui_has_an_embedded_default_font() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            bevy::text::TextPlugin,
+        ));
+
+        let fonts = app.world().resource::<Assets<Font>>();
+        assert!(
+            fonts.contains(bevy::asset::AssetId::default()),
+            "default TextFont handles render nothing without Bevy's default_font feature"
+        );
+    }
 }

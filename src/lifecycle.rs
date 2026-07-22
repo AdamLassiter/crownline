@@ -527,8 +527,17 @@ mod tests {
             .add_plugins(LocalLifecyclePlugin);
         app.update();
         let world = app.world_mut();
-        let mut roots = world.query_filtered::<&Node, With<SetupRoot>>();
-        assert_eq!(roots.single(world).unwrap().overflow, Overflow::scroll_y());
+        let mut roots = world.query_filtered::<(&Node, &Visibility), With<SetupRoot>>();
+        let (node, visibility) = roots.single(world).unwrap();
+        assert_eq!(node.overflow, Overflow::scroll_y());
+        assert_eq!(*visibility, Visibility::Visible);
+
+        let mut text = world.query_filtered::<&Text, With<LifecycleText>>();
+        assert!(text.iter(world).any(|text| {
+            text.0.contains("LOCAL SETUP")
+                && text.0.contains("F2 local start")
+                && text.0.contains("F3 online")
+        }));
     }
 
     #[test]
