@@ -10,6 +10,7 @@ Package, document, verify, and distribute the cross-platform client and containe
 
 - Task 11.01.02 completes provider-neutral server operations documentation and connects its backup/restore procedure to the scheduled multi-room soak evidence.
 - Task 11.03.01 establishes the conservative independent-version compatibility matrix, actionable mismatch behavior, migration fixture rules, and backup-based database rollback policy.
+- Story 11.01 completes player/operator documentation, including quick starts, rules and scenario defaults, requirements/exclusions, accessibility, privacy, persistent operations, backup/recovery, and compatibility.
 
 ## Stories
 
