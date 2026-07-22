@@ -27,9 +27,11 @@ The game cannot even be tested in this state, let alone released and played.
 
 ## Resolution
 
-- Enabled Bevy's `default_font` feature while retaining the project's explicit minimal feature set. Bevy now registers its embedded Fira Mono subset at the default font asset ID used by menu, panel, help, status, and coordinate text.
-- Added a headless regression that constructs the asset and text plugins and proves the default font asset is actually registered; omitting the feature makes this test fail.
-- Recorded the embedded font and its SIL Open Font License attribution in the notices shipped with desktop archives.
+- The first fix in commit `0bf219c` was insufficient: Bevy's `2d` and `ui` feature groups already enabled the default font transitively, so making it explicit did not change rendering. The font invariant test and required Fira Mono notice remain valid, but they did not resolve the blank frame.
+- Reproduced the exact frame on the live X11 session and inspected runtime layout and visibility. Text shaped hundreds of glyphs correctly and 529 sprites existed, but `sync_lifecycle_ui` had set every entity with a `Visibility` component to `Hidden`; only the marked setup modal root was restored to visible, leaving its children and the board hidden.
+- Restricted lifecycle visibility mutation to entities marked `SetupRoot`, `PauseRoot`, or `OutcomeRoot`. Board sprites, pieces, panel text, controls, and modal children now retain their own visibility state.
+- Strengthened the startup regression to prove the setup text remains inherited/visible at the component boundary and that lifecycle synchronization cannot alter an unrelated visible entity.
+- Launched the fixed executable on the live X11 display and captured the resulting frame: the board, pieces, information panels, setup instructions, name fields, and help control all render.
 
 ## Dependencies
 
@@ -37,6 +39,6 @@ The game cannot even be tested in this state, let alone released and played.
 
 ## Acceptance criteria
 
-- Game startup shows either a menu or gameplay
+- Game startup shows either a menu or gameplay.
 - Startup UI text has a registered font and does not depend on system fonts.
 - Desktop third-party notices identify the embedded default UI font and license.

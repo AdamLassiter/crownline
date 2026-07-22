@@ -426,12 +426,15 @@ fn sync_lifecycle_ui(
     setup: Res<LocalSetup>,
     catalog: Res<ScenarioCatalog>,
     game: Res<DisplayedGame>,
-    mut roots: Query<(
-        &mut Visibility,
-        Option<&SetupRoot>,
-        Option<&PauseRoot>,
-        Option<&OutcomeRoot>,
-    )>,
+    mut roots: Query<
+        (
+            &mut Visibility,
+            Option<&SetupRoot>,
+            Option<&PauseRoot>,
+            Option<&OutcomeRoot>,
+        ),
+        Or<(With<SetupRoot>, With<PauseRoot>, With<OutcomeRoot>)>,
+    >,
     mut texts: Query<&mut Text, With<LifecycleText>>,
 ) {
     for (mut visibility, setup_root, pause_root, outcome_root) in &mut roots {
@@ -521,10 +524,17 @@ mod tests {
 
     #[test]
     fn lifecycle_modals_scroll_instead_of_clipping_scaled_content() {
+        #[derive(Component)]
+        struct UnrelatedVisibleEntity;
+
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
             .add_plugins(crate::rendering::BoardRenderingPlugin)
             .add_plugins(LocalLifecyclePlugin);
+        let unrelated = app
+            .world_mut()
+            .spawn((Visibility::Inherited, UnrelatedVisibleEntity))
+            .id();
         app.update();
         let world = app.world_mut();
         let mut roots = world.query_filtered::<(&Node, &Visibility), With<SetupRoot>>();
@@ -532,12 +542,21 @@ mod tests {
         assert_eq!(node.overflow, Overflow::scroll_y());
         assert_eq!(*visibility, Visibility::Visible);
 
-        let mut text = world.query_filtered::<&Text, With<LifecycleText>>();
-        assert!(text.iter(world).any(|text| {
-            text.0.contains("LOCAL SETUP")
-                && text.0.contains("F2 local start")
-                && text.0.contains("F3 online")
-        }));
+        let mut text = world.query_filtered::<(&Text, &Visibility), With<LifecycleText>>();
+        let (_, visibility) = text
+            .iter(world)
+            .find(|(text, _)| {
+                text.0.contains("LOCAL SETUP")
+                    && text.0.contains("F2 local start")
+                    && text.0.contains("F3 online")
+            })
+            .expect("startup setup instructions");
+        assert_eq!(*visibility, Visibility::Inherited);
+        assert_eq!(
+            *world.get::<Visibility>(unrelated).unwrap(),
+            Visibility::Inherited,
+            "lifecycle visibility updates must not hide unrelated entities"
+        );
     }
 
     #[test]
