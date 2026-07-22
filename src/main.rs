@@ -124,6 +124,17 @@ struct ChessFontStatus {
     fallback_active: bool,
 }
 
+type ChessFontVisibilityQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Visibility,
+        Option<&'static ChessFontText>,
+        Option<&'static FontFallbackText>,
+    ),
+    Or<(With<ChessFontText>, With<FontFallbackText>)>,
+>;
+
 #[allow(clippy::needless_pass_by_value)]
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(Camera2d);
@@ -152,11 +163,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
 fn monitor_chess_font(
     asset_server: Res<AssetServer>,
     mut status: ResMut<ChessFontStatus>,
-    mut text: Query<(
-        &mut Visibility,
-        Option<&ChessFontText>,
-        Option<&FontFallbackText>,
-    )>,
+    text: ChessFontVisibilityQuery,
 ) {
     if !matches!(
         asset_server.load_state(status.handle.id()),
@@ -167,11 +174,16 @@ fn monitor_chess_font(
 
     let first_failure = !status.fallback_active;
     status.fallback_active = true;
-    for (mut visibility, chess, fallback) in &mut text {
-        *visibility = font_visibility(true, chess.is_some(), fallback.is_some());
-    }
+    apply_chess_font_failure(text);
     if first_failure {
         error!("bundled chess font failed to load; showing readable fallback");
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn apply_chess_font_failure(mut text: ChessFontVisibilityQuery) {
+    for (mut visibility, chess, fallback) in &mut text {
+        *visibility = font_visibility(true, chess.is_some(), fallback.is_some());
     }
 }
 
@@ -208,6 +220,33 @@ mod tests {
     fn font_failure_hides_glyphs_and_shows_ascii_fallback() {
         assert_eq!(font_visibility(true, true, false), Visibility::Hidden);
         assert_eq!(font_visibility(true, false, true), Visibility::Visible);
+
+        let mut app = App::new();
+        app.add_systems(Update, apply_chess_font_failure);
+        let chess = app
+            .world_mut()
+            .spawn((Visibility::Visible, ChessFontText))
+            .id();
+        let fallback = app
+            .world_mut()
+            .spawn((Visibility::Hidden, FontFallbackText))
+            .id();
+        let unrelated = app.world_mut().spawn(Visibility::Hidden).id();
+        app.update();
+
+        assert_eq!(
+            *app.world().get::<Visibility>(chess).unwrap(),
+            Visibility::Hidden
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(fallback).unwrap(),
+            Visibility::Visible
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(unrelated).unwrap(),
+            Visibility::Hidden,
+            "font fallback must not rewrite unrelated visibility"
+        );
     }
 
     #[test]
