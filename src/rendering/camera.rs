@@ -16,6 +16,14 @@ const MAX_SCALE: f32 = 2.0;
 const FIT_FRACTION: f32 = 0.9;
 const PAN_PIXELS_PER_SECOND: f32 = 520.0;
 const ZOOM_FACTOR: f32 = 1.16;
+const MAX_TEXT_RASTER_MULTIPLIER: u8 = 4;
+
+#[derive(Debug, Clone, Copy, Component)]
+struct WorldTextRaster {
+    base_font_size: f32,
+    base_scale: Vec3,
+    multiplier: u8,
+}
 
 #[derive(Default)]
 struct CameraGestureState {
@@ -52,9 +60,72 @@ pub struct CameraControlPlugin;
 
 impl Plugin for CameraControlPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PointerCapture>()
-            .add_systems(Update, camera_controls);
+        app.init_resource::<PointerCapture>().add_systems(
+            Update,
+            (
+                camera_controls,
+                register_world_text_raster,
+                update_world_text_raster,
+            )
+                .chain(),
+        );
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn register_world_text_raster(
+    mut commands: Commands,
+    text: Query<(Entity, &TextFont, &Transform), Added<Text2d>>,
+) {
+    for (entity, font, transform) in &text {
+        let FontSize::Px(base_font_size) = font.font_size else {
+            continue;
+        };
+        commands.entity(entity).insert(WorldTextRaster {
+            base_font_size,
+            base_scale: transform.scale,
+            multiplier: 0,
+        });
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn update_world_text_raster(
+    cameras: Query<&Projection, With<Camera2d>>,
+    mut text: Query<(&mut WorldTextRaster, &mut TextFont, &mut Transform)>,
+) {
+    let Ok(Projection::Orthographic(projection)) = cameras.single() else {
+        return;
+    };
+    let multiplier = text_raster_multiplier(projection.scale);
+    for (mut raster, mut font, mut transform) in &mut text {
+        if raster.multiplier != multiplier {
+            apply_text_raster_multiplier(multiplier, &mut raster, &mut font, &mut transform);
+        }
+    }
+}
+
+fn text_raster_multiplier(camera_scale: f32) -> u8 {
+    if camera_scale >= 1.0 {
+        1
+    } else if camera_scale >= 0.5 {
+        2
+    } else {
+        MAX_TEXT_RASTER_MULTIPLIER
+    }
+}
+
+fn apply_text_raster_multiplier(
+    multiplier: u8,
+    raster: &mut WorldTextRaster,
+    font: &mut TextFont,
+    transform: &mut Transform,
+) {
+    let multiplier = multiplier.clamp(1, MAX_TEXT_RASTER_MULTIPLIER);
+    let factor = f32::from(multiplier);
+    font.font_size = FontSize::Px(raster.base_font_size * factor);
+    transform.scale = raster.base_scale / factor;
+    raster.multiplier = multiplier;
 }
 
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -294,5 +365,51 @@ mod tests {
         });
         assert_eq!(bindings.pan_up, KeyCode::ArrowUp);
         assert_eq!(bindings.zoom_in, KeyCode::Equal);
+    }
+
+    #[test]
+    fn raster_levels_cover_every_supported_zoom_without_changing_world_size() {
+        for scale in [MIN_SCALE, 0.3, 0.49, 0.5, 0.9, 1.0, MAX_SCALE] {
+            let multiplier = text_raster_multiplier(scale);
+            assert!(multiplier <= MAX_TEXT_RASTER_MULTIPLIER);
+            assert!(
+                f32::from(multiplier) * scale >= 1.0,
+                "scale {scale} would magnify a {multiplier}x glyph atlas"
+            );
+        }
+
+        let original_scale = Vec3::new(1.5, 0.75, 1.0);
+        let mut raster = WorldTextRaster {
+            base_font_size: 26.0,
+            base_scale: original_scale,
+            multiplier: 0,
+        };
+        let mut font = TextFont::from_font_size(26.0);
+        let mut transform = Transform::from_scale(original_scale);
+        apply_text_raster_multiplier(4, &mut raster, &mut font, &mut transform);
+        assert_eq!(font.font_size, FontSize::Px(104.0));
+        assert_eq!(transform.scale, original_scale / 4.0);
+        apply_text_raster_multiplier(1, &mut raster, &mut font, &mut transform);
+        assert_eq!(font.font_size, FontSize::Px(26.0));
+        assert_eq!(transform.scale, original_scale);
+    }
+
+    #[test]
+    fn every_new_pixel_sized_world_text_is_registered_automatically() {
+        let mut app = App::new();
+        app.add_systems(Update, register_world_text_raster);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Text2d::new("zoom-safe"),
+                TextFont::from_font_size(13.0),
+                Transform::from_scale(Vec3::splat(0.75)),
+            ))
+            .id();
+        app.update();
+
+        let raster = app.world().get::<WorldTextRaster>(entity).unwrap();
+        assert!((raster.base_font_size - 13.0).abs() < f32::EPSILON);
+        assert_eq!(raster.base_scale, Vec3::splat(0.75));
     }
 }
