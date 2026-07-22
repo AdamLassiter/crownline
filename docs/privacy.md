@@ -43,4 +43,9 @@ data.
 - The client reads/writes only its bundled assets and platform-specific settings,
   save, and credential locations during normal operation.
 
-No consented playtest export or other local file is uploaded automatically.
+Pressing `F8` during a local match explicitly writes a structured playtest JSON
+to the platform data directory. It contains application/scenario identity,
+canonical action/event/hash records, timing and balance counts, outcome, and
+blank qualitative-review fields. It excludes player names, credentials, room
+codes, server addresses, settings, and save contents. No playtest export or
+other local file is uploaded automatically.

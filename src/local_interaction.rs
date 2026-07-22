@@ -469,7 +469,7 @@ fn submit_action(
     }
     match apply_timed_action(&game.scenario, &game.state, action, 0) {
         Ok(transition) => {
-            transitions.push_transition(&transition);
+            transitions.push_local_action(action, &transition);
             game.state = transition.state;
             interaction.observed_revision = Some(game.state.revision);
             selection.piece = None;

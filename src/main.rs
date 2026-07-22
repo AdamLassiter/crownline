@@ -8,6 +8,7 @@ mod online_lifecycle;
 mod online_lobby;
 mod online_status;
 mod panels;
+mod playtest;
 mod rendering;
 
 use bevy::{
@@ -26,6 +27,7 @@ use online_lifecycle::OnlineLifecyclePlugin;
 use online_lobby::OnlineLobbyPlugin;
 use online_status::OnlineStatusPlugin;
 use panels::InformationPanelsPlugin;
+use playtest::PlaytestPlugin;
 use rendering::{BoardRenderingPlugin, CameraControlPlugin};
 
 const WINDOW_TITLE: &str = "Crownlines";
@@ -75,6 +77,7 @@ fn main() {
         .add_plugins(OnlineStatusPlugin)
         .add_plugins(OnlineLifecyclePlugin)
         .add_plugins(LocalPersistencePlugin)
+        .add_plugins(PlaytestPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();

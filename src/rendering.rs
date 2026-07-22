@@ -19,6 +19,7 @@ use coordinates::{BoardGeometry, BoardOrientation};
 use features::{spawn_scenario_features, sync_settlement_visuals};
 use overlays::{OverlayCache, sync_overlays};
 pub(crate) use overlays::{OverlayLegend, OverlaySelection, OverlayText, overlay_legend_symbol};
+pub(crate) use transitions::LocalTransitionRecord;
 pub(crate) use transitions::TransitionEventQueue as LocalTransitionEventQueue;
 pub(crate) use transitions::TransitionNoticeLog as LocalTransitionNoticeLog;
 use transitions::{

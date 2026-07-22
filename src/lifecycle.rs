@@ -355,7 +355,7 @@ fn apply_control(
     events: &mut LocalTransitionEventQueue,
 ) {
     if let Ok(transition) = apply_timed_action(&game.scenario, &game.state, action, 0) {
-        events.push_transition(&transition);
+        events.push_local_action(action, &transition);
         game.state = transition.state;
     }
 }
@@ -407,7 +407,7 @@ fn tick_local_clock(
     }
     if let Ok(transition) = advance_clock(&game.state, elapsed_millis) {
         if transition.state.outcome.is_some() {
-            events.push_transition(&transition);
+            events.push_local_clock(&transition);
             *flow = ClientFlow::Outcome;
         }
         game.state = transition.state;

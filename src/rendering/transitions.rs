@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crownline_core::{
     rules::{Transition, TransitionEvent},
     scenario::{PieceKind, Player},
-    state::PieceId,
+    state::{Action, MatchState, PieceId},
 };
 
 use crate::{ChessFontText, config::ClientSettings};
@@ -80,6 +80,15 @@ pub struct PresentationPlayback {
 #[derive(Resource, Default)]
 pub struct TransitionEventQueue {
     events: VecDeque<TransitionEvent>,
+    local_records: VecDeque<LocalTransitionRecord>,
+    local_discontinuity: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LocalTransitionRecord {
+    pub(crate) action: Option<Action>,
+    pub(crate) state: MatchState,
+    pub(crate) events: Vec<TransitionEvent>,
 }
 
 impl TransitionEventQueue {
@@ -87,8 +96,42 @@ impl TransitionEventQueue {
         self.events.extend(transition.events.iter().cloned());
     }
 
+    pub(crate) fn push_local_action(&mut self, action: &Action, transition: &Transition) {
+        self.push_transition(transition);
+        self.local_records.push_back(LocalTransitionRecord {
+            action: Some(action.clone()),
+            state: transition.state.clone(),
+            events: transition.events.clone(),
+        });
+    }
+
+    pub(crate) fn push_local_clock(&mut self, transition: &Transition) {
+        self.push_transition(transition);
+        self.local_records.push_back(LocalTransitionRecord {
+            action: None,
+            state: transition.state.clone(),
+            events: transition.events.clone(),
+        });
+    }
+
+    pub(crate) fn drain_local_records(
+        &mut self,
+    ) -> impl Iterator<Item = LocalTransitionRecord> + '_ {
+        self.local_records.drain(..)
+    }
+
+    pub(crate) fn mark_local_discontinuity(&mut self) {
+        self.clear();
+        self.local_discontinuity = true;
+    }
+
+    pub(crate) fn take_local_discontinuity(&mut self) -> bool {
+        std::mem::take(&mut self.local_discontinuity)
+    }
+
     pub fn clear(&mut self) {
         self.events.clear();
+        self.local_records.clear();
     }
 }
 

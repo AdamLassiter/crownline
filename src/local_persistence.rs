@@ -97,7 +97,7 @@ fn handle_save_load_keys(
                 setup.error.clear();
                 runtime.sub_millisecond_nanos = 0;
                 selection.piece = None;
-                events.clear();
+                events.mark_local_discontinuity();
                 *flow = if game.state.outcome.is_some() {
                     ClientFlow::Outcome
                 } else {

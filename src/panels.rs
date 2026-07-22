@@ -12,6 +12,7 @@ use crate::{
     help::{HelpLink, HelpSection},
     lifecycle::ClientFlow,
     local_persistence::LocalPersistenceStatus,
+    playtest::PlaytestStatus,
     rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection, PointerCapture},
 };
 
@@ -38,6 +39,7 @@ struct PanelContentCache {
     clocks: Option<ClockState>,
     online: bool,
     persistence_message: String,
+    playtest_message: String,
 }
 
 impl PanelState {
@@ -293,12 +295,17 @@ fn apply_panel_visibility(
     }
 }
 
-#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 fn update_panel_text(
     game: Res<DisplayedGame>,
     selection: Res<OverlaySelection>,
     history: Res<LocalTransitionNoticeLog>,
     persistence: Option<Res<LocalPersistenceStatus>>,
+    playtest: Option<Res<PlaytestStatus>>,
     flow: Option<Res<ClientFlow>>,
     mut cache: ResMut<PanelContentCache>,
     mut texts: Query<(
@@ -311,6 +318,9 @@ fn update_panel_text(
     let persistence_message = persistence
         .as_deref()
         .map_or("", |status| status.message.as_str());
+    let playtest_message = playtest
+        .as_deref()
+        .map_or("", |status| status.message.as_str());
     let online = flow
         .as_deref()
         .is_some_and(|flow| *flow == ClientFlow::OnlinePlaying);
@@ -320,6 +330,7 @@ fn update_panel_text(
         && cache.clocks == game.state.clocks
         && cache.online == online
         && cache.persistence_message == persistence_message
+        && cache.playtest_message == playtest_message
     {
         return;
     }
@@ -331,6 +342,9 @@ fn update_panel_text(
             "\nSave slot {}: {}",
             status.slot, status.message
         );
+    }
+    if let Some(status) = playtest.as_deref() {
+        let _ = write!(match_text, "\nPlaytest: {}", status.message);
     }
     let settlement_text = settlement_panel_text(&game.scenario, &game.state);
     let history_text = bounded_history(&history.entries);
@@ -349,6 +363,7 @@ fn update_panel_text(
     cache.clocks = game.state.clocks;
     cache.online = online;
     persistence_message.clone_into(&mut cache.persistence_message);
+    playtest_message.clone_into(&mut cache.playtest_message);
 }
 
 #[allow(clippy::needless_pass_by_value)]

@@ -95,6 +95,7 @@ the same room setup.
 | Mandatory Pawn placement | Arrows cycle only legal adjacent squares; Enter confirms; Escape returns focus to the required choice. |
 | Match | `P` pause/resume; `Q` resign then Enter/Escape; `D` offer draw; `Y` accept; `N` decline; `I` panels. |
 | Saves | `F5` save; `F6` cycle slots 1-3; `F9` load. |
+| Playtest evidence | `F8` explicitly exports the current local match's name-free structured record; nothing is uploaded. |
 | Help | `F1` open/close; `1`-`5` sections; Escape close. |
 | Online lobby | `H` host; `J` join; Tab fields; Enter submit; Escape back; `R` ready; `A` invitation address; `C` copy. |
 | Online recovery | `T` retry; `X` cancel retry; `F` forget seat. |
