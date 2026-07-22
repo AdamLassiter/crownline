@@ -523,7 +523,12 @@ pub(crate) fn overlay_legend_symbol(kind: OverlayKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crownline_core::scenario::Player;
+    use std::{hint::black_box, time::Instant};
+
+    use crownline_core::{
+        attack_lines_on, governance_report,
+        scenario::{Player, ScenarioDefinition},
+    };
 
     use super::*;
     use crate::rendering::BoardRenderingPlugin;
@@ -687,5 +692,216 @@ mod tests {
                 .any(|line| line.contains("loses its promotion opportunity"))
         );
         assert!(overlays[&at].contains(&OverlayKind::Capture));
+    }
+
+    fn large_scenario() -> ScenarioDefinition {
+        ron::from_str(include_str!("../../assets/scenarios/large.ron")).unwrap()
+    }
+
+    fn performance_states(scenario: &ScenarioDefinition) -> Vec<(&'static str, MatchState)> {
+        let opening = MatchState::from_scenario(scenario).unwrap();
+        let mut midgame = opening.clone();
+        for ply in 0..48 {
+            let moves = legal_moves(scenario, &midgame).unwrap();
+            if moves.is_empty() || !matches!(midgame.phase, TurnPhase::Command) {
+                break;
+            }
+            let candidate = moves[(ply * 17 + 5) % moves.len()];
+            let Ok(transition) = apply_action(
+                scenario,
+                &midgame,
+                &Action::Move {
+                    player: midgame.active_player,
+                    piece: candidate.piece,
+                    to: candidate.to,
+                },
+            ) else {
+                break;
+            };
+            if transition.state.outcome.is_some() {
+                break;
+            }
+            midgame = transition.state;
+        }
+
+        let mut sparse = midgame.clone();
+        let mut retained_per_player = BTreeMap::from([(Player::North, 0_u8), (Player::South, 0)]);
+        sparse.pieces.retain(|_, piece| {
+            if piece.kind == PieceKind::King {
+                return true;
+            }
+            let retained = retained_per_player.entry(piece.owner).or_default();
+            if *retained < 5 {
+                *retained += 1;
+                true
+            } else {
+                false
+            }
+        });
+        for settlement in &mut sparse.settlements {
+            settlement.founder = settlement
+                .founder
+                .filter(|piece| sparse.pieces.contains_key(piece));
+            settlement.produced_pawn = settlement
+                .produced_pawn
+                .filter(|piece| sparse.pieces.contains_key(piece));
+            settlement.transfer_candidate = settlement
+                .transfer_candidate
+                .filter(|piece| sparse.pieces.contains_key(piece));
+        }
+        sparse
+            .promotion_candidates
+            .retain(|piece, _| sparse.pieces.contains_key(piece));
+        sparse.en_passant = sparse
+            .en_passant
+            .filter(|capture| sparse.pieces.contains_key(&capture.pawn));
+        sparse.phase = TurnPhase::Command;
+        sparse.outcome = None;
+        sparse.validate_invariants().unwrap();
+        vec![
+            ("opening", opening),
+            ("dense_midgame", midgame),
+            ("sparse_endgame", sparse),
+        ]
+    }
+
+    fn average_micros(iterations: u32, mut workload: impl FnMut()) -> f64 {
+        let started = Instant::now();
+        for _ in 0..iterations {
+            workload();
+        }
+        started.elapsed().as_secs_f64() * 1_000_000.0 / f64::from(iterations)
+    }
+
+    #[test]
+    #[ignore = "scheduled release-profile performance baseline"]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the benchmark keeps its related workload matrix and thresholds auditable"
+    )]
+    fn scheduled_performance_baseline() {
+        const CORE_QUERY_LIMIT_US: f64 = 10_000.0;
+        const OVERLAY_PREVIEW_LIMIT_US: f64 = 25_000.0;
+        const SERIALIZE_HASH_LIMIT_US: f64 = 5_000.0;
+        const SNAPSHOT_PROJECTION_LIMIT_US: f64 = 5_000.0;
+        const CACHE_HIT_UPDATE_LIMIT_US: f64 = 5_000.0;
+        const INVALIDATED_UPDATE_LIMIT_US: f64 = 30_000.0;
+
+        let scenario = large_scenario();
+        println!("workload,operation,mean_us,pieces,serialized_bytes");
+        for (name, state) in performance_states(&scenario) {
+            let moves = legal_moves(&scenario, &state).unwrap();
+            let selected = moves.first().map(|candidate| candidate.piece);
+            let hovered = moves.first().map(|candidate| candidate.to);
+            let serialized_bytes = serde_json::to_vec(&state).unwrap().len();
+            let move_generation = average_micros(200, || {
+                black_box(legal_moves(&scenario, &state).unwrap());
+            });
+            let attack_governance = average_micros(100, || {
+                for settlement in 0..scenario.settlements.len() {
+                    black_box(
+                        governance_report(&scenario, &state, u16::try_from(settlement).unwrap())
+                            .unwrap(),
+                    );
+                }
+                for site in &scenario.settlements {
+                    for player in Player::ALL {
+                        black_box(attack_lines_on(&scenario, &state, site.at, player).unwrap());
+                    }
+                }
+            });
+            let overlay = average_micros(100, || {
+                black_box(build_overlay_model(&scenario, &state, selected, hovered));
+            });
+            let hashing = average_micros(500, || {
+                black_box(state.canonical_hash().unwrap());
+            });
+            let serialization = average_micros(500, || {
+                black_box(serde_json::to_vec(&state).unwrap());
+            });
+            let projection = average_micros(500, || {
+                let projected = state.clone();
+                black_box(projected);
+            });
+            for (operation, mean) in [
+                ("move_generation", move_generation),
+                ("attack_governance", attack_governance),
+                ("overlay_preview", overlay),
+                ("canonical_hash", hashing),
+                ("serialization", serialization),
+                ("snapshot_projection", projection),
+            ] {
+                println!(
+                    "{name},{operation},{mean:.2},{},{}",
+                    state.pieces.len(),
+                    serialized_bytes
+                );
+            }
+            if !cfg!(debug_assertions) {
+                assert!(
+                    move_generation <= CORE_QUERY_LIMIT_US,
+                    "{name} move generation: {move_generation:.2} us"
+                );
+                assert!(
+                    attack_governance <= CORE_QUERY_LIMIT_US,
+                    "{name} attack/governance: {attack_governance:.2} us"
+                );
+                assert!(
+                    overlay <= OVERLAY_PREVIEW_LIMIT_US,
+                    "{name} overlay preview: {overlay:.2} us"
+                );
+                assert!(
+                    serialization <= SERIALIZE_HASH_LIMIT_US,
+                    "{name} serialization: {serialization:.2} us"
+                );
+                assert!(
+                    hashing <= SERIALIZE_HASH_LIMIT_US,
+                    "{name} canonical hash: {hashing:.2} us"
+                );
+                assert!(
+                    projection <= SNAPSHOT_PROJECTION_LIMIT_US,
+                    "{name} snapshot projection: {projection:.2} us"
+                );
+            }
+        }
+
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        let (scenario, state) = {
+            let scenario = large_scenario();
+            let state = MatchState::from_scenario(&scenario).unwrap();
+            (scenario, state)
+        };
+        {
+            let mut displayed = app.world_mut().resource_mut::<DisplayedGame>();
+            displayed.scenario = scenario;
+            displayed.state = state;
+        }
+        app.update();
+        let cache_hit = average_micros(200, || app.update());
+        let invalidated = average_micros(50, || {
+            app.world_mut()
+                .resource_mut::<DisplayedGame>()
+                .state
+                .revision += 1;
+            app.update();
+        });
+        let game = app.world().resource::<DisplayedGame>();
+        let serialized_bytes = serde_json::to_vec(&game.state).unwrap().len();
+        println!(
+            "opening,bevy_cache_hit,{cache_hit:.2},{},{}",
+            game.state.pieces.len(),
+            serialized_bytes
+        );
+        println!(
+            "opening,bevy_revision_invalidated,{invalidated:.2},{},{}",
+            game.state.pieces.len(),
+            serialized_bytes
+        );
+        if !cfg!(debug_assertions) {
+            assert!(cache_hit <= CACHE_HIT_UPDATE_LIMIT_US);
+            assert!(invalidated <= INVALIDATED_UPDATE_LIMIT_US);
+        }
     }
 }
