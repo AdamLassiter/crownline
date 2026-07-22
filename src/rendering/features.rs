@@ -46,6 +46,9 @@ pub struct EdgeVisual {
 #[derive(Component)]
 struct SiteLabel;
 
+#[derive(Component)]
+struct KeepOwnerMark;
+
 pub(super) fn spawn_scenario_features(
     commands: &mut Commands,
     scenario: &ScenarioDefinition,
@@ -54,15 +57,35 @@ pub(super) fn spawn_scenario_features(
     for keep in &scenario.keeps {
         for at in &keep.tiles {
             let [x, y] = tile_position(*at, scenario);
-            commands.spawn((
-                Sprite::from_color(keep_tint(keep.owner), Vec2::splat(TILE_SIZE - 3.0)),
-                Transform::from_xyz(x, y, KEEP_Z),
-                KeepTileVisual {
-                    owner: keep.owner,
-                    at: *at,
-                },
-                ScenarioVisual,
-            ));
+            commands
+                .spawn((
+                    Sprite::from_color(keep_tint(keep.owner), Vec2::splat(TILE_SIZE - 3.0)),
+                    Transform::from_xyz(x, y, KEEP_Z),
+                    KeepTileVisual {
+                        owner: keep.owner,
+                        at: *at,
+                    },
+                    ScenarioVisual,
+                ))
+                .with_children(|tile| {
+                    tile.spawn((
+                        Text2d::new(match keep.owner {
+                            Player::North => "N",
+                            Player::South => "S",
+                        }),
+                        TextFont {
+                            font_size: FontSize::Px(8.0),
+                            ..default()
+                        },
+                        TextColor(match keep.owner {
+                            Player::North => Color::srgba(0.92, 0.97, 1.0, 0.82),
+                            Player::South => Color::srgba(0.12, 0.07, 0.03, 0.82),
+                        }),
+                        TextLayout::justify(Justify::Center),
+                        Transform::from_xyz(10.0, -10.0, 0.02),
+                        KeepOwnerMark,
+                    ));
+                });
         }
     }
     for settlement in &state.settlements {
@@ -371,5 +394,24 @@ mod tests {
                 .iter(world)
                 .any(|visual| { visual.index == 0 && visual.owner == Some(Player::South) })
         );
+    }
+
+    #[test]
+    fn keep_and_settlement_ownership_have_text_cues_independent_of_hue() {
+        assert_eq!(settlement_style(None).1, "·");
+        assert_eq!(settlement_style(Some(Player::North)).1, "N");
+        assert_eq!(settlement_style(Some(Player::South)).1, "S");
+        assert_ne!(
+            settlement_style(Some(Player::North)).2,
+            settlement_style(Some(Player::South)).2
+        );
+
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        let world = app.world_mut();
+        let mut marks = world.query_filtered::<&Text2d, With<KeepOwnerMark>>();
+        let observed: BTreeSet<_> = marks.iter(world).map(|text| text.0.clone()).collect();
+        assert_eq!(observed, BTreeSet::from(["N".to_owned(), "S".to_owned()]));
     }
 }

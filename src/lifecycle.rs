@@ -127,6 +127,7 @@ fn modal_node() -> impl Bundle {
             justify_content: JustifyContent::Center,
             row_gap: px(12),
             padding: UiRect::all(px(18)),
+            overflow: Overflow::scroll_y(),
             ..default()
         },
         BackgroundColor(Color::srgba(0.025, 0.035, 0.06, 0.98)),
@@ -513,6 +514,18 @@ mod tests {
             validate_names(" North ", " South ").unwrap(),
             ("North".to_owned(), "South".to_owned())
         );
+    }
+
+    #[test]
+    fn lifecycle_modals_scroll_instead_of_clipping_scaled_content() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .add_plugins(crate::rendering::BoardRenderingPlugin)
+            .add_plugins(LocalLifecyclePlugin);
+        app.update();
+        let world = app.world_mut();
+        let mut roots = world.query_filtered::<&Node, With<SetupRoot>>();
+        assert_eq!(roots.single(world).unwrap().overflow, Overflow::scroll_y());
     }
 
     #[test]

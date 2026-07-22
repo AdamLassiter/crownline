@@ -105,11 +105,11 @@ fn spawn_help(mut commands: Commands) {
             })
             .with_children(|navigation| {
                 for (label, section) in [
-                    ("Overview", HelpSection::Overview),
-                    ("Movement & terrain", HelpSection::Movement),
-                    ("Realm systems", HelpSection::Realm),
-                    ("Match rules", HelpSection::Match),
-                    ("Board legend", HelpSection::Legend),
+                    ("1 Overview", HelpSection::Overview),
+                    ("2 Movement & terrain", HelpSection::Movement),
+                    ("3 Realm systems", HelpSection::Realm),
+                    ("4 Match rules", HelpSection::Match),
+                    ("5 Board legend", HelpSection::Legend),
                 ] {
                     navigation.spawn(help_button(label, section));
                 }
@@ -192,6 +192,11 @@ fn handle_help_controls(
     if keys.just_pressed(KeyCode::Escape) && state.open {
         state.open = false;
     }
+    if state.open
+        && let Some(section) = help_keyboard_section(&keys)
+    {
+        state.section = section;
+    }
     for (interaction, link) in &links {
         if *interaction == Interaction::Pressed {
             open_help(&mut state, link.0);
@@ -203,6 +208,18 @@ fn handle_help_controls(
     {
         state.open = false;
     }
+}
+
+fn help_keyboard_section(keys: &ButtonInput<KeyCode>) -> Option<HelpSection> {
+    [
+        (KeyCode::Digit1, HelpSection::Overview),
+        (KeyCode::Digit2, HelpSection::Movement),
+        (KeyCode::Digit3, HelpSection::Realm),
+        (KeyCode::Digit4, HelpSection::Match),
+        (KeyCode::Digit5, HelpSection::Legend),
+    ]
+    .into_iter()
+    .find_map(|(key, section)| keys.just_pressed(key).then_some(section))
 }
 
 fn open_help(state: &mut HelpState, section: HelpSection) {
@@ -217,6 +234,7 @@ fn sync_help(
     legend: Res<OverlayLegend>,
     mut roots: Query<&mut Node, With<HelpRoot>>,
     mut content: Query<&mut Text, With<HelpContent>>,
+    mut links: Query<(&HelpLink, &mut BackgroundColor)>,
 ) {
     if let Ok(mut root) = roots.single_mut() {
         root.display = if state.open {
@@ -227,6 +245,13 @@ fn sync_help(
     }
     if !state.is_changed() && !game.is_changed() {
         return;
+    }
+    for (link, mut background) in &mut links {
+        background.0 = if state.open && link.0 == state.section {
+            Color::srgb(0.2, 0.42, 0.56)
+        } else {
+            Color::srgb(0.1, 0.18, 0.28)
+        };
     }
     if let Ok(mut text) = content.single_mut() {
         text.0 = help_text(state.section, &game.scenario, &legend);
@@ -283,9 +308,9 @@ fn match_help() -> String {
 fn legend_help(legend: &OverlayLegend) -> String {
     let mut lines = vec![
         "BOARD LEGEND".to_owned(),
-        "Tiles: alternating light/dark parity remains visible under every tint. Open = neutral sand/stone; Forest = green; Mountain = gray; Road = ochre.".to_owned(),
+        "Tiles: alternating light/dark parity remains visible under every tint. Open = unmarked neutral sand/stone; F = Forest green; M = Mountain gray; R = Road ochre.".to_owned(),
         "Pieces: Unicode chess silhouette on a contrasting backplate. North uses pale glyphs on a dark upright plate; South uses dark glyphs on a pale rotated plate.".to_owned(),
-        "Features: inset blue/orange tile = North/South Keep; square ring with ·/N/S = neutral/North/South settlement; purple X = promotion site; T = fortification tower.".to_owned(),
+        "Features: inset tile marked N/S = North/South Keep; square ring with ·/N/S = neutral/North/South settlement; purple X = promotion site; T = fortification tower.".to_owned(),
         "Edges: blue band = River; brown thick band with = = Bridge; light-blue band with ·· = Ford; dark band = Wall; gold band with / = Gate.".to_owned(),
         "Overlays:".to_owned(),
     ];
@@ -399,5 +424,39 @@ mod tests {
                 .unwrap(),
             before
         );
+    }
+
+    #[test]
+    fn keyboard_opens_navigates_and_visibly_marks_help_sections() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .add_plugins(crate::rendering::BoardRenderingPlugin)
+            .add_plugins(RulesHelpPlugin);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F1);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Digit3);
+        app.update();
+
+        let state = app.world().resource::<HelpState>();
+        assert!(state.open);
+        assert_eq!(state.section, HelpSection::Realm);
+        let world = app.world_mut();
+        let mut links = world.query::<(&HelpLink, &BackgroundColor)>();
+        let selected = Color::srgb(0.2, 0.42, 0.56);
+        assert!(
+            links
+                .iter(world)
+                .any(|(link, background)| link.0 == HelpSection::Realm && background.0 == selected)
+        );
+        let mut content = world.query_filtered::<&Text, With<HelpContent>>();
+        assert!(content.single(world).unwrap().0.contains("GOVERNANCE"));
     }
 }

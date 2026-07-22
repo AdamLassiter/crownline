@@ -523,7 +523,7 @@ pub(crate) fn overlay_legend_symbol(kind: OverlayKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::{hint::black_box, time::Instant};
+    use std::{collections::BTreeSet, hint::black_box, time::Instant};
 
     use crownline_core::{
         attack_lines_on, governance_report,
@@ -532,6 +532,18 @@ mod tests {
 
     use super::*;
     use crate::rendering::BoardRenderingPlugin;
+
+    #[test]
+    fn every_semantic_overlay_has_a_unique_non_hue_symbol() {
+        let legend = OverlayLegend::default();
+        let symbols: BTreeSet<_> = legend
+            .entries
+            .iter()
+            .map(|(kind, _)| overlay_style(*kind).0)
+            .collect();
+        assert_eq!(symbols.len(), legend.entries.len());
+        assert_eq!(legend.entries.len(), 12);
+    }
 
     #[test]
     fn precedence_places_check_and_illegal_warnings_above_ordinary_highlights() {

@@ -48,6 +48,9 @@ pub struct BoardTile {
     pub terrain: TileTerrain,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+struct TerrainMark(TileTerrain);
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PaletteColor([f32; 3]);
 
@@ -447,21 +450,49 @@ fn spawn_board(commands: &mut Commands, palette: &BoardPalette, scenario: &Scena
                         .copied()
                         .unwrap_or(TileTerrain::Open);
                     let [world_x, world_y] = tile_position(at, scenario);
-                    board.spawn((
-                        Sprite::from_color(
-                            palette.color(parity, scenario.terrain.get(&at).copied()),
-                            Vec2::splat(TILE_SIZE),
-                        ),
-                        Transform::from_xyz(world_x, world_y, TILE_Z),
-                        BoardTile {
-                            at,
-                            parity,
-                            terrain,
-                        },
-                    ));
+                    board
+                        .spawn((
+                            Sprite::from_color(
+                                palette.color(parity, scenario.terrain.get(&at).copied()),
+                                Vec2::splat(TILE_SIZE),
+                            ),
+                            Transform::from_xyz(world_x, world_y, TILE_Z),
+                            BoardTile {
+                                at,
+                                parity,
+                                terrain,
+                            },
+                        ))
+                        .with_children(|tile| {
+                            if let Some(symbol) = terrain_symbol(terrain) {
+                                tile.spawn((
+                                    Text2d::new(symbol),
+                                    TextFont {
+                                        font_size: FontSize::Px(8.0),
+                                        ..default()
+                                    },
+                                    TextColor(match parity {
+                                        TileParity::Light => Color::srgba(0.05, 0.06, 0.08, 0.72),
+                                        TileParity::Dark => Color::srgba(0.96, 0.96, 0.92, 0.78),
+                                    }),
+                                    TextLayout::justify(Justify::Center),
+                                    Transform::from_xyz(-10.0, 10.0, 0.02),
+                                    TerrainMark(terrain),
+                                ));
+                            }
+                        });
                 }
             }
         });
+}
+
+const fn terrain_symbol(terrain: TileTerrain) -> Option<&'static str> {
+    match terrain {
+        TileTerrain::Open => None,
+        TileTerrain::Forest => Some("F"),
+        TileTerrain::Mountain => Some("M"),
+        TileTerrain::Road => Some("R"),
+    }
 }
 
 const fn tile_parity(at: Coord) -> TileParity {
@@ -516,6 +547,33 @@ mod tests {
     }
 
     #[test]
+    fn non_open_terrain_has_a_unique_non_hue_mark() {
+        assert_eq!(terrain_symbol(TileTerrain::Open), None);
+        assert_eq!(terrain_symbol(TileTerrain::Forest), Some("F"));
+        assert_eq!(terrain_symbol(TileTerrain::Mountain), Some("M"));
+        assert_eq!(terrain_symbol(TileTerrain::Road), Some("R"));
+
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        let world = app.world_mut();
+        let mut marks = world.query::<(&TerrainMark, &Text2d)>();
+        for (mark, text) in marks.iter(world) {
+            assert_eq!(Some(text.0.as_str()), terrain_symbol(mark.0));
+        }
+        assert_eq!(
+            marks.iter(world).count(),
+            world
+                .resource::<DisplayedGame>()
+                .scenario
+                .terrain
+                .values()
+                .filter(|terrain| **terrain != TileTerrain::Open)
+                .count()
+        );
+    }
+
+    #[test]
     fn missing_terrain_metadata_falls_back_to_open_palette() {
         let palette = BoardPalette::default();
         assert_eq!(
@@ -557,6 +615,16 @@ mod tests {
         assert_eq!(piece_glyph(PieceKind::Bishop), "♗");
         assert_eq!(piece_glyph(PieceKind::Knight), "♘");
         assert_eq!(piece_glyph(PieceKind::Pawn), "♙");
+    }
+
+    #[test]
+    fn piece_ownership_uses_plate_orientation_and_contrast_not_only_hue() {
+        let (north_text, north_plate, north_rotation) = player_piece_style(Player::North);
+        let (south_text, south_plate, south_rotation) = player_piece_style(Player::South);
+        assert_ne!(north_rotation, south_rotation);
+        assert_ne!(north_text, north_plate);
+        assert_ne!(south_text, south_plate);
+        assert_ne!(north_plate, south_plate);
     }
 
     #[test]

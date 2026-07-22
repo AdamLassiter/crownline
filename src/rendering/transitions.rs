@@ -409,6 +409,81 @@ mod tests {
         assert!(tween.is_none());
     }
 
+    #[test]
+    fn reduced_motion_skips_interpolation_but_preserves_ordered_feedback() {
+        let mut app = App::new();
+        app.insert_resource(ClientSettings {
+            reduced_motion: true,
+            ..ClientSettings::default()
+        });
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+
+        let (piece_id, kind, owner, position) = {
+            let world = app.world_mut();
+            let mut presentations = world.query::<(&PiecePresentation, &Transform)>();
+            let (presentation, transform) = presentations.iter(world).next().unwrap();
+            let piece = world
+                .resource::<DisplayedGame>()
+                .state
+                .pieces
+                .get(&presentation.id)
+                .unwrap();
+            (
+                presentation.id,
+                piece.kind,
+                piece.owner,
+                transform.translation,
+            )
+        };
+        {
+            let mut motion = app.world_mut().resource_mut::<PresentationMotionQueue>();
+            motion.move_piece(piece_id, Vec2::new(32.0, -16.0));
+            motion.retire(piece_id, kind, owner, position);
+        }
+        let events = vec![
+            TransitionEvent::SettlementEstablished {
+                settlement_index: 2,
+            },
+            TransitionEvent::PawnProduced {
+                settlement_index: 2,
+                pawn: PieceId(9),
+                at: Coord::new(3, 4),
+            },
+            TransitionEvent::TurnStarted {
+                player: Player::North,
+                turn_number: 7,
+            },
+        ];
+        let expected: Vec<_> = events.iter().map(event_message).collect();
+        app.world_mut()
+            .resource_mut::<TransitionEventQueue>()
+            .push_transition(&Transition {
+                state: state_for_queue_test(),
+                events,
+            });
+        app.update();
+
+        let world = app.world_mut();
+        let mut presentations =
+            world.query::<(&PiecePresentation, &Transform, Option<&PieceTween>)>();
+        let (_, transform, tween) = presentations
+            .iter(world)
+            .find(|(presentation, _, _)| presentation.id == piece_id)
+            .unwrap();
+        assert!(transform.translation.length_squared() < f32::EPSILON);
+        assert!(tween.is_none());
+        let mut ghosts = world.query::<&PresentationGhost>();
+        assert_eq!(ghosts.iter(world).count(), 0);
+        let mut notices = world.query::<&TransitionNotice>();
+        assert_eq!(notices.iter(world).count(), expected.len());
+        assert_eq!(
+            world.resource::<TransitionNoticeLog>().entries,
+            expected,
+            "reduced motion must retain canonical transition order"
+        );
+    }
+
     fn state_for_queue_test() -> MatchState {
         let scenario: crownline_core::ScenarioDefinition =
             ron::from_str(include_str!("../../assets/scenarios/standard.ron")).unwrap();

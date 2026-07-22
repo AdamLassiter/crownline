@@ -12,6 +12,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const SETTINGS_FILE: &str = "settings.ron";
+const MIN_LOGICAL_UI_WIDTH: f64 = 800.0;
+const MIN_LOGICAL_UI_HEIGHT: f64 = 480.0;
 
 #[derive(Debug, Clone, Resource, Serialize, Deserialize)]
 #[serde(default)]
@@ -171,6 +173,13 @@ impl ClientSettings {
                 "ui_scale must be between 0.75 and 2.5",
             ));
         }
+        if f64::from(self.window_width) / f64::from(self.ui_scale) < MIN_LOGICAL_UI_WIDTH
+            || f64::from(self.window_height) / f64::from(self.ui_scale) < MIN_LOGICAL_UI_HEIGHT
+        {
+            return Err(SettingsError::InvalidField(
+                "window dimensions divided by ui_scale must provide at least 800x480 logical UI pixels",
+            ));
+        }
         if !(self.server_url.starts_with("ws://") || self.server_url.starts_with("wss://")) {
             return Err(SettingsError::InvalidField(
                 "server_url must begin with ws:// or wss://",
@@ -233,5 +242,34 @@ mod tests {
             settings.validate(),
             Err(SettingsError::InvalidField(_))
         ));
+    }
+
+    #[test]
+    fn supported_scale_and_resolution_pairs_preserve_the_minimum_ui_viewport() {
+        for (window_width, window_height, ui_scale) in [
+            (640, 480, 0.75),
+            (800, 600, 1.0),
+            (1280, 720, 1.25),
+            (1920, 1080, 2.0),
+            (2560, 1440, 2.5),
+        ] {
+            ClientSettings {
+                window_width,
+                window_height,
+                ui_scale,
+                ..ClientSettings::default()
+            }
+            .validate()
+            .unwrap();
+        }
+        let error = ClientSettings {
+            window_width: 640,
+            window_height: 480,
+            ui_scale: 2.5,
+            ..ClientSettings::default()
+        }
+        .validate()
+        .unwrap_err();
+        assert!(error.to_string().contains("800x480 logical UI pixels"));
     }
 }

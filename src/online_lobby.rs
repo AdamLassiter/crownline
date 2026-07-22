@@ -178,6 +178,7 @@ fn spawn_online_lobby(mut commands: Commands, settings: Res<ClientSettings>) {
                 justify_content: JustifyContent::Center,
                 row_gap: px(10),
                 padding: UiRect::all(px(18)),
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.025, 0.035, 0.06, 0.985)),
@@ -815,5 +816,16 @@ mod tests {
             ClientFlow::OnlineLobby
         );
         assert!(app.world().resource::<OnlineLobby>().ready_requested);
+    }
+
+    #[test]
+    fn online_lobby_scrolls_instead_of_clipping_scaled_content() {
+        let mut app = App::new();
+        app.insert_resource(ClientSettings::default())
+            .add_systems(Startup, spawn_online_lobby);
+        app.update();
+        let world = app.world_mut();
+        let mut roots = world.query_filtered::<&Node, With<OnlineLobbyRoot>>();
+        assert_eq!(roots.single(world).unwrap().overflow, Overflow::scroll_y());
     }
 }

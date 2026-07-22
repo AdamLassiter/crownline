@@ -134,14 +134,14 @@ fn spawn_panel(commands: &mut Commands, kind: PanelKind, inset: UiRect) {
                 right: inset.right,
                 top: inset.top,
                 width: percent(30),
-                min_width: px(210),
+                min_width: px(0),
                 max_width: px(350),
                 max_height: percent(94),
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 row_gap: px(5),
                 padding: UiRect::all(px(8)),
-                overflow: Overflow::clip(),
+                overflow: Overflow::scroll_y(),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.035, 0.045, 0.07, 0.92)),
@@ -657,5 +657,11 @@ mod tests {
                 .count(),
             1
         );
+        let mut panels = world.query_filtered::<&Node, With<InformationPanel>>();
+        for node in panels.iter(world) {
+            assert_eq!(node.min_width, px(0));
+            assert_eq!(node.overflow, Overflow::scroll_y());
+            assert_eq!(node.max_height, percent(94));
+        }
     }
 }
