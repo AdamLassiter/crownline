@@ -196,7 +196,7 @@ fn sync_online_match_status(
     let phase = match &presentation.phase {
         TurnPhase::Command => "command".to_owned(),
         TurnPhase::ResolvingChoices { queue } => {
-            format!("mandatory choice · {} remaining", queue.len())
+            format!("mandatory choice - {} remaining", queue.len())
         }
     };
     let room = room_state_label(presentation.room_state);
@@ -205,13 +205,13 @@ fn sync_online_match_status(
         || "Clocks: untimed".to_owned(),
         |clocks| {
             format!(
-                "Clock estimate — North {} · South {}{}",
+                "Clock estimate - North {} - South {}{}",
                 format_estimated_clock(clocks.north_millis),
                 format_estimated_clock(clocks.south_millis),
                 if !presentation.terminal
                     && (clocks.north_millis <= 0.0 || clocks.south_millis <= 0.0)
                 {
-                    " · awaiting server outcome"
+                    " - awaiting server outcome"
                 } else {
                     ""
                 }
@@ -230,7 +230,7 @@ fn sync_online_match_status(
             Visibility::Hidden
         };
         text.0 = format!(
-            "You: {own_seat} · Active: {:?} · Phase: {phase}\n{clocks}\nRoom: {room} · Your connection: {transport} · {pending}",
+            "You: {own_seat} - Active: {:?} - Phase: {phase}\n{clocks}\nRoom: {room} - Your connection: {transport} - {pending}",
             presentation.active_player,
         );
     }

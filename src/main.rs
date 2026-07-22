@@ -94,7 +94,7 @@ fn window_title() -> String {
     let revision = BUILD_REVISION.map_or("development", |revision| {
         revision.get(..revision.len().min(12)).unwrap_or(revision)
     });
-    format!("{WINDOW_TITLE} {APPLICATION_VERSION} · {revision}")
+    format!("{WINDOW_TITLE} {APPLICATION_VERSION} - {revision}")
 }
 
 fn runtime_asset_root() -> String {

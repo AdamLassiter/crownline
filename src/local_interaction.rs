@@ -109,7 +109,7 @@ fn spawn_interaction_affordances(mut commands: Commands) {
         KeyboardFocusVisual,
     ));
     commands.spawn((
-        Text2d::new("Arrow keys: focus board · Enter: select/move · Esc: leave board · H: Hold"),
+        Text2d::new("Arrow keys: focus board - Enter: select/move - Esc: leave board - H: Hold"),
         TextFont {
             font_size: FontSize::Px(13.0),
             ..default()
@@ -608,7 +608,7 @@ fn choice_description(state: &MatchState) -> Option<String> {
             settlement_index,
             legal_squares,
         } => format!(
-            "{heading}: place produced Pawn for settlement {settlement_index}\n{} legal adjacent squares · arrows cycle · Enter confirms",
+            "{heading}: place produced Pawn for settlement {settlement_index}\n{} legal adjacent squares - arrows cycle - Enter confirms",
             legal_squares.len()
         ),
     })
@@ -617,7 +617,7 @@ fn choice_description(state: &MatchState) -> Option<String> {
 fn clock_description(state: &MatchState) -> Option<String> {
     state.clocks.map(|clocks| {
         format!(
-            "Clocks — North {} · South {}",
+            "Clocks - North {} - South {}",
             format_clock(clocks.north_millis),
             format_clock(clocks.south_millis)
         )
@@ -655,7 +655,7 @@ fn sync_interaction_affordances(
                 HoldAvailability::Available => "H: Hold (available)",
                 HoldAvailability::Disabled(reason) => reason,
             };
-            format!("Arrow keys: focus · Enter: select/move · Esc: leave board · {hold}")
+            format!("Arrow keys: focus - Enter: select/move - Esc: leave board - {hold}")
         };
         let mut lines = vec![controls];
         if !interaction.status.is_empty() {
@@ -996,7 +996,7 @@ mod tests {
         });
         assert_eq!(
             clock_description(&game.state).as_deref(),
-            Some("Clocks — North 1:02 · South 0:59")
+            Some("Clocks - North 1:02 - South 0:59")
         );
     }
 }

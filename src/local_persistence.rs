@@ -44,7 +44,7 @@ impl Default for LocalPersistenceStatus {
     fn default() -> Self {
         Self {
             slot: 1,
-            message: "F5 save · F9 load · F6 change slot".to_owned(),
+            message: "F5 save - F9 load - F6 change slot".to_owned(),
         }
     }
 }
@@ -213,7 +213,7 @@ fn decode_document(bytes: &[u8]) -> Result<LocalSaveDocument, String> {
 
 fn slot_path(slot: u8) -> Result<PathBuf, String> {
     if !(1..=SLOT_COUNT).contains(&slot) {
-        return Err(format!("save slot {slot} is outside 1–{SLOT_COUNT}"));
+        return Err(format!("save slot {slot} is outside 1-{SLOT_COUNT}"));
     }
     ProjectDirs::from("org", "Crownlines", "Crownlines")
         .map(|dirs| {

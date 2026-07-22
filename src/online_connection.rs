@@ -938,13 +938,13 @@ fn sync_connection_status(
                 || "no command pending".to_owned(),
                 |pending| {
                     format!(
-                        "{:?} control pending · attempt {}",
+                        "{:?} control pending - attempt {}",
                         pending.kind, pending.attempts
                     )
                 },
             )
         },
-        |pending| format!("command pending · attempt {}", pending.attempts),
+        |pending| format!("command pending - attempt {}", pending.attempts),
     );
     for (mut text, mut visibility) in &mut text {
         *visibility = if settings.saved_online_seat.is_some()
@@ -955,7 +955,7 @@ fn sync_connection_status(
             Visibility::Hidden
         };
         text.0 = format!(
-            "ONLINE {phase} · {pending} · T retry · X cancel retry · F forget seat\n{}",
+            "ONLINE {phase} - {pending} - T retry - X cancel retry - F forget seat\n{}",
             connection.status,
         );
     }

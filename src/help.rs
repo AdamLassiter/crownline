@@ -62,7 +62,7 @@ fn spawn_help(mut commands: Commands) {
         HelpLink(HelpSection::Overview),
         PanelSurface,
         children![(
-            Text::new("F1 · Rules & legend"),
+            Text::new("F1 - Rules & legend"),
             TextFont {
                 font_size: FontSize::Px(12.0),
                 ..default()
@@ -124,7 +124,7 @@ fn spawn_help(mut commands: Commands) {
                     HelpClose,
                     PanelSurface,
                     children![(
-                        Text::new("Close · Esc"),
+                        Text::new("Close - Esc"),
                         TextFont {
                             font_size: FontSize::Px(12.0),
                             ..default()
@@ -310,15 +310,15 @@ fn legend_help(legend: &OverlayLegend) -> String {
         "BOARD LEGEND".to_owned(),
         "Tiles: alternating light/dark parity remains visible under every tint. Open = unmarked neutral sand/stone; F = Forest green; M = Mountain gray; R = Road ochre.".to_owned(),
         "Pieces: Unicode chess silhouette on a contrasting backplate. North uses pale glyphs on a dark upright plate; South uses dark glyphs on a pale rotated plate.".to_owned(),
-        "Features: inset tile marked N/S = North/South Keep; square ring with ·/N/S = neutral/North/South settlement; purple X = promotion site; T = fortification tower.".to_owned(),
-        "Edges: blue band = River; brown thick band with = = Bridge; light-blue band with ·· = Ford; dark band = Wall; gold band with / = Gate.".to_owned(),
+        "Features: inset tile marked N/S = North/South Keep; square ring with -/N/S = neutral/North/South settlement; purple X = promotion site; T = fortification tower.".to_owned(),
+        "Edges: blue band = River; brown thick band with = = Bridge; light-blue band with -- = Ford; dark band = Wall; gold band with / = Gate.".to_owned(),
         "Overlays:".to_owned(),
     ];
     lines.extend(
         legend
             .entries
             .iter()
-            .map(|(kind, description)| format!("{} — {description}", overlay_legend_symbol(*kind))),
+            .map(|(kind, description)| format!("{} - {description}", overlay_legend_symbol(*kind))),
     );
     lines.join("\n")
 }

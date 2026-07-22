@@ -92,8 +92,8 @@ The rules may later support three or four kingdoms, but the core game should fir
 
 Target match length:
 
-* introductory map: 30–45 minutes;
-* standard match: 60–90 minutes;
+* introductory map: 30-45 minutes;
+* standard match: 60-90 minutes;
 * large campaign map: approximately two hours.
 
 The game should reach meaningful conflict quickly. Players should not spend a long opening phase gathering resources without interacting.
@@ -130,7 +130,7 @@ Square geometry is essential because it preserves:
 * Pawn structures;
 * familiar attack patterns.
 
-A standard map is approximately 20×20 squares. Exact dimensions may vary by scenario.
+A standard map is approximately 20x20 squares. Exact dimensions may vary by scenario.
 
 ### 4.2 Starting Kingdoms
 
@@ -943,7 +943,7 @@ The first playable prototype should contain:
 
 ### Board
 
-* 20×20 square grid;
+* 20x20 square grid;
 * two opposing Keeps;
 * four neutral settlements;
 * two promotion sites;

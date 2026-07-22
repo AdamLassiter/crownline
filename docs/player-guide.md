@@ -164,7 +164,7 @@ Move or Hold. Online clocks are server-owned and continue through disconnects.
 ## Accessibility
 
 - Information never relies on hue alone: terrain has F/M/R marks, Keeps N/S,
-  settlements ·/N/S, owner plates differ in contrast and rotation, and every
+  settlements -/N/S, owner plates differ in contrast and rotation, and every
   overlay meaning has a unique symbol plus legend text.
 - Keyboard-only play covers setup, online rooms, board focus, choices, match
   controls, saves, help, confirmations, and reconnect controls.

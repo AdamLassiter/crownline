@@ -106,7 +106,7 @@ fn spawn_lifecycle_ui(mut commands: Commands) {
             root.spawn(name_input("South Player", Player::South, 1));
         });
     commands.spawn((modal_node(), Visibility::Hidden, PauseRoot, children![title_text(
-        "PAUSED · SETTINGS\nP resume · F1 rules · I panels\nClocks and gameplay input are paused.",
+        "PAUSED - SETTINGS\nP resume - F1 rules - I panels\nClocks and gameplay input are paused.",
         LifecycleText,
     )]));
     commands.spawn((
@@ -450,7 +450,7 @@ fn sync_lifecycle_ui(
     }
     let scenario = &catalog.0[setup.selected_scenario];
     let setup_text = format!(
-        "CROWNLINES — LOCAL SETUP\nScenario: {} · {}×{} · {}–{} minutes\nDouble-step: {} · en passant: {} · castling routes: {}\nTab edits names · X swaps colors · PageUp/PageDown scenario · F2 local start · F3 online\nClock: {} · C toggle · -/+ base · ,/. increment\nNorth blue/pale: {} · South orange/dark: {}\n{}",
+        "CROWNLINES - LOCAL SETUP\nScenario: {} - {}x{} - {}-{} minutes\nDouble-step: {} - en passant: {} - castling routes: {}\nTab edits names - X swaps colors - PageUp/PageDown scenario - F2 local start - F3 online\nClock: {} - C toggle - -/+ base - ,/. increment\nNorth blue/pale: {} - South orange/dark: {}\n{}",
         scenario.metadata.name,
         scenario.board.width,
         scenario.board.height,
@@ -481,7 +481,7 @@ fn sync_lifecycle_ui(
                 },
             );
             format!(
-                "MATCH ENDED\n{winner}\nReason: {:?}\nR rematch · settings preserved",
+                "MATCH ENDED\n{winner}\nReason: {:?}\nR rematch - settings preserved",
                 outcome.reason
             )
         },
@@ -493,11 +493,11 @@ fn sync_lifecycle_ui(
             text.0.clone_from(&outcome_text);
         } else if *flow == ClientFlow::ConfirmResign {
             text.0 = format!(
-                "CONFIRM RESIGNATION\n{:?} will lose. Enter confirms · Esc cancels",
+                "CONFIRM RESIGNATION\n{:?} will lose. Enter confirms - Esc cancels",
                 game.state.active_player
             );
         } else {
-            "PAUSED · SETTINGS\nP/Esc resume · F1 rules · I panels\nGameplay input is paused."
+            "PAUSED - SETTINGS\nP/Esc resume - F1 rules - I panels\nGameplay input is paused."
                 .clone_into(&mut text.0);
         }
     }

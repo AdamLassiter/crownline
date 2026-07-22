@@ -188,7 +188,7 @@ fn spawn_online_lobby(mut commands: Commands, settings: Res<ClientSettings>) {
         ))
         .with_children(|root| {
             root.spawn((
-                Text::new("CROWNLINES — ONLINE"),
+                Text::new("CROWNLINES - ONLINE"),
                 TextFont {
                     font_size: FontSize::Px(18.0),
                     ..default()
@@ -480,11 +480,11 @@ fn sync_online_lobby_ui(
     }
     let body = match lobby.screen {
         LobbyScreen::Closed => String::new(),
-        LobbyScreen::Menu => "CROWNLINES — ONLINE\nH host a private room · J join with a code\nTab edits server/name fields · Esc local setup".to_owned(),
+        LobbyScreen::Menu => "CROWNLINES - ONLINE\nH host a private room - J join with a code\nTab edits server/name fields - Esc local setup".to_owned(),
         LobbyScreen::Host => {
             let scenario = &catalog.0[lobby.selected_scenario];
             let scenario_label = format!(
-                "{} · {}×{}",
+                "{} - {}x{}",
                 scenario.metadata.name, scenario.board.width, scenario.board.height
             );
             let clock = lobby.clock.map_or_else(
@@ -492,7 +492,7 @@ fn sync_online_lobby_ui(
                 |clock| format!("{} min + {} sec", clock.base_minutes, clock.increment_seconds),
             );
             format!(
-                "HOST PRIVATE ROOM\nServer: {}\nName: {}\nScenario: {} · Clock: {clock}\nPageUp/PageDown scenario · C clock · -/+ base · ,/. increment\nEnter create · Esc back\n{}",
+                "HOST PRIVATE ROOM\nServer: {}\nName: {}\nScenario: {} - Clock: {clock}\nPageUp/PageDown scenario - C clock - -/+ base - ,/. increment\nEnter create - Esc back\n{}",
                 lobby.server_url,
                 lobby.player_name,
                 scenario_label,
@@ -500,7 +500,7 @@ fn sync_online_lobby_ui(
             )
         }
         LobbyScreen::Join => format!(
-            "JOIN PRIVATE ROOM\nServer: {}\nName: {}\nRoom code: {}\nTab edits fields · Enter join · Esc back\n{}",
+            "JOIN PRIVATE ROOM\nServer: {}\nName: {}\nRoom code: {}\nTab edits fields - Enter join - Esc back\n{}",
             lobby.server_url,
             lobby.player_name,
             normalize_room_code(&lobby.room_code),
@@ -509,7 +509,7 @@ fn sync_online_lobby_ui(
         LobbyScreen::Waiting => {
             let seat = lobby.seat.as_ref();
             format!(
-                "PRIVATE ROOM {}\nSeat: {} · Match: {} · Credential stored: {}\nR ready · C copy invitation · A include server address: {} · Esc leave screen\n{}",
+                "PRIVATE ROOM {}\nSeat: {} - Match: {} - Credential stored: {}\nR ready - C copy invitation - A include server address: {} - Esc leave screen\n{}",
                 seat.map_or("------", |seat| seat.room_code.as_str()),
                 seat.map_or_else(|| "unknown".to_owned(), |seat| format!("{:?}", seat.seat)),
                 seat.map_or_else(|| "unknown".to_owned(), |seat| seat.match_id.to_string()),
@@ -690,7 +690,7 @@ fn room_share_text(room_code: &str, server_url: Option<&str>) -> String {
 fn safe_protocol_error(error: &crownline_protocol::ProtocolError) -> String {
     use crownline_protocol::ProtocolError;
     match error {
-        ProtocolError::InvalidPlayerName => "Enter a player name of 1–24 characters.".to_owned(),
+        ProtocolError::InvalidPlayerName => "Enter a player name of 1-24 characters.".to_owned(),
         ProtocolError::InvalidRoomCode => "Enter the six-character room code.".to_owned(),
         ProtocolError::InvalidScenarioId => "Select an installed scenario.".to_owned(),
         ProtocolError::InvalidClock => "Choose a supported clock configuration.".to_owned(),

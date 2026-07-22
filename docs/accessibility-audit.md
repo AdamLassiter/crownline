@@ -27,9 +27,9 @@ Hue is supplementary. Removing hue leaves the following independent cues:
 | Piece kind | Distinct Unicode King, Queen, Rook, Bishop, Knight, and Pawn silhouettes. |
 | Piece owner | North uses a pale glyph on an upright dark plate; South uses a dark glyph on a rotated pale plate. |
 | Keep owner | Every inset Keep tile carries an explicit `N` or `S`. |
-| Settlement owner | The ring carries `·`, `N`, or `S`; South's ring is additionally rotated. |
+| Settlement owner | The ring carries `-`, `N`, or `S`; South's ring is additionally rotated. |
 | Promotion and fortification | Promotion sites use a crossed mark; fortifications use `T`. |
-| Legal/attack/check state | All 12 overlay meanings have unique symbols, including `•`, `×`, `!`, `G`, `#`, gained/lost signs, selection, and illegal destination. |
+| Legal/attack/check state | All 12 overlay meanings have unique symbols, including `•`, `x`, `!`, `G`, `#`, gained/lost signs, selection, and illegal destination. |
 | Progress and warnings | Settlement ownership, founder, governors, blockers, establishment/production fractions, readiness, clocks, low-clock warning, check, phase, and selected piece are present as text. |
 
 Regression tests enumerate every terrain and overlay symbol, inspect both owner

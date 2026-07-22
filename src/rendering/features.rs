@@ -271,7 +271,7 @@ fn spawn_edge(commands: &mut Commands, scenario: &ScenarioDefinition, edge: Edge
 
 fn settlement_style(owner: Option<Player>) -> (Color, &'static str, Quat) {
     match owner {
-        None => (Color::srgba(0.92, 0.92, 0.88, 0.9), "·", Quat::IDENTITY),
+        None => (Color::srgba(0.92, 0.92, 0.88, 0.9), "-", Quat::IDENTITY),
         Some(Player::North) => (owner_color(Player::North), "N", Quat::IDENTITY),
         Some(Player::South) => (
             owner_color(Player::South),
@@ -318,7 +318,7 @@ fn edge_color(kind: EdgeKind) -> Color {
 const fn edge_label(kind: EdgeKind) -> Option<&'static str> {
     match kind {
         EdgeKind::Bridge => Some("="),
-        EdgeKind::Ford => Some("··"),
+        EdgeKind::Ford => Some("--"),
         EdgeKind::Gate => Some("/"),
         EdgeKind::River | EdgeKind::Wall => None,
     }
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn keep_and_settlement_ownership_have_text_cues_independent_of_hue() {
-        assert_eq!(settlement_style(None).1, "·");
+        assert_eq!(settlement_style(None).1, "-");
         assert_eq!(settlement_style(Some(Player::North)).1, "N");
         assert_eq!(settlement_style(Some(Player::South)).1, "S");
         assert_ne!(

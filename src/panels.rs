@@ -125,7 +125,7 @@ fn spawn_information_panels(mut commands: Commands) {
 
 fn spawn_panel(commands: &mut Commands, kind: PanelKind, inset: UiRect) {
     let title = match kind {
-        PanelKind::Match => "MATCH · [I] collapse all",
+        PanelKind::Match => "MATCH - [I] collapse all",
         PanelKind::Settlements => "SETTLEMENTS",
     };
     commands
@@ -285,7 +285,7 @@ fn apply_panel_visibility(
             PanelKind::Settlements => "SETTLEMENTS",
         };
         text.0 = format!(
-            "{name} · {}",
+            "{name} - {}",
             if state.collapsed(label.0) {
                 "expand"
             } else {
@@ -392,19 +392,19 @@ fn match_panel_text_with_clock_context(
     online: bool,
 ) -> String {
     let mut lines = vec![format!(
-        "TURN {} · {:?} to act",
+        "TURN {} - {:?} to act",
         state.turn_number, state.active_player
     )];
     if is_in_check(scenario, state, state.active_player).unwrap_or(false) {
         lines.push(format!(
-            "!!! CHECK — {:?} King is threatened",
+            "!!! CHECK - {:?} King is threatened",
             state.active_player
         ));
     }
     match &state.phase {
-        TurnPhase::Command => lines.push("Phase: Command — Move or Hold".to_owned()),
+        TurnPhase::Command => lines.push("Phase: Command - Move or Hold".to_owned()),
         TurnPhase::ResolvingChoices { queue } => {
-            lines.push(format!("!!! MANDATORY CHOICE — {} remaining", queue.len()));
+            lines.push(format!("!!! MANDATORY CHOICE - {} remaining", queue.len()));
         }
     }
     if let Some(clocks) = state.clocks {
@@ -414,7 +414,7 @@ fn match_panel_text_with_clock_context(
             "Clocks"
         };
         lines.push(format!(
-            "{heading}: North {} · South {}",
+            "{heading}: North {} - South {}",
             format_clock(clocks.north_millis),
             format_clock(clocks.south_millis)
         ));
@@ -423,7 +423,7 @@ fn match_panel_text_with_clock_context(
             ("South", clocks.south_millis),
         ] {
             if millis <= LOW_CLOCK_MILLIS {
-                lines.push(format!("!! LOW CLOCK — {player} {}", format_clock(millis)));
+                lines.push(format!("!! LOW CLOCK - {player} {}", format_clock(millis)));
             }
         }
     } else {
@@ -439,11 +439,11 @@ fn match_panel_text_with_clock_context(
     }
     if let Some(outcome) = state.outcome {
         lines.push(format!(
-            "!!! MATCH ENDED — {:?} · winner {:?}",
+            "!!! MATCH ENDED - {:?} - winner {:?}",
             outcome.reason, outcome.winner
         ));
     }
-    lines.push("Controls: H Hold · I collapse/expand panels".to_owned());
+    lines.push("Controls: H Hold - I collapse/expand panels".to_owned());
     lines.join("\n")
 }
 
@@ -507,13 +507,13 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
             },
         );
         sections.push(format!(
-            "{} at {:?}\nOwner: {:?} · founder: {founder}\nGovernors: {governors}\nBlockers: {blockers}\nEstablishment: {}/{}{}\nProduction: {}/{} · readiness: {}\nSupported Pawn: {supported_pawn}",
+            "{} at {:?}\nOwner: {:?} - founder: {founder}\nGovernors: {governors}\nBlockers: {blockers}\nEstablishment: {}/{}{}\nProduction: {}/{} - readiness: {}\nSupported Pawn: {supported_pawn}",
             site.id,
             site.at,
             settlement.owner,
             settlement.establishment_progress,
             scenario.rules.establishment_cycles,
-            if settlement.established { " · ESTABLISHED" } else { "" },
+            if settlement.established { " - ESTABLISHED" } else { "" },
             settlement.production_progress,
             scenario.rules.production_cycles,
             if placement_ready { "PAWN PLACEMENT READY" } else { "not ready" },
@@ -536,11 +536,11 @@ fn blocker_text(blocker: GovernanceBlocker) -> String {
 
 fn bounded_history(entries: &[String]) -> String {
     if entries.is_empty() {
-        return "RECENT ACTIONS · 0\nNo actions yet.".to_owned();
+        return "RECENT ACTIONS - 0\nNo actions yet.".to_owned();
     }
     let start = entries.len().saturating_sub(HISTORY_LIMIT);
     let mut lines = vec![format!(
-        "RECENT ACTIONS · showing {} of {}",
+        "RECENT ACTIONS - showing {} of {}",
         entries.len() - start,
         entries.len()
     )];
@@ -605,7 +605,7 @@ mod tests {
         state.pieces.get_mut(&opposing_king).unwrap().at =
             crownline_core::scenario::Coord::new(7, 7);
         let text = match_panel_text(&scenario, &state, Some(king));
-        assert!(text.contains("LOW CLOCK — North"));
+        assert!(text.contains("LOW CLOCK - North"));
         assert!(text.contains("!!! CHECK"));
         assert!(text.contains("Selected:"));
         assert!(text.contains("Phase: Command"));
