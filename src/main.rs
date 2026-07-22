@@ -10,7 +10,7 @@ mod online_status;
 mod panels;
 mod rendering;
 
-use bevy::{asset::LoadState, prelude::*, window::WindowResolution};
+use bevy::{asset::LoadState, prelude::*, ui::UiScale, window::WindowResolution};
 use config::ClientSettings;
 use help::RulesHelpPlugin;
 use lifecycle::LocalLifecyclePlugin;
@@ -29,6 +29,7 @@ fn main() {
     let settings = ClientSettings::load_or_default();
     App::new()
         .insert_resource(settings.clone())
+        .insert_resource(configured_ui_scale(&settings))
         .insert_resource(ClearColor(Color::srgb(0.055, 0.059, 0.071)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -53,6 +54,10 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();
+}
+
+fn configured_ui_scale(settings: &ClientSettings) -> UiScale {
+    UiScale(settings.ui_scale)
 }
 
 #[derive(Component)]
@@ -124,6 +129,22 @@ fn font_visibility(load_failed: bool, chess_text: bool, fallback_text: bool) -> 
         (true, _, true) | (false, true, _) => Visibility::Visible,
         (false, _, true) => Visibility::Hidden,
         _ => Visibility::Inherited,
+    }
+}
+
+#[cfg(test)]
+mod accessibility_tests {
+    use super::*;
+
+    #[test]
+    fn configured_ui_scale_reaches_bevy_layout() {
+        for scale in [0.75, 1.0, 1.5, 2.0, 2.5] {
+            let settings = ClientSettings {
+                ui_scale: scale,
+                ..ClientSettings::default()
+            };
+            assert!((configured_ui_scale(&settings).0 - scale).abs() < f32::EPSILON);
+        }
     }
 }
 
