@@ -2,7 +2,7 @@
 
 This audit records the stable visual semantics and input/layout invariants used
 by the desktop client. It was run on 2026-07-22 against the worktree based on
-`6358cb7`, Rust 1.95.0, and Bevy 0.18.1.
+`6358cb7`, Rust 1.95.0, and Bevy 0.19.0.
 
 Run the automated evidence with:
 
