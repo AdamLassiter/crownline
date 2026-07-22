@@ -4,7 +4,10 @@ use bevy::{
     window::PrimaryWindow,
 };
 
-use crate::config::{CameraBindingsSettings, CameraKey, ClientSettings};
+use crate::{
+    config::{CameraBindingsSettings, CameraKey, ClientSettings, camera_modifier_down},
+    lifecycle::ClientFlow,
+};
 
 use super::{PointerCapture, TILE_SIZE, coordinates::BoardGeometry};
 
@@ -58,6 +61,7 @@ impl Plugin for CameraControlPlugin {
 fn camera_controls(
     time: Res<Time>,
     settings: Res<ClientSettings>,
+    flow: Res<ClientFlow>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut wheel: MessageReader<MouseWheel>,
@@ -70,6 +74,9 @@ fn camera_controls(
     >,
     mut gesture: Local<CameraGestureState>,
 ) {
+    if !matches!(*flow, ClientFlow::Playing | ClientFlow::OnlinePlaying) {
+        return;
+    }
     let Ok(window) = windows.single() else {
         return;
     };
@@ -84,8 +91,9 @@ fn camera_controls(
         return;
     }
     let bindings = CameraBindings::from(&settings.camera_bindings);
+    let keyboard_camera = camera_modifier_down(&keys);
 
-    if !gesture.initialized || keys.just_pressed(bindings.reset) {
+    if !gesture.initialized || (keyboard_camera && keys.just_pressed(bindings.reset)) {
         orthographic.scale = fit_scale(*geometry, viewport);
         transform.translation.x = 0.0;
         transform.translation.y = 0.0;
@@ -103,10 +111,10 @@ fn camera_controls(
             MouseScrollUnit::Pixel => event.y / MouseScrollUnit::SCROLL_UNIT_CONVERSION_FACTOR,
         })
         .sum::<f32>();
-    if keys.just_pressed(bindings.zoom_in) {
+    if keyboard_camera && keys.just_pressed(bindings.zoom_in) {
         zoom_steps += 1.0;
     }
-    if keys.just_pressed(bindings.zoom_out) {
+    if keyboard_camera && keys.just_pressed(bindings.zoom_out) {
         zoom_steps -= 1.0;
     }
     if capture.ui_has_pointer {
@@ -126,16 +134,16 @@ fn camera_controls(
     }
 
     let mut direction = Vec2::ZERO;
-    if keys.pressed(bindings.pan_up) {
+    if keyboard_camera && keys.pressed(bindings.pan_up) {
         direction.y += 1.0;
     }
-    if keys.pressed(bindings.pan_down) {
+    if keyboard_camera && keys.pressed(bindings.pan_down) {
         direction.y -= 1.0;
     }
-    if keys.pressed(bindings.pan_left) {
+    if keyboard_camera && keys.pressed(bindings.pan_left) {
         direction.x -= 1.0;
     }
-    if keys.pressed(bindings.pan_right) {
+    if keyboard_camera && keys.pressed(bindings.pan_right) {
         direction.x += 1.0;
     }
     if direction != Vec2::ZERO {

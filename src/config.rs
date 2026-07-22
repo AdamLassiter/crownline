@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use bevy::prelude::Resource;
+use bevy::prelude::{ButtonInput, KeyCode, Resource};
 use crownline_core::scenario::Player;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -92,6 +92,14 @@ impl Default for ClientSettings {
             saved_online_seat: None,
         }
     }
+}
+
+pub(crate) fn camera_modifier_down(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+}
+
+pub(crate) fn unmodified_just_pressed(keys: &ButtonInput<KeyCode>, key: KeyCode) -> bool {
+    !camera_modifier_down(keys) && keys.just_pressed(key)
 }
 
 impl ClientSettings {
@@ -271,5 +279,25 @@ mod tests {
         .validate()
         .unwrap_err();
         assert!(error.to_string().contains("800x480 logical UI pixels"));
+    }
+
+    #[test]
+    fn camera_modifier_requires_either_shift_key() {
+        let mut keys = ButtonInput::default();
+        assert!(!camera_modifier_down(&keys));
+        keys.press(KeyCode::ShiftRight);
+        assert!(camera_modifier_down(&keys));
+    }
+
+    #[test]
+    fn modified_camera_key_cannot_be_an_unmodified_command() {
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::ShiftLeft);
+        keys.press(KeyCode::KeyQ);
+        assert!(camera_modifier_down(&keys));
+        assert!(!unmodified_just_pressed(&keys, KeyCode::KeyQ));
+
+        keys.release(KeyCode::ShiftLeft);
+        assert!(unmodified_just_pressed(&keys, KeyCode::KeyQ));
     }
 }

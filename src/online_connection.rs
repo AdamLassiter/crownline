@@ -21,7 +21,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 
 use crate::{
-    config::{ClientSettings, SavedOnlineSeat},
+    config::{ClientSettings, SavedOnlineSeat, unmodified_just_pressed},
     lifecycle::{ClientFlow, ScenarioCatalog},
     local_interaction::BoardInteraction,
     online_lobby::{LobbyScreen, OnlineLobby, OnlineSeat},
@@ -344,7 +344,7 @@ fn handle_connection_controls(
     {
         let _ = transport.commands.try_send(ConnectionCommand::Cancel);
     }
-    if keys.just_pressed(KeyCode::KeyF)
+    if unmodified_just_pressed(&keys, KeyCode::KeyF)
         && let Some(saved) = settings.saved_online_seat.take()
     {
         let _ = transport

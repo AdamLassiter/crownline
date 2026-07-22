@@ -11,8 +11,11 @@ use crownline_core::{
     state::MatchState,
 };
 
-use crate::rendering::{
-    DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
+use crate::{
+    config::unmodified_just_pressed,
+    rendering::{
+        DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource, Default)]
@@ -245,9 +248,9 @@ fn handle_lifecycle_input(
                 *flow = ClientFlow::Outcome;
             } else if keys.just_pressed(KeyCode::KeyP) {
                 *flow = ClientFlow::Paused;
-            } else if keys.just_pressed(KeyCode::KeyQ) {
+            } else if unmodified_just_pressed(&keys, KeyCode::KeyQ) {
                 *flow = ClientFlow::ConfirmResign;
-            } else if keys.just_pressed(KeyCode::KeyD) {
+            } else if unmodified_just_pressed(&keys, KeyCode::KeyD) {
                 apply_control(
                     &Action::OfferDraw {
                         player: game.state.active_player,

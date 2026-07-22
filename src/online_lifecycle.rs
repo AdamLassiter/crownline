@@ -11,6 +11,7 @@ use crownline_protocol::{
 use uuid::Uuid;
 
 use crate::{
+    config::unmodified_just_pressed,
     lifecycle::ClientFlow,
     online_connection::{
         OnlineControlKind, OnlineControlOutbox, OnlineControlResolved, OnlineIntentOutbox,
@@ -199,13 +200,17 @@ fn handle_online_lifecycle_input(
     if controls_locked {
         return;
     }
-    if keys.just_pressed(KeyCode::KeyQ) && resignation_available(&game.state, seat.seat) {
+    if unmodified_just_pressed(&keys, KeyCode::KeyQ)
+        && resignation_available(&game.state, seat.seat)
+    {
         lifecycle.confirm_resign = true;
         "Confirm resignation with Enter, or cancel with Escape.".clone_into(&mut lifecycle.status);
         return;
     }
     match game.state.outstanding_draw_offer {
-        None if keys.just_pressed(KeyCode::KeyD) && game.state.active_player == seat.seat => {
+        None if unmodified_just_pressed(&keys, KeyCode::KeyD)
+            && game.state.active_player == seat.seat =>
+        {
             submit_control(
                 &mut control_outbox,
                 draw_message(seat.match_id, game.state.revision, DrawCommand::Offer),
