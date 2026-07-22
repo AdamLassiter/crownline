@@ -223,6 +223,7 @@ async fn create_room(
     State(state): State<AppState>,
     Json(request): Json<CreateRoomRequest>,
 ) -> Result<Json<CreateRoomResponse>, HttpError> {
+    require_protocol_version(request.protocol_version)?;
     check_limit(
         &state,
         LimitKind::Create,
@@ -242,6 +243,7 @@ async fn join_room(
     State(state): State<AppState>,
     Json(request): Json<JoinRoomRequest>,
 ) -> Result<Json<JoinRoomResponse>, HttpError> {
+    require_protocol_version(request.protocol_version)?;
     check_limit(
         &state,
         LimitKind::Join,
@@ -265,6 +267,24 @@ async fn join_room(
         None,
     );
     Ok(Json(joined.response))
+}
+
+fn require_protocol_version(found: u16) -> Result<(), HttpError> {
+    if found == PROTOCOL_VERSION {
+        return Ok(());
+    }
+    Err((
+        StatusCode::UPGRADE_REQUIRED,
+        Json(ServerMessage::Error {
+            protocol_version: PROTOCOL_VERSION,
+            code: ErrorCode::IncompatibleProtocol,
+            message: format!(
+                "Client protocol {found} is incompatible with server protocol {PROTOCOL_VERSION}."
+            ),
+            retryable: false,
+            snapshot: None,
+        }),
+    ))
 }
 
 async fn check_limit(

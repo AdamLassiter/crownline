@@ -44,3 +44,6 @@ operations guide.
 
 Database durability, backup, and restore procedures are documented in
 [docs/server-operations.md](docs/server-operations.md).
+Independent client/server, save, scenario, journal, snapshot, and database
+support guarantees are documented in
+[docs/compatibility.md](docs/compatibility.md).

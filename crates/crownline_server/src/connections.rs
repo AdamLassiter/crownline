@@ -9,7 +9,8 @@ use axum::extract::ws::{Message, WebSocket};
 use crownline_core::{Action, scenario::Player};
 use crownline_protocol::{
     ClientMessage, ConnectionState, DrawCommand, ErrorCode, MatchSnapshot, PROTOCOL_VERSION,
-    RematchCommand, RematchState, ServerMessage, decode_client_message, stale_revision_message,
+    ProtocolError, RematchCommand, RematchState, ServerMessage, decode_client_message,
+    stale_revision_message,
 };
 use futures_util::StreamExt;
 use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
@@ -311,11 +312,24 @@ pub async fn serve_socket(
         close_connection(&connections, peer_ip).await;
         return;
     };
-    let Ok(ClientMessage::Authenticate {
+    let message = match decode_client_message(&bytes) {
+        Ok(message) => message,
+        Err(ProtocolError::IncompatibleVersion { found, expected }) => {
+            let _ = send_incompatible_protocol(&mut socket, found, expected).await;
+            close_connection(&connections, peer_ip).await;
+            return;
+        }
+        Err(_) => {
+            let _ = send_error(&mut socket, "Authentication is required.").await;
+            close_connection(&connections, peer_ip).await;
+            return;
+        }
+    };
+    let ClientMessage::Authenticate {
         room_code,
         reconnect_token,
         ..
-    }) = decode_client_message(&bytes)
+    } = message
     else {
         let _ = send_error(&mut socket, "Authentication is required.").await;
         close_connection(&connections, peer_ip).await;
@@ -429,16 +443,23 @@ async fn handle_authenticated_message(
     authorities: &Arc<Mutex<BTreeMap<Uuid, AuthoritativeMatch>>>,
     actors: &Arc<MatchActorRegistry>,
 ) -> bool {
-    let Ok(message) = decode_client_message(bytes) else {
-        let _ = send_public_error(
-            socket,
-            ErrorCode::InvalidRequest,
-            "Invalid message.",
-            false,
-            None,
-        )
-        .await;
-        return true;
+    let message = match decode_client_message(bytes) {
+        Ok(message) => message,
+        Err(ProtocolError::IncompatibleVersion { found, expected }) => {
+            let _ = send_incompatible_protocol(socket, found, expected).await;
+            return true;
+        }
+        Err(_) => {
+            let _ = send_public_error(
+                socket,
+                ErrorCode::InvalidRequest,
+                "Invalid message.",
+                false,
+                None,
+            )
+            .await;
+            return true;
+        }
     };
     match message {
         ClientMessage::Ready { context, .. } => {
@@ -765,6 +786,21 @@ async fn send_snapshot(socket: &mut WebSocket, snapshot: MatchSnapshot) -> Resul
 
 async fn send_error(socket: &mut WebSocket, message: &str) -> Result<(), ()> {
     send_public_error(socket, ErrorCode::Unauthorized, message, false, None).await
+}
+
+async fn send_incompatible_protocol(
+    socket: &mut WebSocket,
+    found: u16,
+    expected: u16,
+) -> Result<(), ()> {
+    send_public_error(
+        socket,
+        ErrorCode::IncompatibleProtocol,
+        &format!("Client protocol {found} is incompatible with server protocol {expected}."),
+        false,
+        None,
+    )
+    .await
 }
 
 async fn send_public_error(

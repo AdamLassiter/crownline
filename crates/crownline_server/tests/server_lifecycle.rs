@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use crownline_core::{Action, ClockSettings, MatchState, start_clocks, state::OutcomeReason};
 use crownline_protocol::{
-    ActionRequest, ClientMessage, CreateRoomRequest, CreateRoomResponse, DrawCommand,
+    ActionRequest, ClientMessage, CreateRoomRequest, CreateRoomResponse, DrawCommand, ErrorCode,
     JoinRoomRequest, JoinRoomResponse, MatchSnapshot, MutationContext, PROTOCOL_VERSION,
     ReconnectToken, RematchCommand, ServerMessage,
 };
@@ -136,6 +136,113 @@ fn acknowledgement(message: ServerMessage) -> MatchSnapshot {
         panic!("mutation must be acknowledged");
     };
     result.snapshot
+}
+
+#[tokio::test]
+async fn incompatible_protocol_is_actionable_before_a_seat_is_joined() {
+    let database = database_path();
+    let server = TestServer::start(&database).await;
+    let client = reqwest::Client::new();
+    let future_version = PROTOCOL_VERSION + 1;
+
+    let response = client
+        .post(server.http_url("/rooms"))
+        .json(&CreateRoomRequest {
+            protocol_version: future_version,
+            player_name: "Future host".to_owned(),
+            scenario_id: "introductory-crossing".to_owned(),
+            clock: None,
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::UPGRADE_REQUIRED);
+    assert!(matches!(
+        response.json::<ServerMessage>().await.unwrap(),
+        ServerMessage::Error {
+            code: ErrorCode::IncompatibleProtocol,
+            ..
+        }
+    ));
+
+    let created: CreateRoomResponse = client
+        .post(server.http_url("/rooms"))
+        .json(&CreateRoomRequest {
+            protocol_version: PROTOCOL_VERSION,
+            player_name: "Current host".to_owned(),
+            scenario_id: "introductory-crossing".to_owned(),
+            clock: None,
+        })
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let future_join = client
+        .post(server.http_url("/rooms/join"))
+        .json(&JoinRoomRequest {
+            protocol_version: future_version,
+            player_name: "Future guest".to_owned(),
+            room_code: created.room_code.clone(),
+        })
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(future_join.status(), reqwest::StatusCode::UPGRADE_REQUIRED);
+    assert!(matches!(
+        future_join.json::<ServerMessage>().await.unwrap(),
+        ServerMessage::Error {
+            code: ErrorCode::IncompatibleProtocol,
+            ..
+        }
+    ));
+    client
+        .post(server.http_url("/rooms/join"))
+        .json(&JoinRoomRequest {
+            protocol_version: PROTOCOL_VERSION,
+            player_name: "Current guest".to_owned(),
+            room_code: created.room_code.clone(),
+        })
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let (mut socket, _) = connect_async(server.websocket_url()).await.unwrap();
+    socket
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "authenticate",
+                "protocol_version": future_version,
+                "room_code": created.room_code,
+                "reconnect_token": created.reconnect_token,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next_server_message(&mut socket, &[]).await,
+        ServerMessage::Error {
+            code: ErrorCode::IncompatibleProtocol,
+            message,
+            ..
+        } if message.contains("Client protocol") && message.contains("server protocol")
+    ));
+
+    server.stop().await;
+    for path in [
+        database.clone(),
+        database.with_extension("sqlite3-shm"),
+        database.with_extension("sqlite3-wal"),
+    ] {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 #[tokio::test]

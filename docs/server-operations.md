@@ -150,6 +150,11 @@ startup rejects it without applying changes.
 6. To roll back across a schema change, stop the candidate and restore the
    pre-upgrade backup; never open a newer schema with an older binary.
 
+The independent protocol, file, scenario, journal, and database version support
+matrix is maintained in [`compatibility.md`](compatibility.md). Check that matrix
+and the candidate release notes before upgrade or rollback; the application
+version alone is not a compatibility signal.
+
 Release CI scans locked dependencies and the built runtime image for high and
 critical known vulnerabilities. Review base-image updates and scan exceptions
 as part of every release rather than suppressing unfixed findings silently.
