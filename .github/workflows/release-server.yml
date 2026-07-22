@@ -1,0 +1,234 @@
+name: Release server image
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  CANDIDATE_IMAGE: crownline-server:release-candidate
+
+jobs:
+  server:
+    name: Scan, attest, and publish server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve immutable release coordinates
+        id: release
+        shell: bash
+        run: |
+          version=$(cargo metadata --locked --no-deps --format-version 1 | jq --raw-output '.packages[] | select(.name == "crownline_server") | .version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match Cargo version v$version" >&2
+            exit 1
+          fi
+          image="$REGISTRY/${GITHUB_REPOSITORY,,}-server"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "version_ref=$image:$version" >> "$GITHUB_OUTPUT"
+          echo "revision_ref=$image:$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          echo "stable_ref=$image:stable" >> "$GITHUB_OUTPUT"
+      - name: Build exact release candidate
+        run: |
+          docker build --pull \
+            --build-arg CROWNLINE_VERSION='${{ steps.release.outputs.version }}' \
+            --build-arg CROWNLINE_REVISION='${{ github.sha }}' \
+            --build-arg CROWNLINE_SOURCE_URL='${{ github.server_url }}/${{ github.repository }}' \
+            --tag "$CANDIDATE_IMAGE" .
+      - name: Smoke non-root image with mounted database
+        shell: bash
+        run: |
+          container="crownline-release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          volume="crownline-release-data-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$container" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+          docker run --detach --name "$container" \
+            --mount "source=$volume,target=/var/lib/crownline" \
+            "$CANDIDATE_IMAGE" >/dev/null
+          for attempt in $(seq 1 30); do
+            status=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container")
+            if [ "$status" = healthy ]; then
+              break
+            fi
+            if [ "$status" = unhealthy ] || [ "$attempt" = 30 ]; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          test "$(docker exec "$container" id -u)" = 10001
+          docker exec "$container" test -s /var/lib/crownline/crownline.sqlite3
+          docker exec "$container" curl --fail --silent http://127.0.0.1:5000/health/ready >/dev/null
+      - name: Record image vulnerability and license report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.CANDIDATE_IMAGE }}
+          scanners: vuln,license
+          format: json
+          output: crownline-server-image-scan.json
+          exit-code: 0
+          list-all-pkgs: true
+      - name: Enforce high and critical vulnerability policy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.CANDIDATE_IMAGE }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: 1
+          skip-setup-trivy: true
+      - name: Record locked source vulnerability and license report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,license
+          format: json
+          output: crownline-server-source-scan.json
+          exit-code: 0
+          list-all-pkgs: true
+          skip-setup-trivy: true
+      - name: Enforce locked dependency vulnerability policy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: 1
+          skip-setup-trivy: true
+      - name: Enforce restricted and forbidden license policy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: license
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: 1
+          skip-setup-trivy: true
+      - name: Generate CycloneDX image SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.CANDIDATE_IMAGE }}
+          scanners: vuln
+          format: cyclonedx
+          output: crownline-server.cdx.json
+          exit-code: 0
+          list-all-pkgs: true
+          skip-setup-trivy: true
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reject replacement of immutable tags
+        run: |
+          if docker manifest inspect '${{ steps.release.outputs.version_ref }}' >/dev/null 2>&1; then
+            echo 'Version tag already exists and will not be replaced.' >&2
+            exit 1
+          fi
+          if docker manifest inspect '${{ steps.release.outputs.revision_ref }}' >/dev/null 2>&1; then
+            echo 'Source-revision tag already exists and will not be replaced.' >&2
+            exit 1
+          fi
+      - name: Push version, revision, and moving stable tags
+        id: push
+        shell: bash
+        run: |
+          for reference in \
+            '${{ steps.release.outputs.version_ref }}' \
+            '${{ steps.release.outputs.revision_ref }}' \
+            '${{ steps.release.outputs.stable_ref }}'; do
+            docker tag "$CANDIDATE_IMAGE" "$reference"
+            docker push "$reference"
+          done
+          repository_digest=$(docker image inspect '${{ steps.release.outputs.version_ref }}' --format '{{index .RepoDigests 0}}')
+          digest=${repository_digest#*@}
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Could not resolve pushed image digest: $repository_digest" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Attest image provenance
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.release.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Attest image SBOM
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.release.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: crownline-server.cdx.json
+          push-to-registry: true
+      - name: Write publication record and upgrade notes
+        shell: bash
+        run: |
+          version='${{ steps.release.outputs.version }}'
+          mv crownline-server.cdx.json "crownline-server-$version.cdx.json"
+          mv crownline-server-image-scan.json "crownline-server-$version-image-scan.json"
+          mv crownline-server-source-scan.json "crownline-server-$version-source-scan.json"
+          record="crownline-server-$version-RELEASE.md"
+          cat > "$record" <<'EOF'
+          # Crownlines server ${{ steps.release.outputs.version }}
+
+          Immutable image: `${{ steps.release.outputs.image }}@${{ steps.push.outputs.digest }}`
+
+          Tags:
+
+          - `${{ steps.release.outputs.version_ref }}` (immutable version)
+          - `${{ steps.release.outputs.revision_ref }}` (immutable source revision)
+          - `${{ steps.release.outputs.stable_ref }}` (moving stable pointer)
+
+          Source revision: `${{ github.sha }}`
+
+          The accompanying CycloneDX SBOM and Trivy image/source vulnerability
+          and license reports describe the published digest and locked source.
+          Configuration, persistence, health,
+          backup, and TLS guidance is in [server operations](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/docs/server-operations.md).
+
+          Before upgrading, take and integrity-check an online SQLite backup,
+          stop the old container, and retain its digest. Never run two versions
+          against one volume. This build accepts database schema 0, 1, or 2 and
+          migrates forward to schema 2. Rollback across a schema change requires
+          restoring the pre-upgrade backup; see the [compatibility policy](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/docs/compatibility.md).
+          EOF
+      - name: Create or observe shared GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view '${{ github.ref_name }}' >/dev/null 2>&1; then
+            gh release create '${{ github.ref_name }}' --verify-tag --generate-notes || gh release view '${{ github.ref_name }}' >/dev/null
+          fi
+      - name: Upload server publication records
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release upload '${{ github.ref_name }}'
+          crownline-server-${{ steps.release.outputs.version }}.cdx.json
+          crownline-server-${{ steps.release.outputs.version }}-image-scan.json
+          crownline-server-${{ steps.release.outputs.version }}-source-scan.json
+          crownline-server-${{ steps.release.outputs.version }}-RELEASE.md
+          --clobber

@@ -12,6 +12,7 @@ Package, document, verify, and distribute the cross-platform client and containe
 - Task 11.03.01 establishes the conservative independent-version compatibility matrix, actionable mismatch behavior, migration fixture rules, and backup-based database rollback policy.
 - Story 11.01 completes player/operator documentation, including quick starts, rules and scenario defaults, requirements/exclusions, accessibility, privacy, persistent operations, backup/recovery, and compatibility.
 - Task 11.02.01 adds deterministic, self-contained desktop archives for four native target/architecture pairs, clean-unpack smoke tests, embedded build identity, licenses/notices, checksums, provenance attestations, and credential-gated signing/notarization.
+- Story 11.02 completes desktop and server packaging: deterministic client archives plus an exact non-root server candidate promoted through mounted-database health, vulnerability/license policy, immutable GHCR tags, digest, OCI labels, SBOM/provenance attestations, and operator upgrade evidence.
 
 ## Stories
 

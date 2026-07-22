@@ -158,3 +158,6 @@ version alone is not a compatibility signal.
 Release CI scans locked dependencies and the built runtime image for high and
 critical known vulnerabilities. Review base-image updates and scan exceptions
 as part of every release rather than suppressing unfixed findings silently.
+The blocking severities, license policy, immutable tags, SBOM/provenance, and
+publication evidence are defined in
+[`server-release-policy.md`](server-release-policy.md).
