@@ -2,6 +2,14 @@
 
 Package, document, verify, and distribute the cross-platform client and containerized server with a clear compatibility policy.
 
+## Status
+
+- [ ] In progress
+
+## Implementation notes
+
+- Task 11.01.02 completes provider-neutral server operations documentation and connects its backup/restore procedure to the scheduled multi-room soak evidence.
+
 ## Stories
 
 - [11.01 Player and operator documentation](11.01-documentation/11.01-story.md)
@@ -21,4 +29,3 @@ Package, document, verify, and distribute the cross-platform client and containe
 ## Cross-cutting concerns
 
 - Signing/checksums, licenses, rollback, migrations, secret-free artifacts, and user-visible known limitations.
-

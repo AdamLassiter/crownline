@@ -2,6 +2,26 @@
 
 ## Container deployment
 
+For a published release, copy the immutable image reference and digest from its
+release notes, then start it with a persistent named volume:
+
+```sh
+export CROWNLINE_IMAGE='<registry>/<repository>:<version>@sha256:<digest>'
+docker volume create crownline-data
+docker run -d --name crownline-server --restart unless-stopped \
+  --init --stop-timeout 20 \
+  -p 127.0.0.1:5000:5000 \
+  -v crownline-data:/var/lib/crownline \
+  -e CROWNLINE_PUBLIC_URL=https://crownline.example \
+  -e RUST_LOG=crownline_server=info,tower_http=info \
+  "$CROWNLINE_IMAGE"
+docker inspect --format '{{.State.Health.Status}}' crownline-server
+```
+
+Replace every angle-bracketed value and the example hostname. Pin the digest in
+production; a moving tag alone is not a rollback point. Until an image is
+published, the equivalent source-checkout path is the supplied Compose file.
+
 Build the multi-stage image with `docker build -t crownline-server .`, or start
 the supplied single-service deployment with `docker compose up --build -d`.
 The final image contains the release server, CA certificates, and the health
@@ -22,16 +42,29 @@ filesystem.
 
 Relevant environment variables are:
 
-- `CROWNLINE_BIND` (image default `0.0.0.0:5000`).
-- `CROWNLINE_PUBLIC_URL` (optional external `http://` or `https://` URL).
-- `CROWNLINE_DATABASE_PATH` (image default
-  `/var/lib/crownline/crownline.sqlite3`).
-- `CROWNLINE_DATABASE_DURABILITY` (`full` or `normal`).
-- `CROWNLINE_LOG_FORMAT` (`json` in the image, or `pretty`).
-- `RUST_LOG` for module-level filtering.
-- `CROWNLINE_SHUTDOWN_SECONDS` (1-300, default 15) for bounded connection drain.
-- The bounded request, room, connection, and idle-lobby settings named in
-  `crates/crownline_server/src/limits.rs`.
+| Variable | Image default | Meaning |
+| --- | --- | --- |
+| `CROWNLINE_BIND` | `0.0.0.0:5000` | Internal listening address. |
+| `CROWNLINE_PUBLIC_URL` | unset | Externally visible `http://` or `https://` URL used for deployment diagnostics. |
+| `CROWNLINE_DATABASE_PATH` | `/var/lib/crownline/crownline.sqlite3` | SQLite database on persistent storage. |
+| `CROWNLINE_DATABASE_DURABILITY` | `full` | SQLite synchronous mode; `full` or `normal`. |
+| `CROWNLINE_LOG_FORMAT` | `json` | `json` or human-readable `pretty`. |
+| `RUST_LOG` | `info` | Module-level tracing filter. |
+| `CROWNLINE_SHUTDOWN_SECONDS` | `15` | Connection drain bound from 1 through 300 seconds. |
+| `CROWNLINE_MAX_HTTP_BYTES` | `8192` | Maximum HTTP request body. |
+| `CROWNLINE_MAX_ROOMS` | `1000` | In-memory room limit. |
+| `CROWNLINE_CREATE_PER_MINUTE` | `10` | Per-IP room creation rate. |
+| `CROWNLINE_JOIN_PER_MINUTE` | `30` | Per-IP room join rate. |
+| `CROWNLINE_ROOM_OPERATIONS_PER_MINUTE` | `120` | Per-room operation rate. |
+| `CROWNLINE_MAX_CONNECTIONS` | `2000` | Global WebSocket limit. |
+| `CROWNLINE_MAX_CONNECTIONS_PER_IP` | `8` | Per-IP WebSocket limit. |
+| `CROWNLINE_PREGAME_IDLE_SECONDS` | `1800` | Unstarted room expiry. |
+
+Every numeric limit override must be a positive integer. Capacity depends on
+match activity, storage latency, proxy limits, and available file descriptors;
+the defaults are safety bounds, not a promise that one instance sustains 2,000
+simultaneously active games. Use the reproducible workload and interpretation in
+[`soak-baseline.md`](soak-baseline.md) before changing them.
 
 Logs go to stdout/stderr and should be collected by the container runtime. They
 do not contain raw reconnect credentials. The image declares `SIGTERM` as its
@@ -80,6 +113,13 @@ Keep backups outside the live volume, restrict them like the primary database,
 and record the application version that created each backup. Backups contain
 hashed reconnect credentials, match state, and player display names, but never
 raw reconnect tokens.
+
+The scheduled release soak verifies the equivalent SQLite online-backup path
+while active and completed matches coexist, checks the backup integrity, starts
+a fresh server from it, reauthenticates an unfinished match, and compares its
+persisted and recomputed canonical hashes. See
+[`soak-baseline.md`](soak-baseline.md) for the exact workload and latest recorded
+result.
 
 ## Restore
 
