@@ -13,6 +13,7 @@ Prove rules correctness, online durability, UI readability, map balance, and max
 - Task 10.02.01 adds real-loopback HTTP/WebSocket integration over isolated durable SQLite, proving the two-client lifecycle, one-winner concurrency, idempotency, credential recovery, persisted deadlines, terminal/rematch behavior, and secret-safe responses.
 - Story 10.02 completes integration verification with headless Bevy projection/input/reconciliation tests across authored board sizes and common resolutions, including exact reconnect reconstruction for every canonical turn surface.
 - Task 10.04.01 establishes release-profile 24x24 baselines for core queries, previews, canonical data work, projection, and Bevy cache invalidation, with documented allocation sources and scheduled regression ceilings.
+- Story 10.04 completes performance evidence with a scheduled multi-room server soak that crosses the bounded event window, exercises reconnect and invalid input, accounts for WAL persistence growth, restores an online backup, and verifies recovered canonical hashes and cleanup RSS.
 
 ## Stories
 

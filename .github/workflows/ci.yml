@@ -79,3 +79,5 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
       - name: Run release-profile performance thresholds
         run: cargo test -p crownline --release scheduled_performance_baseline -- --ignored --nocapture --test-threads=1
+      - name: Run bounded multi-room soak
+        run: cargo test -p crownline_server --release scheduled_server_soak -- --ignored --nocapture --test-threads=1
