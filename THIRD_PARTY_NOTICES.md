@@ -1,10 +1,19 @@
 # Third-party notices
 
+Crownlines includes open-source Rust dependencies recorded in `Cargo.lock`.
+Release dependency and license policy is enforced by the release security
+workflow; the corresponding source packages and license metadata are available
+through <https://crates.io/>.
+
 ## Noto Sans Symbols 2
 
-Crownlines bundles Noto Sans Symbols 2 for its Unicode chess-piece glyphs.
-Copyright Google LLC. Distributed under the SIL Open Font License, Version 1.1.
-The complete license is included at `assets/fonts/OFL.txt`.
+The desktop archive bundles `assets/fonts/NotoSansSymbols2-Regular.ttf`.
 
-Rust dependency license information is derived from the committed `Cargo.lock`
-and must be reviewed as part of the release gate.
+- Copyright 2018 The Noto Project Authors.
+- Licensed under the SIL Open Font License, Version 1.1.
+- Upstream and file checksum: `assets/fonts/README.md`.
+- Complete license text: `assets/fonts/OFL.txt`.
+
+Project source is offered under either `LICENSE-MIT` or `LICENSE-APACHE` at the
+recipient's option. This notice does not replace the license text distributed
+with any component.

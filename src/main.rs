@@ -10,7 +10,12 @@ mod online_status;
 mod panels;
 mod rendering;
 
-use bevy::{asset::LoadState, prelude::*, ui::UiScale, window::WindowResolution};
+use bevy::{
+    asset::{AssetPlugin, LoadState},
+    prelude::*,
+    ui::UiScale,
+    window::WindowResolution,
+};
 use config::ClientSettings;
 use help::RulesHelpPlugin;
 use lifecycle::LocalLifecyclePlugin;
@@ -24,22 +29,41 @@ use panels::InformationPanelsPlugin;
 use rendering::{BoardRenderingPlugin, CameraControlPlugin};
 
 const WINDOW_TITLE: &str = "Crownlines";
+const APPLICATION_VERSION: &str = env!("CARGO_PKG_VERSION");
+const BUILD_REVISION: Option<&str> = option_env!("CROWNLINE_BUILD_REVISION");
 
 fn main() {
+    if std::env::args_os()
+        .skip(1)
+        .any(|argument| argument == "--version" || argument == "-V")
+    {
+        println!("{}", version_line());
+        return;
+    }
     let settings = ClientSettings::load_or_default();
     App::new()
         .insert_resource(settings.clone())
         .insert_resource(configured_ui_scale(&settings))
         .insert_resource(ClearColor(Color::srgb(0.055, 0.059, 0.071)))
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: WINDOW_TITLE.to_owned(),
-                resolution: WindowResolution::new(settings.window_width, settings.window_height),
-                resizable: true,
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin {
+                    file_path: runtime_asset_root(),
+                    ..default()
+                })
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: window_title(),
+                        resolution: WindowResolution::new(
+                            settings.window_width,
+                            settings.window_height,
+                        ),
+                        resizable: true,
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        )
         .add_plugins(BoardRenderingPlugin)
         .add_plugins(CameraControlPlugin)
         .add_plugins(LocalInteractionPlugin)
@@ -54,6 +78,31 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
         .run();
+}
+
+fn version_line() -> String {
+    format!(
+        "crownline {APPLICATION_VERSION} (revision {})",
+        BUILD_REVISION.unwrap_or("development")
+    )
+}
+
+fn window_title() -> String {
+    let revision = BUILD_REVISION.map_or("development", |revision| {
+        revision.get(..revision.len().min(12)).unwrap_or(revision)
+    });
+    format!("{WINDOW_TITLE} {APPLICATION_VERSION} · {revision}")
+}
+
+fn runtime_asset_root() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|executable| executable.parent().map(|parent| parent.join("assets")))
+        .filter(|assets| assets.is_dir())
+        .map_or_else(
+            || "assets".to_owned(),
+            |assets| assets.to_string_lossy().into_owned(),
+        )
 }
 
 fn configured_ui_scale(settings: &ClientSettings) -> UiScale {
@@ -156,5 +205,13 @@ mod tests {
     fn font_failure_hides_glyphs_and_shows_ascii_fallback() {
         assert_eq!(font_visibility(true, true, false), Visibility::Hidden);
         assert_eq!(font_visibility(true, false, true), Visibility::Visible);
+    }
+
+    #[test]
+    fn version_metadata_is_visible_without_starting_bevy() {
+        let line = version_line();
+        assert!(line.contains(env!("CARGO_PKG_VERSION")));
+        assert!(line.contains("revision"));
+        assert!(window_title().contains(env!("CARGO_PKG_VERSION")));
     }
 }

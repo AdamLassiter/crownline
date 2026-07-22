@@ -1,0 +1,150 @@
+name: Release desktop clients
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CROWNLINE_BUILD_REVISION: ${{ github.sha }}
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: target/release/crownline
+            executable: crownline
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: target/release/crownline.exe
+            executable: crownline.exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            binary: target/release/crownline
+            executable: crownline
+          - os: macos-14
+            target: aarch64-apple-darwin
+            binary: target/release/crownline
+            executable: crownline
+    env:
+      WINDOWS_SIGNING_CERTIFICATE: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE }}
+      WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+      APPLE_SIGNING_CERTIFICATE: ${{ secrets.APPLE_SIGNING_CERTIFICATE }}
+      APPLE_SIGNING_PASSWORD: ${{ secrets.APPLE_SIGNING_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - name: Build desktop client
+        run: cargo build --locked --release -p crownline
+      - name: Import and apply Windows signing certificate
+        if: runner.os == 'Windows' && env.WINDOWS_SIGNING_CERTIFICATE != ''
+        shell: pwsh
+        run: |
+          $certificate = Join-Path $env:RUNNER_TEMP crownline-signing.pfx
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_SIGNING_CERTIFICATE))
+          & signtool sign /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com /f $certificate /p $env:WINDOWS_SIGNING_PASSWORD '${{ matrix.binary }}'
+          Remove-Item $certificate -Force
+      - name: Import and apply Apple signing certificate
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_CERTIFICATE != ''
+        shell: bash
+        run: |
+          certificate="$RUNNER_TEMP/crownline-signing.p12"
+          keychain="$RUNNER_TEMP/crownline-signing.keychain-db"
+          printf '%s' "$APPLE_SIGNING_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$APPLE_SIGNING_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$APPLE_SIGNING_PASSWORD" "$keychain"
+          security import "$certificate" -P "$APPLE_SIGNING_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$APPLE_SIGNING_PASSWORD" "$keychain"
+          codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" '${{ matrix.binary }}'
+          codesign --verify --strict --verbose=2 '${{ matrix.binary }}'
+          rm -f "$certificate"
+      - name: Package deterministic archive and checksum
+        shell: bash
+        run: >-
+          python scripts/package_desktop.py
+          --binary '${{ matrix.binary }}'
+          --target '${{ matrix.target }}'
+          --revision '${{ github.sha }}'
+          --expected-version '${{ github.ref_name }}'
+      - name: Notarize signed macOS archive
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_CERTIFICATE != '' && env.APPLE_ID != '' && env.APPLE_APP_PASSWORD != '' && env.APPLE_TEAM_ID != ''
+        shell: bash
+        run: >-
+          xcrun notarytool submit dist/*.zip
+          --apple-id "$APPLE_ID"
+          --password "$APPLE_APP_PASSWORD"
+          --team-id "$APPLE_TEAM_ID"
+          --wait
+      - name: Smoke unpacked archive
+        shell: bash
+        run: |
+          python -m zipfile -e dist/*.zip unpacked
+          chmod +x unpacked/crownlines-*-${{ matrix.target }}/${{ matrix.executable }}
+          unpacked/crownlines-*-${{ matrix.target }}/${{ matrix.executable }} --version
+      - name: Attest archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/*.zip
+      - name: Upload desktop archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: crownlines-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish desktop release assets
+    needs: desktop
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: crownlines-*
+          path: dist
+          merge-multiple: true
+      - name: Verify and combine checksums
+        working-directory: dist
+        run: |
+          sha256sum --check *.zip.sha256
+          sort --unique *.zip.sha256 > SHA256SUMS
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view '${{ github.ref_name }}' >/dev/null 2>&1 || gh release create '${{ github.ref_name }}' --verify-tag --generate-notes
+          gh release upload '${{ github.ref_name }}' dist/*.zip dist/SHA256SUMS --clobber
