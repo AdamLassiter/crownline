@@ -399,7 +399,7 @@ fn spawn_piece(
                         },
                         TextColor(text),
                         TextLayout::justify(Justify::Center),
-                        Transform::from_xyz(0.0, 0.0, 1.0),
+                        Transform::from_xyz(0.0, piece_glyph_vertical_offset(piece.kind), 1.0),
                         ChessFontText,
                     ));
                 });
@@ -429,6 +429,21 @@ pub(super) const fn piece_glyph(kind: PieceKind) -> &'static str {
         PieceKind::Bishop => "♗",
         PieceKind::Knight => "♘",
         PieceKind::Pawn => "♙",
+    }
+}
+
+/// Compensates for the visual ink bounds of the bundled Noto chess glyphs.
+///
+/// Noto places the glyph ink above the font layout centre. These values are
+/// the negated ink-centre offsets measured at 4x raster resolution and scaled
+/// back into the 26 px world-space font size.
+pub(super) const fn piece_glyph_vertical_offset(kind: PieceKind) -> f32 {
+    match kind {
+        PieceKind::King => -3.625,
+        PieceKind::Queen | PieceKind::Rook => -3.75,
+        PieceKind::Bishop => -3.125,
+        PieceKind::Knight => -4.25,
+        PieceKind::Pawn => -4.125,
     }
 }
 
@@ -616,6 +631,22 @@ mod tests {
         assert_eq!(piece_glyph(PieceKind::Bishop), "♗");
         assert_eq!(piece_glyph(PieceKind::Knight), "♘");
         assert_eq!(piece_glyph(PieceKind::Pawn), "♙");
+    }
+
+    #[test]
+    fn piece_glyph_offsets_compensate_bundled_font_ink_bounds() {
+        for (kind, expected) in [
+            (PieceKind::King, -3.625),
+            (PieceKind::Queen, -3.75),
+            (PieceKind::Rook, -3.75),
+            (PieceKind::Bishop, -3.125),
+            (PieceKind::Knight, -4.25),
+            (PieceKind::Pawn, -4.125),
+        ] {
+            let actual = piece_glyph_vertical_offset(kind);
+            assert!((actual - expected).abs() < f32::EPSILON);
+            assert!((-4.5..=-2.5).contains(&actual));
+        }
     }
 
     #[test]

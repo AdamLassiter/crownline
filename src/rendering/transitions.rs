@@ -9,7 +9,7 @@ use crownline_core::{
 
 use crate::{ChessFontText, config::ClientSettings};
 
-use super::{ChessPieceFont, piece_glyph, player_piece_style};
+use super::{ChessPieceFont, piece_glyph, piece_glyph_vertical_offset, player_piece_style};
 
 const MOVE_SECONDS: f32 = 0.18;
 const GHOST_SECONDS: f32 = 0.16;
@@ -281,7 +281,7 @@ fn spawn_retirement_ghost(
                 },
                 TextColor(text),
                 TextLayout::justify(Justify::Center),
-                Transform::from_xyz(0.0, 0.0, 1.0),
+                Transform::from_xyz(0.0, piece_glyph_vertical_offset(request.kind), 1.0),
                 ChessFontText,
             ));
         });
