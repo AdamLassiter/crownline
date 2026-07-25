@@ -10,9 +10,11 @@ mod online_status;
 mod panels;
 mod playtest;
 mod rendering;
+mod ui_layout;
 
 use bevy::{
     asset::{AssetPlugin, LoadState},
+    camera::visibility::RenderLayers,
     prelude::*,
     ui::UiScale,
     window::WindowResolution,
@@ -118,6 +120,9 @@ pub(crate) struct ChessFontText;
 #[derive(Component)]
 struct FontFallbackText;
 
+#[derive(Component)]
+pub(crate) struct BoardCamera;
+
 #[derive(Resource)]
 struct ChessFontStatus {
     handle: Handle<Font>,
@@ -137,7 +142,18 @@ type ChessFontVisibilityQuery<'w, 's> = Query<
 
 #[allow(clippy::needless_pass_by_value)]
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.spawn(Camera2d);
+    commands.spawn((Camera2d, BoardCamera));
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        RenderLayers::layer(1),
+        IsDefaultUiCamera,
+        Name::new("full-window UI camera"),
+    ));
     let chess_font = asset_server.load("fonts/NotoSansSymbols2-Regular.ttf");
     commands.spawn((
         Text2d::new(

@@ -6,7 +6,7 @@ use crownline_core::{
     state::{MatchState, Piece, PieceId},
 };
 
-use crate::ChessFontText;
+use crate::{BoardCamera, ChessFontText};
 
 mod camera;
 pub(crate) mod coordinates;
@@ -24,8 +24,7 @@ pub(crate) use transitions::TransitionEventQueue as LocalTransitionEventQueue;
 pub(crate) use transitions::TransitionNoticeLog as LocalTransitionNoticeLog;
 use transitions::{
     PiecePresentation, PresentationMotionQueue, PresentationPlayback, TransitionEventQueue,
-    animate_piece_presentations, animate_transition_notices, process_piece_motion_requests,
-    process_transition_events,
+    animate_piece_presentations, process_piece_motion_requests, process_transition_events,
 };
 
 pub use camera::CameraControlPlugin;
@@ -169,7 +168,6 @@ impl Plugin for BoardRenderingPlugin {
                     process_piece_motion_requests.after(sync_piece_visuals),
                     animate_piece_presentations.after(process_piece_motion_requests),
                     process_transition_events,
-                    animate_transition_notices.after(process_transition_events),
                 ),
             );
     }
@@ -253,7 +251,7 @@ fn rebuild_changed_scenario(
 #[allow(clippy::needless_pass_by_value)]
 fn update_hovered_square(
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<BoardCamera>>,
     geometry: Res<BoardGeometry>,
     capture: Res<PointerCapture>,
     mut hovered: ResMut<HoveredBoardSquare>,

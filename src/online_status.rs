@@ -10,6 +10,7 @@ use crate::{
     lifecycle::ClientFlow,
     online_connection::{ConnectionPhase, OnlineConnection, OnlineIntentOutbox},
     online_lobby::OnlineLobby,
+    ui_layout::SIDE_REGION_PERCENT,
 };
 
 const DRIFT_CORRECTION_SECONDS: f64 = 0.35;
@@ -143,9 +144,9 @@ fn spawn_online_match_status(mut commands: Commands) {
         TextLayout::justify(Justify::Center),
         Node {
             position_type: PositionType::Absolute,
-            top: px(10),
-            left: percent(27),
-            width: percent(46),
+            left: px(0),
+            bottom: px(44),
+            width: percent(SIDE_REGION_PERCENT),
             padding: UiRect::all(px(7)),
             ..default()
         },

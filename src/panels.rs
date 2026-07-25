@@ -14,6 +14,7 @@ use crate::{
     local_persistence::LocalPersistenceStatus,
     playtest::PlaytestStatus,
     rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection, PointerCapture},
+    ui_layout::{BOTTOM_REGION_PERCENT, SIDE_REGION_PERCENT},
 };
 
 const HISTORY_LIMIT: usize = 12;
@@ -107,18 +108,20 @@ fn spawn_information_panels(mut commands: Commands) {
         &mut commands,
         PanelKind::Match,
         UiRect {
-            left: px(8),
-            top: px(8),
-            ..default()
+            left: px(0),
+            right: Val::Auto,
+            top: px(0),
+            bottom: percent(BOTTOM_REGION_PERCENT),
         },
     );
     spawn_panel(
         &mut commands,
         PanelKind::Settlements,
         UiRect {
-            right: px(8),
-            top: px(8),
-            ..default()
+            left: Val::Auto,
+            right: px(0),
+            top: px(0),
+            bottom: percent(BOTTOM_REGION_PERCENT),
         },
     );
 }
@@ -135,10 +138,10 @@ fn spawn_panel(commands: &mut Commands, kind: PanelKind, inset: UiRect) {
                 left: inset.left,
                 right: inset.right,
                 top: inset.top,
-                width: percent(30),
+                bottom: inset.bottom,
+                width: percent(SIDE_REGION_PERCENT),
                 min_width: px(0),
-                max_width: px(350),
-                max_height: percent(94),
+                max_width: percent(SIDE_REGION_PERCENT),
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 row_gap: px(5),
@@ -150,6 +153,7 @@ fn spawn_panel(commands: &mut Commands, kind: PanelKind, inset: UiRect) {
             BorderColor::all(Color::srgb(0.34, 0.4, 0.52)),
             Interaction::default(),
             InformationPanel,
+            kind,
             PanelSurface,
         ))
         .with_children(|panel| {
@@ -672,11 +676,22 @@ mod tests {
                 .count(),
             1
         );
-        let mut panels = world.query_filtered::<&Node, With<InformationPanel>>();
-        for node in panels.iter(world) {
+        let mut panels = world.query_filtered::<(&PanelKind, &Node), With<InformationPanel>>();
+        for (kind, node) in panels.iter(world) {
             assert_eq!(node.min_width, px(0));
             assert_eq!(node.overflow, Overflow::scroll_y());
-            assert_eq!(node.max_height, percent(94));
+            assert_eq!(node.width, percent(SIDE_REGION_PERCENT));
+            assert_eq!(node.bottom, percent(BOTTOM_REGION_PERCENT));
+            match kind {
+                PanelKind::Match => {
+                    assert_eq!(node.left, px(0));
+                    assert_eq!(node.right, Val::Auto);
+                }
+                PanelKind::Settlements => {
+                    assert_eq!(node.left, Val::Auto);
+                    assert_eq!(node.right, px(0));
+                }
+            }
         }
     }
 }

@@ -13,7 +13,6 @@ use super::{ChessPieceFont, piece_glyph, piece_glyph_vertical_offset, player_pie
 
 const MOVE_SECONDS: f32 = 0.18;
 const GHOST_SECONDS: f32 = 0.16;
-const NOTICE_SECONDS: f32 = 2.4;
 
 #[derive(Debug, Clone, Copy, Component)]
 pub(super) struct PiecePresentation {
@@ -29,11 +28,6 @@ pub(super) struct PieceTween {
 
 #[derive(Component)]
 pub(super) struct PresentationGhost {
-    remaining: f32,
-}
-
-#[derive(Component)]
-pub(super) struct TransitionNotice {
     remaining: f32,
 }
 
@@ -208,48 +202,11 @@ pub(super) fn animate_piece_presentations(
 
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn process_transition_events(
-    mut commands: Commands,
     mut queue: ResMut<TransitionEventQueue>,
     mut log: ResMut<TransitionNoticeLog>,
-    playback: Res<PresentationPlayback>,
 ) {
-    let base_index = log.entries.len();
-    for (offset, event) in queue.events.drain(..).enumerate() {
-        let message = event_message(&event);
-        log.entries.push(message.clone());
-        if !playback.fast_forward {
-            let notice_index = u16::try_from((base_index + offset).min(usize::from(u16::MAX)))
-                .expect("bounded notice index fits u16");
-            commands.spawn((
-                Text2d::new(message),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 0.94, 0.72)),
-                TextLayout::justify(Justify::Center),
-                Transform::from_xyz(0.0, 120.0 - f32::from(notice_index) * 18.0, 12.0),
-                TransitionNotice {
-                    remaining: NOTICE_SECONDS,
-                },
-            ));
-        }
-    }
-}
-
-#[allow(clippy::needless_pass_by_value)]
-pub(super) fn animate_transition_notices(
-    mut commands: Commands,
-    time: Option<Res<Time>>,
-    mut notices: Query<(Entity, &mut TransitionNotice)>,
-) {
-    let delta = time.as_deref().map_or(1.0 / 60.0, Time::delta_secs);
-    for (entity, mut notice) in &mut notices {
-        notice.remaining -= delta;
-        if notice.remaining <= 0.0 {
-            commands.entity(entity).despawn();
-        }
-    }
+    log.entries
+        .extend(queue.events.drain(..).map(|event| event_message(&event)));
 }
 
 fn spawn_retirement_ghost(
@@ -518,8 +475,6 @@ mod tests {
         assert!(tween.is_none());
         let mut ghosts = world.query::<&PresentationGhost>();
         assert_eq!(ghosts.iter(world).count(), 0);
-        let mut notices = world.query::<&TransitionNotice>();
-        assert_eq!(notices.iter(world).count(), expected.len());
         assert_eq!(
             world.resource::<TransitionNoticeLog>().entries,
             expected,

@@ -1,18 +1,18 @@
 use bevy::prelude::*;
 use crownline_core::{
     Action, apply_timed_action, is_in_check, legal_moves,
-    scenario::{BoardSize, Coord, Player},
+    scenario::{BoardSize, Coord},
     state::{MandatoryChoice, MatchState, PieceId, PromotionKind, TurnPhase},
 };
 
 use crate::{
-    ChessFontText,
     lifecycle::ClientFlow,
     online_connection::{OnlineActionIntent, OnlineIntentOutbox},
     rendering::{
-        ChessPieceFont, DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue,
+        DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection, PointerCapture, coordinates::BoardGeometry,
     },
+    ui_layout::SIDE_REGION_PERCENT,
 };
 
 const FOCUS_Z: f32 = 6.0;
@@ -46,12 +46,8 @@ type FocusAffordanceQuery<'w, 's> = Query<
     (With<KeyboardFocusVisual>, Without<InteractionHelpText>),
 >;
 
-type HelpAffordanceQuery<'w, 's> = Query<
-    'w,
-    's,
-    (&'static mut Text2d, &'static mut Transform),
-    (With<InteractionHelpText>, Without<KeyboardFocusVisual>),
->;
+type HelpAffordanceQuery<'w, 's> =
+    Query<'w, 's, &'static mut Text, (With<InteractionHelpText>, Without<KeyboardFocusVisual>)>;
 
 #[derive(Component)]
 struct ChoiceVisual;
@@ -109,14 +105,22 @@ fn spawn_interaction_affordances(mut commands: Commands) {
         KeyboardFocusVisual,
     ));
     commands.spawn((
-        Text2d::new("Arrow keys: focus board - Enter: select/move - Esc: leave board - H: Hold"),
+        Text::new("Arrow keys: focus board - Enter: select/move - Esc: leave board - H: Hold"),
         TextFont {
             font_size: FontSize::Px(13.0),
             ..default()
         },
         TextColor(Color::srgb(0.9, 0.91, 0.95)),
         TextLayout::justify(Justify::Center),
-        Transform::from_xyz(0.0, 0.0, FOCUS_Z),
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(SIDE_REGION_PERCENT),
+            right: percent(SIDE_REGION_PERCENT),
+            bottom: px(46),
+            padding: UiRect::axes(px(6), px(3)),
+            ..default()
+        },
+        GlobalZIndex(10),
         Name::new("local interaction help"),
         InteractionHelpText,
     ));
@@ -528,7 +532,6 @@ fn sync_choice_affordances(
     mut commands: Commands,
     game: Res<DisplayedGame>,
     geometry: Res<BoardGeometry>,
-    font: Res<ChessPieceFont>,
     mut presentation: ResMut<ChoicePresentation>,
     existing: Query<Entity, With<ChoiceVisual>>,
 ) {
@@ -547,30 +550,7 @@ fn sync_choice_affordances(
         && let Some(choice) = queue.first()
     {
         match choice {
-            MandatoryChoice::Promote { .. } => {
-                let color = match game.state.active_player {
-                    Player::North => Color::srgb(0.9, 0.96, 1.0),
-                    Player::South => Color::srgb(1.0, 0.78, 0.3),
-                };
-                commands.spawn((
-                    Text2d::new("♕      ♖      ♗      ♘"),
-                    TextFont {
-                        font: FontSource::Handle(font.0.clone()),
-                        font_size: FontSize::Px(25.0),
-                        ..default()
-                    },
-                    TextColor(color),
-                    TextLayout::justify(Justify::Center),
-                    Transform::from_xyz(
-                        0.0,
-                        -(f32::from(geometry.board.height) * geometry.tile_size / 2.0) - 56.0,
-                        CHOICE_Z,
-                    ),
-                    Name::new("promotion choice glyphs"),
-                    ChessFontText,
-                    ChoiceVisual,
-                ));
-            }
+            MandatoryChoice::Promote { .. } => {}
             MandatoryChoice::PlacePawn { legal_squares, .. } => {
                 for at in legal_squares {
                     if let Some(world) = geometry.board_to_world(*at) {
@@ -634,6 +614,7 @@ fn sync_interaction_affordances(
     game: Res<DisplayedGame>,
     geometry: Res<BoardGeometry>,
     interaction: Res<BoardInteraction>,
+    history: Res<LocalTransitionNoticeLog>,
     mut focus: FocusAffordanceQuery,
     mut help: HelpAffordanceQuery,
 ) {
@@ -647,30 +628,36 @@ fn sync_interaction_affordances(
             *visibility = Visibility::Hidden;
         }
     }
-    if let Ok((mut text, mut transform)) = help.single_mut() {
-        let controls = if let Some(choice) = choice_description(&game.state) {
-            choice
-        } else {
-            let hold = match hold_availability(&game.scenario, &game.state) {
-                HoldAvailability::Available => "H: Hold (available)",
-                HoldAvailability::Disabled(reason) => reason,
-            };
-            format!("Arrow keys: focus - Enter: select/move - Esc: leave board - {hold}")
-        };
-        let mut lines = vec![controls];
-        if !interaction.status.is_empty() {
-            lines.push(interaction.status.clone());
-        }
-        if let Some(clocks) = clock_description(&game.state) {
-            lines.push(clocks);
-        }
-        text.0 = lines.join("\n");
-        transform.translation = Vec3::new(
-            0.0,
-            -(f32::from(geometry.board.height) * geometry.tile_size / 2.0) - 26.0,
-            FOCUS_Z,
-        );
+    if let Ok(mut text) = help.single_mut() {
+        text.0 = interaction_affordance_text(&game, &interaction, &history);
     }
+}
+
+fn interaction_affordance_text(
+    game: &DisplayedGame,
+    interaction: &BoardInteraction,
+    history: &LocalTransitionNoticeLog,
+) -> String {
+    let controls = if let Some(choice) = choice_description(&game.state) {
+        choice
+    } else {
+        let hold = match hold_availability(&game.scenario, &game.state) {
+            HoldAvailability::Available => "H: Hold (available)",
+            HoldAvailability::Disabled(reason) => reason,
+        };
+        format!("Arrow keys: focus - Enter: select/move - Esc: leave board - {hold}")
+    };
+    let mut lines = vec![controls];
+    if !interaction.status.is_empty() {
+        lines.push(interaction.status.clone());
+    }
+    if let Some(clocks) = clock_description(&game.state) {
+        lines.push(clocks);
+    }
+    if let Some(latest) = history.entries.last() {
+        lines.push(format!("Latest: {latest}"));
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -681,6 +668,31 @@ mod tests {
         let scenario = ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap();
         let state = MatchState::from_scenario(&scenario).unwrap();
         DisplayedGame { scenario, state }
+    }
+
+    #[test]
+    fn interaction_log_is_screen_space_in_the_reserved_bottom_region() {
+        let mut app = App::new();
+        app.add_systems(Startup, spawn_interaction_affordances);
+        app.update();
+        let world = app.world_mut();
+        let entity = world
+            .query_filtered::<Entity, With<InteractionHelpText>>()
+            .single(world)
+            .unwrap();
+        let node = world.get::<Node>(entity).unwrap();
+        assert_eq!(node.left, percent(SIDE_REGION_PERCENT));
+        assert_eq!(node.right, percent(SIDE_REGION_PERCENT));
+        assert!(world.get::<Text>(entity).is_some());
+        assert!(world.get::<Text2d>(entity).is_none());
+
+        let history = LocalTransitionNoticeLog {
+            entries: vec!["South Pawn moved to h12".to_owned()],
+        };
+        assert!(
+            interaction_affordance_text(&game(), &BoardInteraction::default(), &history)
+                .contains("Latest: South Pawn moved to h12")
+        );
     }
 
     #[test]

@@ -19,6 +19,7 @@ use crate::{
     },
     online_lobby::OnlineLobby,
     rendering::DisplayedGame,
+    ui_layout::SIDE_REGION_PERCENT,
 };
 
 #[derive(Debug, Resource, Default)]
@@ -61,9 +62,9 @@ fn spawn_online_lifecycle_controls(mut commands: Commands) {
         TextLayout::justify(Justify::Right),
         Node {
             position_type: PositionType::Absolute,
-            right: px(12),
+            right: px(0),
             bottom: px(10),
-            width: percent(38),
+            width: percent(SIDE_REGION_PERCENT),
             padding: UiRect::all(px(7)),
             ..default()
         },

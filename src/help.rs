@@ -4,6 +4,7 @@ use crownline_core::scenario::ScenarioDefinition;
 use crate::{
     panels::PanelSurface,
     rendering::{DisplayedGame, OverlayLegend, overlay_legend_symbol},
+    ui_layout::{BOTTOM_REGION_PERCENT, SIDE_REGION_PERCENT},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -47,10 +48,24 @@ impl Plugin for RulesHelpPlugin {
 #[allow(clippy::too_many_lines)]
 fn spawn_help(mut commands: Commands) {
     commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            right: px(0),
+            bottom: px(0),
+            height: percent(BOTTOM_REGION_PERCENT),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.025, 0.035, 0.055, 0.96)),
+        BorderColor::all(Color::srgb(0.22, 0.28, 0.38)),
+        GlobalZIndex(-10),
+        Name::new("bottom HUD region"),
+    ));
+    commands.spawn((
         Button,
         Node {
             position_type: PositionType::Absolute,
-            left: percent(45),
+            left: percent(SIDE_REGION_PERCENT + 20.0),
             bottom: px(8),
             min_width: px(110),
             min_height: px(32),

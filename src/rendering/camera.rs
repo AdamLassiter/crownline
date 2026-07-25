@@ -5,8 +5,10 @@ use bevy::{
 };
 
 use crate::{
+    BoardCamera,
     config::{CameraBindingsSettings, CameraKey, ClientSettings, camera_modifier_down},
     lifecycle::ClientFlow,
+    ui_layout::{board_viewport_logical, board_viewport_physical},
 };
 
 use super::{PointerCapture, TILE_SIZE, coordinates::BoardGeometry};
@@ -91,7 +93,7 @@ fn register_world_text_raster(
 
 #[allow(clippy::needless_pass_by_value)]
 fn update_world_text_raster(
-    cameras: Query<&Projection, With<Camera2d>>,
+    cameras: Query<&Projection, With<BoardCamera>>,
     mut text: Query<(&mut WorldTextRaster, &mut TextFont, &mut Transform)>,
 ) {
     let Ok(Projection::Orthographic(projection)) = cameras.single() else {
@@ -128,7 +130,11 @@ fn apply_text_raster_multiplier(
     raster.multiplier = multiplier;
 }
 
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value
+)]
 fn camera_controls(
     time: Res<Time>,
     settings: Res<ClientSettings>,
@@ -140,8 +146,13 @@ fn camera_controls(
     geometry: Res<BoardGeometry>,
     capture: Res<PointerCapture>,
     mut cameras: Query<
-        (&Camera, &mut Transform, &GlobalTransform, &mut Projection),
-        With<Camera2d>,
+        (
+            &mut Camera,
+            &mut Transform,
+            &GlobalTransform,
+            &mut Projection,
+        ),
+        With<BoardCamera>,
     >,
     mut gesture: Local<CameraGestureState>,
 ) {
@@ -151,13 +162,22 @@ fn camera_controls(
     let Ok(window) = windows.single() else {
         return;
     };
-    let Ok((camera, mut transform, global_transform, mut projection)) = cameras.single_mut() else {
+    let Ok((mut camera, mut transform, global_transform, mut projection)) = cameras.single_mut()
+    else {
         return;
     };
     let Projection::Orthographic(orthographic) = projection.as_mut() else {
         return;
     };
-    let viewport = Vec2::new(window.width(), window.height());
+    let target_viewport = board_viewport_physical(window);
+    if camera.viewport.as_ref().is_none_or(|viewport| {
+        viewport.physical_position != target_viewport.physical_position
+            || viewport.physical_size != target_viewport.physical_size
+    }) {
+        camera.viewport = Some(target_viewport);
+        gesture.initialized = false;
+    }
+    let viewport = board_viewport_logical(window);
     if viewport.min_element() <= 0.0 {
         return;
     }

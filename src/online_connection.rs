@@ -30,6 +30,7 @@ use crate::{
         DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection,
     },
+    ui_layout::SIDE_REGION_PERCENT,
 };
 
 const COMMAND_CAPACITY: usize = 8;
@@ -251,8 +252,10 @@ fn spawn_connection_status(mut commands: Commands) {
         TextColor(Color::srgb(0.86, 0.9, 1.0)),
         Node {
             position_type: PositionType::Absolute,
-            left: px(12),
+            left: px(0),
             bottom: px(10),
+            width: percent(SIDE_REGION_PERCENT),
+            padding: UiRect::axes(px(8), px(4)),
             ..default()
         },
         GlobalZIndex(90),
