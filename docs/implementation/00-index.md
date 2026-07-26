@@ -32,6 +32,7 @@ Development should be managed as:
 9. [Online client](09-online-client/09-epic.md)
 10. [Quality, balance, and performance](10-quality/10-epic.md)
 11. [Release and operations](11-release/11-epic.md)
+12. [Hidden information](12-hidden-information/12-epic.md)
 
 ## Initial release boundaries
 
@@ -39,3 +40,5 @@ Development should be managed as:
 - Local hot-seat and private-room online play.
 - Introductory 16x16, standard 20x20, and large 24x24 maps.
 - No AI, factions, public matchmaking, ratings, chat, spectators, campaign, procedural maps, editor, mobile client, or browser client.
+
+Post-release Epic 12 deliberately revisits the initial release's perfect-information boundary with opt-in fog-of-war scenarios.
