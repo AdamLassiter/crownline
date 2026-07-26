@@ -33,6 +33,8 @@ Development should be managed as:
 10. [Quality, balance, and performance](10-quality/10-epic.md)
 11. [Release and operations](11-release/11-epic.md)
 12. [Hidden information](12-hidden-information/12-epic.md)
+13. [AI opponent](13-ai-opponent/13-epic.md)
+14. [Guided scenarios and challenges](14-guided-scenarios/14-epic.md)
 
 ## Initial release boundaries
 
@@ -41,4 +43,4 @@ Development should be managed as:
 - Introductory 16x16, standard 20x20, and large 24x24 maps.
 - No AI, factions, public matchmaking, ratings, chat, spectators, campaign, procedural maps, editor, mobile client, or browser client.
 
-Post-release Epic 12 deliberately revisits the initial release's perfect-information boundary with opt-in fog-of-war scenarios.
+Post-release Epics 12-14 deliberately revisit the initial release boundaries with opt-in fog of war, an AI opponent, and guided tutorial/challenge content.
