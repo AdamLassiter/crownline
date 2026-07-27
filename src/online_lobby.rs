@@ -564,9 +564,9 @@ fn sync_online_lobby_ui(
     flow: Res<ClientFlow>,
     lobby: Res<OnlineLobby>,
     catalog: Res<ScenarioCatalog>,
-    mut roots: Query<&mut Visibility, With<OnlineLobbyRoot>>,
+    mut roots: Query<&mut Visibility, (With<OnlineLobbyRoot>, Without<LobbyControl>)>,
     mut texts: Query<&mut Text, With<OnlineLobbyText>>,
-    mut controls: Query<(&LobbyControl, &mut Visibility)>,
+    mut controls: Query<(&LobbyControl, &mut Visibility), Without<OnlineLobbyRoot>>,
     mut fields: Query<(&OnlineField, &mut Node)>,
 ) {
     for mut visibility in &mut roots {

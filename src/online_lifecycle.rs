@@ -400,9 +400,9 @@ fn sync_online_lifecycle_ui(
     board_outbox: Res<OnlineIntentOutbox>,
     control_outbox: Res<OnlineControlOutbox>,
     lifecycle: Res<OnlineLifecycleState>,
-    mut roots: Query<&mut Visibility, With<OnlineLifecycleRoot>>,
+    mut roots: Query<&mut Visibility, (With<OnlineLifecycleRoot>, Without<OnlineLifecycleControl>)>,
     mut text: Query<&mut Text, With<OnlineLifecycleText>>,
-    mut buttons: Query<(&OnlineLifecycleControl, &mut Visibility)>,
+    mut buttons: Query<(&OnlineLifecycleControl, &mut Visibility), Without<OnlineLifecycleRoot>>,
 ) {
     let body = lobby.seat.as_ref().map_or_else(String::new, |seat| {
         if let Some(outcome) = game.state.outcome {
