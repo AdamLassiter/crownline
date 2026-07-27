@@ -62,6 +62,12 @@ Enter/Space provide the equivalent keyboard path. Guided play uses normal
 movement, realm, promotion, check, and outcome rules; its scenarios do not
 appear in competitive local or online setup.
 
+The first guided scenario is initially unlocked. Each later scenario unlocks
+only after the preceding scenario is completed. You can browse a locked
+scenario to inspect its category and prerequisite, but its Start and Resume
+controls remain disabled and outside keyboard focus until that prerequisite is
+recorded.
+
 The objective panel explains the current stage. Press `J` to reveal the next
 progressive hint and `T` to retry the stage. Reset requires two explicit
 requests. Progress, retries, hint counts, and best action/turn counts are stored
@@ -129,6 +135,11 @@ Settings is divided into Display, Accessibility, Controls, and Online tabs.
 Changes preview where useful but persist only after **Apply**; **Cancel**
 restores the prior scale, motion preference, and configuration. Camera bindings
 always require Shift, so they remain distinct from lifecycle/gameplay keys.
+Read-only information uses slate panes, editable text uses green-tinted fields,
+and interactive buttons use blue states. Back, Cancel, and Quit share a brown
+exit treatment. Quit acts immediately after selection; match abandonment,
+resignation, overwrite, load replacement, and credential deletion retain their
+own confirmations where data or match state would change.
 
 ## Rules summary
 

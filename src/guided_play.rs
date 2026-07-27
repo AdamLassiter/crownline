@@ -6,7 +6,7 @@ use std::{
     sync::LazyLock,
 };
 
-use bevy::prelude::*;
+use bevy::{input_focus::tab_navigation::TabIndex, prelude::*};
 use crownline_core::{
     Action, AtomicSaveStorage, GuidedAiConfig, GuidedContent, GuidedEventPredicate,
     GuidedPredicate, GuidedPredicateContext, MAX_PERSISTED_BYTES, MatchState, ObjectiveResult,
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     lifecycle::{ClientFlow, LocalSetup, SeatController},
     local_ai::{AiCancellationEpoch, validate_guided_ai_content},
+    menu::{CONTROL_DISABLED, CONTROL_EXIT, READONLY_BACKGROUND, READONLY_BORDER},
     panels::{PanelBody, PanelKind, PanelSurface},
     rendering::{
         DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
@@ -231,6 +232,9 @@ pub(crate) enum GuidedControl {
 }
 
 #[derive(Component)]
+struct GuidedControlAvailability(bool);
+
+#[derive(Component)]
 struct GuidedBrowserRoot;
 #[derive(Component)]
 struct GuidedBrowserText;
@@ -279,6 +283,8 @@ pub(crate) fn open_guided_button() -> impl Bundle {
         BackgroundColor(Color::srgb(0.13, 0.24, 0.3)),
         Interaction::default(),
         GuidedControl::Open,
+        GuidedControlAvailability(true),
+        TabIndex(guided_tab_index(GuidedControl::Open)),
         GuidedOpenButton,
         children![(
             Text::new("Guided scenarios [G]"),
@@ -316,6 +322,14 @@ fn spawn_guided_browser(mut commands: Commands) {
         .with_children(|root| {
             root.spawn((
                 Text::new("GUIDED SCENARIOS\nNo guided content is installed."),
+                Node {
+                    width: percent(100),
+                    border: UiRect::all(px(1)),
+                    padding: UiRect::axes(px(10), px(7)),
+                    ..default()
+                },
+                BackgroundColor(READONLY_BACKGROUND),
+                BorderColor::all(READONLY_BORDER),
                 TextFont {
                     font_size: FontSize::Px(16.0),
                     ..default()
@@ -354,10 +368,18 @@ fn guided_button(label: &'static str, control: GuidedControl) -> impl Bundle {
             justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgb(0.11, 0.18, 0.27)),
+        BackgroundColor(
+            if matches!(control, GuidedControl::Close | GuidedControl::Leave) {
+                CONTROL_EXIT
+            } else {
+                Color::srgb(0.11, 0.18, 0.27)
+            },
+        ),
         Interaction::default(),
         PanelSurface,
         control,
+        GuidedControlAvailability(true),
+        TabIndex(guided_tab_index(control)),
         children![(
             Text::new(label),
             TextFont {
@@ -367,6 +389,22 @@ fn guided_button(label: &'static str, control: GuidedControl) -> impl Bundle {
             TextColor(Color::srgb(0.9, 0.93, 0.98)),
         )],
     )
+}
+
+const fn guided_tab_index(control: GuidedControl) -> i32 {
+    match control {
+        GuidedControl::Open => 0,
+        GuidedControl::Previous => 1,
+        GuidedControl::Next => 2,
+        GuidedControl::Start => 3,
+        GuidedControl::Resume => 4,
+        GuidedControl::Reset => 5,
+        GuidedControl::Close => 6,
+        GuidedControl::Hint => 7,
+        GuidedControl::Retry => 8,
+        GuidedControl::Replay => 9,
+        GuidedControl::Leave => 10,
+    }
 }
 
 fn attach_guided_objective_surface(mut commands: Commands, bodies: Query<(Entity, &PanelBody)>) {
@@ -432,7 +470,10 @@ fn load_guided_progress(mut runtime: ResMut<GuidedRuntime>) {
 )]
 fn handle_guided_controls(
     keys: Res<ButtonInput<KeyCode>>,
-    pressed: Query<(&Interaction, &GuidedControl), Changed<Interaction>>,
+    pressed: Query<
+        (&Interaction, &GuidedControl, &GuidedControlAvailability),
+        Changed<Interaction>,
+    >,
     catalog: Res<GuidedScenarioCatalog>,
     mut runtime: ResMut<GuidedRuntime>,
     mut flow: ResMut<ClientFlow>,
@@ -445,8 +486,8 @@ fn handle_guided_controls(
 ) {
     let mut controls = pressed
         .iter()
-        .filter_map(|(interaction, control)| {
-            (*interaction == Interaction::Pressed).then_some(*control)
+        .filter_map(|(interaction, control, availability)| {
+            (*interaction == Interaction::Pressed && availability.0).then_some(*control)
         })
         .collect::<Vec<_>>();
     if *flow == ClientFlow::Setup && !runtime.browser_open && keys.just_pressed(KeyCode::KeyG) {
@@ -600,6 +641,22 @@ fn select_relative(catalog: &GuidedScenarioCatalog, runtime: &mut GuidedRuntime,
     runtime.reset_armed = None;
 }
 
+fn scenario_unlocked(
+    catalog: &GuidedScenarioCatalog,
+    runtime: &GuidedRuntime,
+    index: usize,
+) -> bool {
+    if index == 0 {
+        return true;
+    }
+    catalog
+        .0
+        .get(index - 1)
+        .and_then(|scenario| scenario.guided.as_ref())
+        .and_then(|guided| runtime.progress.entries.get(&guided.id))
+        .is_some_and(|metrics| metrics.completed)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn start_selected(
     catalog: &GuidedScenarioCatalog,
@@ -615,6 +672,11 @@ fn start_selected(
         "No guided scenarios are installed.".clone_into(&mut runtime.message);
         return;
     };
+    if !scenario_unlocked(catalog, runtime, scenario_index) {
+        let previous = &catalog.0[scenario_index - 1].metadata.name;
+        runtime.message = format!("Complete {previous} to unlock this scenario.");
+        return;
+    }
     if let Err(error) = validate_guided_ai_content(guided) {
         runtime.message = format!("Guided AI configuration is invalid: {error}");
         return;
@@ -691,6 +753,11 @@ fn resume_selected(
         "No guided scenario is selected.".clone_into(&mut runtime.message);
         return;
     };
+    if !scenario_unlocked(catalog, runtime, scenario_index) {
+        let previous = &catalog.0[scenario_index - 1].metadata.name;
+        runtime.message = format!("Complete {previous} to unlock this scenario.");
+        return;
+    }
     if let Err(error) = validate_guided_ai_content(guided) {
         runtime.message = format!("Guided AI configuration is invalid: {error}");
         return;
@@ -1035,6 +1102,12 @@ fn sync_guided_ui(
     mut objective_roots: Query<&mut Node, With<GuidedObjectiveRoot>>,
     mut objective_texts: Query<&mut Text, (With<GuidedObjectiveText>, Without<GuidedBrowserText>)>,
     mut open_buttons: Query<&mut Visibility, (With<GuidedOpenButton>, Without<GuidedBrowserRoot>)>,
+    mut controls: Query<(
+        &GuidedControl,
+        &mut GuidedControlAvailability,
+        &mut TabIndex,
+        &mut BackgroundColor,
+    )>,
 ) {
     for mut visibility in &mut browser_roots {
         *visibility = if runtime.browser_open {
@@ -1048,6 +1121,34 @@ fn sync_guided_ui(
             Visibility::Visible
         } else {
             Visibility::Hidden
+        };
+    }
+    let selected = runtime.selected.min(catalog.0.len().saturating_sub(1));
+    let unlocked = !catalog.0.is_empty() && scenario_unlocked(&catalog, &runtime, selected);
+    let resumable = selected_scenario(&catalog, &runtime).is_some_and(|(_, _, guided)| {
+        runtime
+            .progress
+            .resume
+            .as_ref()
+            .is_some_and(|resume| resume.guided_id == guided.id)
+    });
+    for (control, mut availability, mut tab_index, mut background) in &mut controls {
+        availability.0 = match control {
+            GuidedControl::Start => unlocked,
+            GuidedControl::Resume => unlocked && resumable,
+            _ => true,
+        };
+        tab_index.0 = if availability.0 {
+            guided_tab_index(*control)
+        } else {
+            -1
+        };
+        background.0 = if !availability.0 {
+            CONTROL_DISABLED
+        } else if matches!(control, GuidedControl::Close | GuidedControl::Leave) {
+            CONTROL_EXIT
+        } else {
+            Color::srgb(0.11, 0.18, 0.27)
         };
     }
     let show_objective = runtime.session.is_some()
@@ -1073,7 +1174,7 @@ fn sync_guided_ui(
 }
 
 fn browser_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -> String {
-    let Some((_, scenario, guided)) = selected_scenario(catalog, runtime) else {
+    let Some((index, scenario, guided)) = selected_scenario(catalog, runtime) else {
         return format!(
             "GUIDED SCENARIOS\nNo guided content is installed.\n{}",
             runtime.message
@@ -1085,8 +1186,16 @@ fn browser_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -> 
         .resume
         .as_ref()
         .is_some_and(|resume| resume.guided_id == guided.id);
+    let access = if scenario_unlocked(catalog, runtime, index) {
+        "unlocked".to_owned()
+    } else {
+        format!(
+            "LOCKED - complete {} first",
+            catalog.0[index - 1].metadata.name
+        )
+    };
     format!(
-        "GUIDED SCENARIOS - {}\n{}\nCategory: {} - {:?} - {} stages\nProgress: {} - attempts {} - retries {} - hints {}\nResume available: {}\n{}",
+        "GUIDED SCENARIOS - {}\n{}\nAccess: {access}\nCategory: {} - {:?} - {} stages\nProgress: {} - attempts {} - retries {} - hints {}\nResume available: {}\n{}",
         catalog.0.len(),
         scenario.metadata.name,
         resolve_key(&guided.category_key),
@@ -1616,6 +1725,29 @@ mod tests {
                 .insert(index.to_string(), GuidedMetrics::default());
         }
         assert!(validate_progress(&progress).is_err());
+    }
+
+    #[test]
+    fn guided_scenarios_unlock_strictly_after_the_previous_completion() {
+        let catalog = GuidedScenarioCatalog::default();
+        let mut runtime = GuidedRuntime::default();
+        assert!(scenario_unlocked(&catalog, &runtime, 0));
+        assert!(!scenario_unlocked(&catalog, &runtime, 1));
+        assert!(browser_summary(&catalog, &runtime).contains("Access: unlocked"));
+
+        runtime.selected = 1;
+        assert!(browser_summary(&catalog, &runtime).contains("Access: LOCKED"));
+        let previous_id = catalog.0[0].guided.as_ref().unwrap().id.clone();
+        runtime.progress.entries.insert(
+            previous_id,
+            GuidedMetrics {
+                completed: true,
+                ..default()
+            },
+        );
+
+        assert!(scenario_unlocked(&catalog, &runtime, 1));
+        assert!(browser_summary(&catalog, &runtime).contains("Access: unlocked"));
     }
 
     #[test]

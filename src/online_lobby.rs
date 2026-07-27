@@ -22,6 +22,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::{
     config::ClientSettings,
     lifecycle::{ClientFlow, ScenarioCatalog},
+    menu::{CONTROL_EXIT, INPUT_BACKGROUND, INPUT_BORDER, READONLY_BACKGROUND, READONLY_BORDER},
 };
 
 const NETWORK_QUEUE_CAPACITY: usize = 1;
@@ -216,6 +217,14 @@ fn spawn_online_lobby(mut commands: Commands, settings: Res<ClientSettings>) {
         .with_children(|root| {
             root.spawn((
                 Text::new("CROWNLINES - ONLINE"),
+                Node {
+                    width: percent(100),
+                    border: UiRect::all(px(1)),
+                    padding: UiRect::axes(px(10), px(7)),
+                    ..default()
+                },
+                BackgroundColor(READONLY_BACKGROUND),
+                BorderColor::all(READONLY_BORDER),
                 TextFont {
                     font_size: FontSize::Px(18.0),
                     ..default()
@@ -273,7 +282,11 @@ fn lobby_button(label: &'static str, control: LobbyControl) -> impl Bundle {
             justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgb(0.11, 0.2, 0.29)),
+        BackgroundColor(if control == LobbyControl::Back {
+            CONTROL_EXIT
+        } else {
+            Color::srgb(0.11, 0.2, 0.29)
+        }),
         control,
         children![(
             Text::new(label),
@@ -295,8 +308,8 @@ fn online_input(value: &str, field: OnlineField, tab: i32) -> impl Bundle {
             padding: UiRect::all(px(6)),
             ..default()
         },
-        BorderColor::all(Color::srgb(0.42, 0.55, 0.72)),
-        BackgroundColor(Color::srgb(0.08, 0.1, 0.16)),
+        BorderColor::all(INPUT_BORDER),
+        BackgroundColor(INPUT_BACKGROUND),
         EditableText::new(value),
         TextFont {
             font_size: FontSize::Px(15.0),

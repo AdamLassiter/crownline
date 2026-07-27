@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     config::unmodified_just_pressed,
     lifecycle::ClientFlow,
-    menu::MenuState,
+    menu::{CONTROL_EXIT, MenuState, READONLY_BACKGROUND, READONLY_BORDER},
     online_connection::{
         OnlineControlKind, OnlineControlOutbox, OnlineControlResolved, OnlineIntentOutbox,
         OnlineRematchStateChanged,
@@ -90,6 +90,14 @@ fn spawn_online_lifecycle_controls(mut commands: Commands) {
         .with_children(|root| {
             root.spawn((
                 Text::new(""),
+                Node {
+                    width: percent(100),
+                    border: UiRect::all(px(1)),
+                    padding: UiRect::all(px(5)),
+                    ..default()
+                },
+                BackgroundColor(READONLY_BACKGROUND),
+                BorderColor::all(READONLY_BORDER),
                 TextFont {
                     font_size: FontSize::Px(12.0),
                     ..default()
@@ -132,7 +140,11 @@ fn online_control_button(label: &'static str, control: OnlineLifecycleControl) -
             justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgb(0.12, 0.2, 0.3)),
+        BackgroundColor(if control == OnlineLifecycleControl::CancelResign {
+            CONTROL_EXIT
+        } else {
+            Color::srgb(0.12, 0.2, 0.3)
+        }),
         control,
         children![(
             Text::new(label),

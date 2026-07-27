@@ -24,6 +24,9 @@ clocks, save/load, and a unified pointer-and-keyboard menu system.
   transactional settings, context-aware match and save controls, confirmed
   destructive actions, modal input ownership, and live minimum/desktop
   viewport evidence.
+- Task 07.04.08 adds responsive paired controls, explicit read-only/editable
+  surface colors, consistent exit actions, direct Quit, and sequential guided
+  scenario unlocking.
 
 ## Stories
 

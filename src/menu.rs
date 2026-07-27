@@ -38,9 +38,14 @@ const MENU_BACKGROUND: Color = Color::srgba(0.018, 0.026, 0.045, 0.985);
 const CONTROL_IDLE: Color = Color::srgb(0.09, 0.13, 0.2);
 const CONTROL_HOVERED: Color = Color::srgb(0.14, 0.22, 0.31);
 const CONTROL_PRESSED: Color = Color::srgb(0.2, 0.34, 0.43);
-const CONTROL_DISABLED: Color = Color::srgb(0.07, 0.075, 0.09);
+pub(crate) const CONTROL_DISABLED: Color = Color::srgb(0.07, 0.075, 0.09);
 const CONTROL_SELECTED: Color = Color::srgb(0.16, 0.3, 0.38);
 const CONTROL_DESTRUCTIVE: Color = Color::srgb(0.35, 0.1, 0.12);
+pub(crate) const CONTROL_EXIT: Color = Color::srgb(0.27, 0.16, 0.12);
+pub(crate) const READONLY_BACKGROUND: Color = Color::srgb(0.055, 0.075, 0.105);
+pub(crate) const READONLY_BORDER: Color = Color::srgb(0.2, 0.28, 0.36);
+pub(crate) const INPUT_BACKGROUND: Color = Color::srgb(0.075, 0.105, 0.085);
+pub(crate) const INPUT_BORDER: Color = Color::srgb(0.34, 0.58, 0.42);
 const BORDER_IDLE: Color = Color::srgb(0.28, 0.35, 0.46);
 const BORDER_FOCUSED: Color = Color::srgb(0.82, 0.91, 1.0);
 
@@ -118,7 +123,6 @@ pub(crate) enum CameraBindingSlot {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuModal {
-    Quit,
     ForgetSavedSeat,
     OverwriteSlot(u8),
     LoadSlot(u8),
@@ -233,6 +237,7 @@ pub(crate) enum MenuEmphasis {
     Normal,
     Selected,
     Destructive,
+    Exit,
 }
 
 impl MenuButton {
@@ -240,7 +245,13 @@ impl MenuButton {
         Self {
             action,
             availability: MenuAvailability::Enabled,
-            emphasis: MenuEmphasis::Normal,
+            emphasis: match action {
+                MenuAction::Back
+                | MenuAction::Cancel
+                | MenuAction::CancelSettings
+                | MenuAction::Quit => MenuEmphasis::Exit,
+                _ => MenuEmphasis::Normal,
+            },
         }
     }
 
@@ -275,10 +286,25 @@ pub(crate) fn menu_button(
     action: MenuAction,
     tab_index: i32,
 ) -> impl Bundle {
+    menu_button_bundle(label, action, tab_index, false)
+}
+
+fn row_menu_button(label: impl Into<String>, action: MenuAction, tab_index: i32) -> impl Bundle {
+    menu_button_bundle(label, action, tab_index, true)
+}
+
+fn menu_button_bundle(
+    label: impl Into<String>,
+    action: MenuAction,
+    tab_index: i32,
+    in_row: bool,
+) -> impl Bundle {
     (
         Button,
         Node {
-            width: percent(100),
+            width: if in_row { auto() } else { percent(100) },
+            flex_basis: if in_row { px(0) } else { auto() },
+            flex_grow: if in_row { 1.0 } else { 0.0 },
             min_height: px(42),
             border: UiRect::all(px(2)),
             padding: UiRect::axes(px(12), px(8)),
@@ -304,6 +330,28 @@ pub(crate) fn menu_button(
         )],
     )
 }
+
+#[derive(Component)]
+struct MenuRow;
+
+fn menu_row() -> impl Bundle {
+    (
+        Node {
+            width: percent(100),
+            display: Display::Flex,
+            flex_direction: FlexDirection::Row,
+            column_gap: px(8),
+            ..default()
+        },
+        MenuRow,
+    )
+}
+
+#[derive(Component)]
+struct ReadonlyPane;
+
+#[derive(Component)]
+struct MenuTextInput;
 
 pub(crate) fn section_heading(label: impl Into<String>) -> impl Bundle {
     (
@@ -671,8 +719,7 @@ fn handle_navigation_action(
         MenuAction::Open(MenuRoute::Settings) => {}
         MenuAction::Open(route) => state.open(route),
         MenuAction::Back if state.route != Some(MenuRoute::Home) => state.back(),
-        MenuAction::Quit => state.modal = Some(MenuModal::Quit),
-        MenuAction::Confirm if state.modal == Some(MenuModal::Quit) => {
+        MenuAction::Quit => {
             app_exit.write(AppExit::Success);
         }
         MenuAction::Cancel if state.modal.is_some() => state.modal = None,
@@ -1393,11 +1440,6 @@ fn rebuild_menu_page(
     commands.entity(content).with_children(|page| {
         if let Some(modal) = state.modal {
             let (heading, copy, confirm) = match modal {
-                MenuModal::Quit => (
-                    "QUIT CROWNLINES?",
-                    "Any unsaved local match progress will be lost. Choose Quit to close the application.",
-                    "Quit",
-                ),
                 MenuModal::ForgetSavedSeat => (
                     "FORGET SAVED ONLINE SEAT?",
                     "The local reconnect credential will be removed. This cannot be undone.",
@@ -1426,9 +1468,11 @@ fn rebuild_menu_page(
             };
             page.spawn(section_heading(heading));
             page.spawn(body_text(copy));
-            page.spawn(menu_button("Cancel [Esc]", MenuAction::Cancel, 0));
-            page.spawn(menu_button(confirm, MenuAction::Confirm, 1))
-                .insert(MenuButton::new(MenuAction::Confirm).destructive());
+            page.spawn(menu_row()).with_children(|row| {
+                row.spawn(row_menu_button("Cancel [Esc]", MenuAction::Cancel, 0));
+                row.spawn(row_menu_button(confirm, MenuAction::Confirm, 1))
+                    .insert(MenuButton::new(MenuAction::Confirm).destructive());
+            });
             return;
         }
         match route {
@@ -1474,12 +1518,18 @@ fn spawn_pause_page(
         "LOCAL MATCH PAUSED\nBoard input and the local clock are paused."
     }));
     page.spawn(menu_button("Resume Match [P]", MenuAction::ResumeMatch, 0));
-    page.spawn(menu_button(
-        "Settings",
-        MenuAction::Open(MenuRoute::Settings),
-        1,
-    ));
-    page.spawn(menu_button("Rules & Legend [F1]", MenuAction::OpenHelp, 2));
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button(
+            "Settings",
+            MenuAction::Open(MenuRoute::Settings),
+            1,
+        ));
+        row.spawn(row_menu_button(
+            "Rules & Legend [F1]",
+            MenuAction::OpenHelp,
+            2,
+        ));
+    });
     if online {
         page.spawn(body_text(
             "Manual save/load is unavailable online. Draw, resignation, rematch, and leave actions remain authoritative and are available in the online match controls.",
@@ -1503,18 +1553,22 @@ fn spawn_pause_page(
                 page.spawn(menu_button("Offer Draw", MenuAction::OfferDraw, 4));
             }
             Some(offering) if offering != game.state.active_player => {
-                page.spawn(menu_button("Accept Draw", MenuAction::AcceptDraw, 4));
-                page.spawn(menu_button("Decline Draw", MenuAction::DeclineDraw, 5));
+                page.spawn(menu_row()).with_children(|row| {
+                    row.spawn(row_menu_button("Accept Draw", MenuAction::AcceptDraw, 4));
+                    row.spawn(row_menu_button("Decline Draw", MenuAction::DeclineDraw, 5));
+                });
             }
             Some(_) => {
                 page.spawn(body_text("Draw offer sent; waiting for the opponent."));
             }
         }
     }
-    page.spawn(menu_button("Resign", MenuAction::RequestResign, 6))
-        .insert(MenuButton::new(MenuAction::RequestResign).destructive());
-    page.spawn(menu_button("Return to Home", MenuAction::ReturnHome, 7))
-        .insert(MenuButton::new(MenuAction::ReturnHome).destructive());
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button("Resign", MenuAction::RequestResign, 6))
+            .insert(MenuButton::new(MenuAction::RequestResign).destructive());
+        row.spawn(row_menu_button("Return to Home", MenuAction::ReturnHome, 7))
+            .insert(MenuButton::new(MenuAction::ReturnHome).destructive());
+    });
 }
 
 fn spawn_saves_page(page: &mut ChildSpawnerCommands, state: &MenuState, flow: Option<&ClientFlow>) {
@@ -1531,30 +1585,47 @@ fn spawn_saves_page(page: &mut ChildSpawnerCommands, state: &MenuState, flow: Op
             summary.slot, summary.description
         )));
         if can_save {
-            page.spawn(menu_button(
-                if summary.occupied {
-                    format!("Overwrite slot {}", summary.slot)
+            page.spawn(menu_row()).with_children(|row| {
+                row.spawn(row_menu_button(
+                    if summary.occupied {
+                        format!("Overwrite slot {}", summary.slot)
+                    } else {
+                        format!("Save to slot {}", summary.slot)
+                    },
+                    MenuAction::SaveSlot(summary.slot),
+                    i32::from(summary.slot) * 2,
+                ));
+                row.spawn(row_menu_button(
+                    if summary.readable {
+                        format!("Load slot {}", summary.slot)
+                    } else {
+                        format!("Load slot {} - unavailable", summary.slot)
+                    },
+                    MenuAction::LoadSlot(summary.slot),
+                    i32::from(summary.slot) * 2 + 1,
+                ))
+                .insert(if summary.readable {
+                    MenuButton::new(MenuAction::LoadSlot(summary.slot))
                 } else {
-                    format!("Save to slot {}", summary.slot)
-                },
-                MenuAction::SaveSlot(summary.slot),
-                i32::from(summary.slot) * 2,
-            ));
-        }
-        page.spawn(menu_button(
-            if summary.readable {
-                format!("Load slot {}", summary.slot)
-            } else {
-                format!("Load slot {} - unavailable", summary.slot)
-            },
-            MenuAction::LoadSlot(summary.slot),
-            i32::from(summary.slot) * 2 + 1,
-        ))
-        .insert(if summary.readable {
-            MenuButton::new(MenuAction::LoadSlot(summary.slot))
+                    MenuButton::new(MenuAction::LoadSlot(summary.slot)).disabled()
+                });
+            });
         } else {
-            MenuButton::new(MenuAction::LoadSlot(summary.slot)).disabled()
-        });
+            page.spawn(menu_button(
+                if summary.readable {
+                    format!("Load slot {}", summary.slot)
+                } else {
+                    format!("Load slot {} - unavailable", summary.slot)
+                },
+                MenuAction::LoadSlot(summary.slot),
+                i32::from(summary.slot) * 2 + 1,
+            ))
+            .insert(if summary.readable {
+                MenuButton::new(MenuAction::LoadSlot(summary.slot))
+            } else {
+                MenuButton::new(MenuAction::LoadSlot(summary.slot)).disabled()
+            });
+        }
     }
     page.spawn(menu_button("Back [Esc]", MenuAction::Back, 20));
 }
@@ -1570,11 +1641,14 @@ fn spawn_outcome_page(page: &mut ChildSpawnerCommands, game: Option<&DisplayedGa
             outcome.reason
         )));
     }
-    page.spawn(menu_button("Rematch", MenuAction::Rematch, 0));
-    page.spawn(menu_button("Rules & Legend", MenuAction::OpenHelp, 1));
-    page.spawn(menu_button("Return to Home", MenuAction::ReturnHome, 2));
-    page.spawn(menu_button("Quit", MenuAction::Quit, 3))
-        .insert(MenuButton::new(MenuAction::Quit).destructive());
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button("Rematch", MenuAction::Rematch, 0));
+        row.spawn(row_menu_button("Rules & Legend", MenuAction::OpenHelp, 1));
+    });
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button("Return to Home", MenuAction::ReturnHome, 2));
+        row.spawn(row_menu_button("Quit", MenuAction::Quit, 3));
+    });
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1587,26 +1661,28 @@ fn spawn_settings_page(page: &mut ChildSpawnerCommands, menu: &SettingsMenuState
     page.spawn(body_text(
         "Changes remain a draft until Apply. UI scale and reduced motion preview immediately; Cancel restores them.",
     ));
-    for (index, (label, tab)) in [
-        ("Display", SettingsTab::Display),
-        ("Accessibility", SettingsTab::Accessibility),
-        ("Controls", SettingsTab::Controls),
-        ("Online", SettingsTab::Online),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        page.spawn(menu_button(
-            label,
-            MenuAction::SelectSettingsTab(tab),
-            i32::try_from(index).unwrap(),
-        ))
-        .insert(if menu.tab == tab {
-            MenuButton::new(MenuAction::SelectSettingsTab(tab)).selected()
-        } else {
-            MenuButton::new(MenuAction::SelectSettingsTab(tab))
-        });
-    }
+    page.spawn(menu_row()).with_children(|row| {
+        for (index, (label, tab)) in [
+            ("Display", SettingsTab::Display),
+            ("Accessibility", SettingsTab::Accessibility),
+            ("Controls", SettingsTab::Controls),
+            ("Online", SettingsTab::Online),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            row.spawn(row_menu_button(
+                label,
+                MenuAction::SelectSettingsTab(tab),
+                i32::try_from(index).unwrap(),
+            ))
+            .insert(if menu.tab == tab {
+                MenuButton::new(MenuAction::SelectSettingsTab(tab)).selected()
+            } else {
+                MenuButton::new(MenuAction::SelectSettingsTab(tab))
+            });
+        }
+    });
     match menu.tab {
         SettingsTab::Display => {
             page.spawn(section_heading("DISPLAY"));
@@ -1619,32 +1695,38 @@ fn spawn_settings_page(page: &mut ChildSpawnerCommands, menu: &SettingsMenuState
                 MenuAction::NextResolution,
                 10,
             ));
-            page.spawn(settings_text_input(
-                "Custom window width",
-                draft.window_width.to_string(),
-                SettingsTextInput::WindowWidth,
-                11,
-            ));
-            page.spawn(settings_text_input(
-                "Custom window height",
-                draft.window_height.to_string(),
-                SettingsTextInput::WindowHeight,
-                12,
-            ));
+            page.spawn(menu_row()).with_children(|row| {
+                row.spawn(settings_text_input(
+                    "Custom window width",
+                    draft.window_width.to_string(),
+                    SettingsTextInput::WindowWidth,
+                    11,
+                    true,
+                ));
+                row.spawn(settings_text_input(
+                    "Custom window height",
+                    draft.window_height.to_string(),
+                    SettingsTextInput::WindowHeight,
+                    12,
+                    true,
+                ));
+            });
         }
         SettingsTab::Accessibility => {
             page.spawn(section_heading("ACCESSIBILITY"));
             page.spawn(body_text(format!("UI scale: {:.2}", draft.ui_scale)));
-            page.spawn(menu_button(
-                "Decrease UI scale",
-                MenuAction::DecreaseUiScale,
-                10,
-            ));
-            page.spawn(menu_button(
-                "Increase UI scale",
-                MenuAction::IncreaseUiScale,
-                11,
-            ));
+            page.spawn(menu_row()).with_children(|row| {
+                row.spawn(row_menu_button(
+                    "Decrease UI scale",
+                    MenuAction::DecreaseUiScale,
+                    10,
+                ));
+                row.spawn(row_menu_button(
+                    "Increase UI scale",
+                    MenuAction::IncreaseUiScale,
+                    11,
+                ));
+            });
             page.spawn(menu_button(
                 format!("Reduced motion: {}", enabled_label(draft.reduced_motion)),
                 MenuAction::ToggleReducedMotion,
@@ -1693,6 +1775,7 @@ fn spawn_settings_page(page: &mut ChildSpawnerCommands, menu: &SettingsMenuState
                 &draft.server_url,
                 SettingsTextInput::ServerUrl,
                 10,
+                false,
             ));
             page.spawn(menu_button(
                 if draft.saved_online_seat.is_some() {
@@ -1713,8 +1796,18 @@ fn spawn_settings_page(page: &mut ChildSpawnerCommands, menu: &SettingsMenuState
     if !menu.message.is_empty() {
         page.spawn(body_text(&menu.message));
     }
-    page.spawn(menu_button("Cancel [Esc]", MenuAction::CancelSettings, 30));
-    page.spawn(menu_button("Apply Settings", MenuAction::ApplySettings, 31));
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button(
+            "Cancel [Esc]",
+            MenuAction::CancelSettings,
+            30,
+        ));
+        row.spawn(row_menu_button(
+            "Apply Settings",
+            MenuAction::ApplySettings,
+            31,
+        ));
+    });
 }
 
 fn settings_text_input(
@@ -1722,17 +1815,20 @@ fn settings_text_input(
     value: impl AsRef<str>,
     field: SettingsTextInput,
     tab_index: i32,
+    in_row: bool,
 ) -> impl Bundle {
     (
         Node {
-            width: percent(100),
+            width: if in_row { auto() } else { percent(100) },
+            flex_basis: if in_row { px(0) } else { auto() },
+            flex_grow: if in_row { 1.0 } else { 0.0 },
             min_height: px(42),
             border: UiRect::all(px(2)),
             padding: UiRect::axes(px(10), px(7)),
             ..default()
         },
-        BorderColor::all(BORDER_IDLE),
-        BackgroundColor(CONTROL_IDLE),
+        BorderColor::all(INPUT_BORDER),
+        BackgroundColor(INPUT_BACKGROUND),
         EditableText::new(value),
         TextFont {
             font_size: FontSize::Px(16.0),
@@ -1742,6 +1838,7 @@ fn settings_text_input(
         TextCursorStyle::default(),
         TabIndex(tab_index),
         field,
+        MenuTextInput,
         PanelSurface,
         Name::new(label.to_owned()),
     )
@@ -1767,46 +1864,54 @@ fn spawn_local_setup_page(
         enabled_label(scenario.rules.allow_en_passant),
         scenario.castling_routes.len(),
     )));
-    page.spawn(menu_button(
-        "Previous scenario [PageUp]",
-        MenuAction::PreviousScenario,
-        0,
-    ));
-    page.spawn(menu_button(
-        "Next scenario [PageDown]",
-        MenuAction::NextScenario,
-        1,
-    ));
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button(
+            "Previous scenario [PageUp]",
+            MenuAction::PreviousScenario,
+            0,
+        ));
+        row.spawn(row_menu_button(
+            "Next scenario [PageDown]",
+            MenuAction::NextScenario,
+            1,
+        ));
+    });
 
     page.spawn(section_heading("PLAYERS"));
-    page.spawn(menu_name_input(
-        "North player",
-        &setup.north_name,
-        Player::North,
-        2,
-    ));
-    page.spawn(menu_button(
-        format!(
-            "North controller: {} [F7]",
-            controller_label(setup.north_controller)
-        ),
-        MenuAction::CycleController(Player::North),
-        3,
-    ));
-    page.spawn(menu_name_input(
-        "South player",
-        &setup.south_name,
-        Player::South,
-        4,
-    ));
-    page.spawn(menu_button(
-        format!(
-            "South controller: {} [F8]",
-            controller_label(setup.south_controller)
-        ),
-        MenuAction::CycleController(Player::South),
-        5,
-    ));
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(menu_name_input(
+            "North player",
+            &setup.north_name,
+            Player::North,
+            2,
+            true,
+        ));
+        row.spawn(row_menu_button(
+            format!(
+                "North controller: {} [F7]",
+                controller_label(setup.north_controller)
+            ),
+            MenuAction::CycleController(Player::North),
+            3,
+        ));
+    });
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(menu_name_input(
+            "South player",
+            &setup.south_name,
+            Player::South,
+            4,
+            true,
+        ));
+        row.spawn(row_menu_button(
+            format!(
+                "South controller: {} [F8]",
+                controller_label(setup.south_controller)
+            ),
+            MenuAction::CycleController(Player::South),
+            5,
+        ));
+    });
     page.spawn(menu_button(
         "Swap player names and controllers [X]",
         MenuAction::SwapSides,
@@ -1827,49 +1932,63 @@ fn spawn_local_setup_page(
         7,
     ));
     if setup.clock.is_some() {
-        page.spawn(menu_button(
-            "Decrease base time [-]",
-            MenuAction::DecreaseBase,
-            8,
-        ));
-        page.spawn(menu_button(
-            "Increase base time [+]",
-            MenuAction::IncreaseBase,
-            9,
-        ));
-        page.spawn(menu_button(
-            "Decrease increment [,]",
-            MenuAction::DecreaseIncrement,
-            10,
-        ));
-        page.spawn(menu_button(
-            "Increase increment [.]",
-            MenuAction::IncreaseIncrement,
-            11,
-        ));
+        page.spawn(menu_row()).with_children(|row| {
+            row.spawn(row_menu_button(
+                "Decrease base time [-]",
+                MenuAction::DecreaseBase,
+                8,
+            ));
+            row.spawn(row_menu_button(
+                "Increase base time [+]",
+                MenuAction::IncreaseBase,
+                9,
+            ));
+        });
+        page.spawn(menu_row()).with_children(|row| {
+            row.spawn(row_menu_button(
+                "Decrease increment [,]",
+                MenuAction::DecreaseIncrement,
+                10,
+            ));
+            row.spawn(row_menu_button(
+                "Increase increment [.]",
+                MenuAction::IncreaseIncrement,
+                11,
+            ));
+        });
     }
     if !setup.error.is_empty() {
         page.spawn(error_text(&setup.error));
     }
-    page.spawn(menu_button("Back [Esc]", MenuAction::Back, 12));
-    page.spawn(menu_button(
-        "Start Local Match [F2]",
-        MenuAction::StartLocal,
-        13,
-    ));
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button("Back [Esc]", MenuAction::Back, 12));
+        row.spawn(row_menu_button(
+            "Start Local Match [F2]",
+            MenuAction::StartLocal,
+            13,
+        ));
+    });
 }
 
-fn menu_name_input(label: &str, value: &str, player: Player, tab_index: i32) -> impl Bundle {
+fn menu_name_input(
+    label: &str,
+    value: &str,
+    player: Player,
+    tab_index: i32,
+    in_row: bool,
+) -> impl Bundle {
     (
         Node {
-            width: percent(100),
+            width: if in_row { auto() } else { percent(100) },
+            flex_basis: if in_row { px(0) } else { auto() },
+            flex_grow: if in_row { 1.0 } else { 0.0 },
             min_height: px(42),
             border: UiRect::all(px(2)),
             padding: UiRect::axes(px(10), px(7)),
             ..default()
         },
-        BorderColor::all(BORDER_IDLE),
-        BackgroundColor(CONTROL_IDLE),
+        BorderColor::all(INPUT_BORDER),
+        BackgroundColor(INPUT_BACKGROUND),
         EditableText::new(value),
         TextFont {
             font_size: FontSize::Px(16.0),
@@ -1879,6 +1998,7 @@ fn menu_name_input(label: &str, value: &str, player: Player, tab_index: i32) -> 
         TextCursorStyle::default(),
         TabIndex(tab_index),
         MenuNameInput(player),
+        MenuTextInput,
         PanelSurface,
         Name::new(label.to_owned()),
     )
@@ -1912,35 +2032,53 @@ fn spawn_home_page(page: &mut ChildSpawnerCommands) {
     page.spawn(body_text(
         "Choose a mode. Every action is available by pointer or keyboard; shown shortcuts are optional.",
     ));
-    for (index, (label, action)) in [
-        ("New Local Match", MenuAction::Open(MenuRoute::LocalSetup)),
-        ("Guided Play", MenuAction::Open(MenuRoute::Guided)),
-        ("Online Play", MenuAction::Open(MenuRoute::Online)),
-        ("Settings", MenuAction::Open(MenuRoute::Settings)),
-        ("Rules & Legend [F1]", MenuAction::OpenHelp),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        page.spawn(menu_button(label, action, i32::try_from(index).unwrap()));
-    }
-    let readable_save = has_readable_local_save();
-    page.spawn(menu_button(
-        if readable_save {
-            "Continue / Load Game"
-        } else {
-            "Continue / Load Game - no readable saves"
-        },
-        MenuAction::Open(MenuRoute::Saves),
-        5,
-    ))
-    .insert(if readable_save {
-        MenuButton::new(MenuAction::Open(MenuRoute::Saves))
-    } else {
-        MenuButton::new(MenuAction::Open(MenuRoute::Saves)).disabled()
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button(
+            "New Local Match",
+            MenuAction::Open(MenuRoute::LocalSetup),
+            0,
+        ));
+        row.spawn(row_menu_button(
+            "Guided Play",
+            MenuAction::Open(MenuRoute::Guided),
+            1,
+        ));
     });
-    page.spawn(menu_button("Quit", MenuAction::Quit, 6))
-        .insert(MenuButton::new(MenuAction::Quit).destructive());
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button(
+            "Online Play",
+            MenuAction::Open(MenuRoute::Online),
+            2,
+        ));
+        row.spawn(row_menu_button(
+            "Settings",
+            MenuAction::Open(MenuRoute::Settings),
+            3,
+        ));
+    });
+    let readable_save = has_readable_local_save();
+    page.spawn(menu_row()).with_children(|row| {
+        row.spawn(row_menu_button(
+            "Rules & Legend [F1]",
+            MenuAction::OpenHelp,
+            4,
+        ));
+        row.spawn(row_menu_button(
+            if readable_save {
+                "Continue / Load Game"
+            } else {
+                "Continue / Load Game - no readable saves"
+            },
+            MenuAction::Open(MenuRoute::Saves),
+            5,
+        ))
+        .insert(if readable_save {
+            MenuButton::new(MenuAction::Open(MenuRoute::Saves))
+        } else {
+            MenuButton::new(MenuAction::Open(MenuRoute::Saves)).disabled()
+        });
+    });
+    page.spawn(menu_button("Quit", MenuAction::Quit, 6));
     page.spawn((
         Text::new(format!(
             "Crownlines {} - native desktop client",
@@ -1964,12 +2102,21 @@ fn spawn_placeholder(page: &mut ChildSpawnerCommands, heading: &str, description
 fn body_text(text: impl Into<String>) -> impl Bundle {
     (
         Text::new(text),
+        Node {
+            width: percent(100),
+            border: UiRect::all(px(1)),
+            padding: UiRect::axes(px(10), px(7)),
+            ..default()
+        },
+        BackgroundColor(READONLY_BACKGROUND),
+        BorderColor::all(READONLY_BORDER),
         TextFont {
             font_size: FontSize::Px(15.0),
             ..default()
         },
         TextColor(Color::srgb(0.82, 0.86, 0.92)),
         TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
+        ReadonlyPane,
     )
 }
 
@@ -2019,6 +2166,8 @@ fn style_menu_controls(mut focus: ResMut<InputFocus>, mut buttons: MenuControlSt
             CONTROL_HOVERED
         } else if button.emphasis == MenuEmphasis::Destructive {
             CONTROL_DESTRUCTIVE
+        } else if button.emphasis == MenuEmphasis::Exit {
+            CONTROL_EXIT
         } else if button.emphasis == MenuEmphasis::Selected {
             CONTROL_SELECTED
         } else {
@@ -2100,6 +2249,48 @@ mod tests {
     }
 
     #[test]
+    fn menus_group_related_controls_and_distinguish_readonly_and_editable_panes() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputFocus>()
+            .init_resource::<ClientFlow>()
+            .init_resource::<LocalSetup>()
+            .init_resource::<ScenarioCatalog>()
+            .add_plugins(MenuPlugin);
+        app.update();
+        app.world_mut()
+            .resource_mut::<MenuState>()
+            .replace(MenuRoute::LocalSetup);
+        app.update();
+
+        let world = app.world_mut();
+        let mut rows = world.query_filtered::<Entity, With<MenuRow>>();
+        assert!(rows.iter(world).count() >= 4);
+        let mut readonly =
+            world.query_filtered::<(&BackgroundColor, &BorderColor), With<ReadonlyPane>>();
+        let (background, border) = readonly.iter(world).next().unwrap();
+        assert_eq!(background.0, READONLY_BACKGROUND);
+        assert_eq!(border.left, READONLY_BORDER);
+        let mut inputs =
+            world.query_filtered::<(&BackgroundColor, &BorderColor), With<MenuTextInput>>();
+        let (background, border) = inputs.iter(world).next().unwrap();
+        assert_eq!(background.0, INPUT_BACKGROUND);
+        assert_eq!(border.left, INPUT_BORDER);
+    }
+
+    #[test]
+    fn back_cancel_and_quit_share_exit_emphasis() {
+        for action in [
+            MenuAction::Back,
+            MenuAction::Cancel,
+            MenuAction::CancelSettings,
+            MenuAction::Quit,
+        ] {
+            assert_eq!(MenuButton::new(action).emphasis, MenuEmphasis::Exit);
+        }
+    }
+
+    #[test]
     fn pointer_and_keyboard_use_the_same_typed_intent() {
         let mut app = App::new();
         app.init_resource::<ButtonInput<KeyCode>>()
@@ -2172,7 +2363,7 @@ mod tests {
             .init_resource::<MenuIntent>()
             .insert_resource(MenuState {
                 route: Some(MenuRoute::LocalSetup),
-                modal: Some(MenuModal::Quit),
+                modal: Some(MenuModal::AbandonMatch),
                 ..default()
             })
             .add_systems(Update, dispatch_local_setup_accelerators);
@@ -2183,6 +2374,20 @@ mod tests {
         app.update();
 
         assert_eq!(app.world().resource::<MenuIntent>().0, None);
+    }
+
+    #[test]
+    fn quit_exits_immediately_without_opening_a_confirmation() {
+        let mut app = App::new();
+        app.add_message::<AppExit>()
+            .init_resource::<MenuState>()
+            .insert_resource(MenuIntent(Some(MenuAction::Quit)))
+            .add_systems(Update, handle_navigation_action);
+
+        app.update();
+
+        assert_eq!(app.world().resource::<MenuState>().modal, None);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 1);
     }
 
     #[test]
