@@ -52,6 +52,14 @@ impl Default for GuidedScenarioCatalog {
             include_str!("../assets/scenarios/guided/guided-realm-transfer.ron"),
             include_str!("../assets/scenarios/guided/guided-realm-transfer-cancel.ron"),
             include_str!("../assets/scenarios/guided/guided-realm-open-practice.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-en-passant.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-promotion-knight.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-promotion-batch.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-answer-check.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-castling.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-checkmate.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-draw.ron"),
+            include_str!("../assets/scenarios/guided/guided-royal-open-practice.ron"),
         ]
         .into_iter()
         .map(|source| {

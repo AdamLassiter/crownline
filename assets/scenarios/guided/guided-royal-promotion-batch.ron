@@ -1,0 +1,366 @@
+(
+    schema_version: 2,
+    id: "guided-royal-promotion-batch",
+    metadata: (
+        name: "Royal III: Frozen Promotion Batch",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 2,
+                y: 2,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 5,
+                y: 2,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 1,
+                y: 4,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 6,
+                y: 4,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 1,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 6,
+                y: 7,
+            ),
+        ),
+    ],
+    settlements: [
+        (
+            id: "west-realm",
+            at: (
+                x: 1,
+                y: 4,
+            ),
+        ),
+        (
+            id: "east-realm",
+            at: (
+                x: 6,
+                y: 4,
+            ),
+        ),
+    ],
+    promotion_sites: [
+        (
+            id: "west-court",
+            at: (
+                x: 2,
+                y: 2,
+            ),
+        ),
+        (
+            id: "east-court",
+            at: (
+                x: 5,
+                y: 2,
+            ),
+        ),
+    ],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "guided-royal-promotion-batch",
+        kind: tutorial,
+        category_key: "guided.category.royal",
+        start: (
+            state: (
+                scenario_id: "guided-royal-promotion-batch",
+                revision: 0,
+                turn_number: 1,
+                active_player: south,
+                phase: resolving_choices(
+                    queue: [
+                        promote(
+                            pawn: (3),
+                            site_index: 0,
+                            eligibility: (
+                                control: (
+                                    owned_settlements: 2,
+                                    governed_settlements: 2,
+                                    established_settlements: 2,
+                                ),
+                                allowed_kinds: [
+                                    queen,
+                                    rook,
+                                    bishop,
+                                    knight,
+                                ],
+                            ),
+                        ),
+                        promote(
+                            pawn: (4),
+                            site_index: 1,
+                            eligibility: (
+                                control: (
+                                    owned_settlements: 2,
+                                    governed_settlements: 2,
+                                    established_settlements: 2,
+                                ),
+                                allowed_kinds: [
+                                    queen,
+                                    rook,
+                                    bishop,
+                                    knight,
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 1,
+                            y: 4,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 1,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (3): (
+                        id: (3),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 2,
+                            y: 2,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (4): (
+                        id: (4),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 5,
+                            y: 2,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (5): (
+                        id: (5),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 6,
+                            y: 4,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (6): (
+                        id: (6),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 6,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (7): (
+                        id: (7),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 7,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [
+                    (
+                        site_index: 0,
+                        owner: Some(south),
+                        founder: Some((1)),
+                        establishment_progress: 3,
+                        established: true,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                    (
+                        site_index: 1,
+                        owner: Some(south),
+                        founder: Some((5)),
+                        establishment_progress: 3,
+                        established: true,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                ],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {
+                    (3): 1,
+                    (4): 1,
+                },
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "b1e1bafbb2260023c1c9c42b462039172533d3fe5982891e7c7370946c1334e3": 1,
+                },
+                outcome: None,
+                next_piece_id: 8,
+            ),
+            human_seat: south,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "promotion_bishop",
+                title_key: "guided.royal.promotion_bishop.title",
+                explanation_key: "guided.royal.promotion_bishop.explanation",
+                hint_keys: [
+                    "guided.royal.promotion_bishop.hint.1",
+                    "guided.royal.promotion_bishop.hint.2",
+                ],
+                prerequisites: [],
+                success: [
+                    event(promotion(
+                        pawn: Some((3)),
+                        kind: Some(bishop),
+                    )),
+                ],
+                failure: [],
+                action_limit: Some(12),
+                turn_limit: Some(6),
+            ),
+            (
+                id: "promotion_rook",
+                title_key: "guided.royal.promotion_rook.title",
+                explanation_key: "guided.royal.promotion_rook.explanation",
+                hint_keys: [
+                    "guided.royal.promotion_rook.hint.1",
+                    "guided.royal.promotion_rook.hint.2",
+                ],
+                prerequisites: [
+                    "promotion_bishop",
+                ],
+                success: [
+                    event(promotion(
+                        pawn: Some((4)),
+                        kind: Some(rook),
+                    )),
+                ],
+                failure: [],
+                action_limit: Some(12),
+                turn_limit: Some(6),
+            ),
+        ],
+        completion: Some((
+            completion_key: "guided.royal.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)

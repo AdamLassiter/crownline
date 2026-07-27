@@ -1,0 +1,332 @@
+(
+    schema_version: 2,
+    id: "guided-royal-open-practice",
+    metadata: (
+        name: "Royal Assessment: Crown and Realm",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 3,
+                y: 0,
+            ),
+        ),
+        (
+            player: north,
+            kind: rook,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: north,
+            kind: bishop,
+            at: (
+                x: 6,
+                y: 1,
+            ),
+        ),
+        (
+            player: north,
+            kind: pawn,
+            at: (
+                x: 2,
+                y: 2,
+            ),
+        ),
+        (
+            player: north,
+            kind: pawn,
+            at: (
+                x: 5,
+                y: 2,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 4,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: bishop,
+            at: (
+                x: 1,
+                y: 6,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 2,
+                y: 5,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 5,
+                y: 5,
+            ),
+        ),
+    ],
+    settlements: [
+        (
+            id: "central-west",
+            at: (
+                x: 2,
+                y: 4,
+            ),
+        ),
+        (
+            id: "central-east",
+            at: (
+                x: 5,
+                y: 3,
+            ),
+        ),
+    ],
+    promotion_sites: [],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "guided-royal-open-practice",
+        kind: open_practice,
+        category_key: "guided.category.royal",
+        start: (
+            state: (
+                scenario_id: "guided-royal-open-practice",
+                revision: 0,
+                turn_number: 1,
+                active_player: south,
+                phase: command,
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: rook,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: north,
+                        kind: pawn,
+                        at: (
+                            x: 2,
+                            y: 2,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 3,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (3): (
+                        id: (3),
+                        owner: north,
+                        kind: pawn,
+                        at: (
+                            x: 5,
+                            y: 2,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (4): (
+                        id: (4),
+                        owner: north,
+                        kind: bishop,
+                        at: (
+                            x: 6,
+                            y: 1,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (5): (
+                        id: (5),
+                        owner: south,
+                        kind: bishop,
+                        at: (
+                            x: 1,
+                            y: 6,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (6): (
+                        id: (6),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 2,
+                            y: 5,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (7): (
+                        id: (7),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 4,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (8): (
+                        id: (8),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 5,
+                            y: 5,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (9): (
+                        id: (9),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 7,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [
+                    (
+                        site_index: 0,
+                        owner: None,
+                        founder: None,
+                        establishment_progress: 0,
+                        established: false,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                    (
+                        site_index: 1,
+                        owner: None,
+                        founder: None,
+                        establishment_progress: 0,
+                        established: false,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                ],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {},
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "73e4d31a8601d0d3d7c2efd57c1b8c7fdfd78d370e93c17d5c5692c638e7df67": 1,
+                },
+                outcome: None,
+                next_piece_id: 10,
+            ),
+            human_seat: south,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "practice_finish",
+                title_key: "guided.royal.practice_finish.title",
+                explanation_key: "guided.royal.practice_finish.explanation",
+                hint_keys: [
+                    "guided.royal.practice_finish.hint.1",
+                    "guided.royal.practice_finish.hint.2",
+                ],
+                prerequisites: [],
+                success: [
+                    event(match_ended),
+                ],
+                failure: [],
+                action_limit: Some(80),
+                turn_limit: Some(40),
+            ),
+        ],
+        ai: Some((
+            seat: north,
+            mode: general_profile(
+                profile_id: "steward",
+            ),
+            max_actions: Some(40),
+        )),
+        completion: Some((
+            completion_key: "guided.royal.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)

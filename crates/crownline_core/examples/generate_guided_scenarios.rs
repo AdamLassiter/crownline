@@ -7,13 +7,13 @@ use std::{
 use crownline_core::{
     Action, GUIDED_SCHEMA_VERSION, GuidedAiConfig, GuidedAiMode, GuidedCompletion, GuidedContent,
     GuidedEventPredicate, GuidedKind, GuidedPredicate, GuidedReplyNode, GuidedStage, GuidedStart,
-    MatchState, ScenarioDefinition, apply_action,
+    MatchState, ScenarioDefinition, apply_action, realm_control_score,
     scenario::{
-        ArmySetup, BoardSize, Coord, Deployment, Edge, EdgeKind, Fortification, KeepDefinition,
-        PieceKind, Player, SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules,
-        SettlementSite, TileTerrain,
+        ArmySetup, BoardSize, CastlingRoute, Coord, Deployment, Edge, EdgeKind, Fortification,
+        KeepDefinition, PieceKind, Player, PromotionSite, SCENARIO_SCHEMA_VERSION,
+        ScenarioMetadata, ScenarioRules, SettlementSite, TileTerrain,
     },
-    state::{MandatoryChoice, PieceId, TurnPhase},
+    state::{MandatoryChoice, OutcomeReason, PieceId, PromotionEligibility, TurnPhase},
 };
 
 fn main() {
@@ -47,6 +47,7 @@ fn guided_pack() -> Vec<ScenarioDefinition> {
         crossing_open_practice(),
     ];
     scenarios.extend(realm_pack());
+    scenarios.extend(royal_pack());
     scenarios
 }
 
@@ -169,10 +170,10 @@ fn guide_state(
         stages,
         ai,
         completion: Some(GuidedCompletion {
-            completion_key: if category_key == "guided.category.realm" {
-                "guided.realm.complete"
-            } else {
-                "guided.movement.complete"
+            completion_key: match category_key {
+                "guided.category.realm" => "guided.realm.complete",
+                "guided.category.royal" => "guided.royal.complete",
+                _ => "guided.movement.complete",
             }
             .to_owned(),
             next_guided_id: None,
@@ -782,6 +783,433 @@ fn realm_open_practice() -> ScenarioDefinition {
             max_actions: Some(12),
         }),
         Vec::new(),
+    );
+    scenario
+}
+
+fn royal_pack() -> Vec<ScenarioDefinition> {
+    vec![
+        en_passant_window(),
+        knight_only_promotion(),
+        frozen_promotion_batch(),
+        answer_check(),
+        castle_safely(),
+        checkmate_finish(),
+        accept_draw(),
+        royal_open_practice(),
+    ]
+}
+
+fn royal_stage(
+    id: &str,
+    success: Vec<GuidedPredicate>,
+    hints: usize,
+    prerequisite: Option<&str>,
+) -> GuidedStage {
+    let mut stage = stage(id, success, hints, prerequisite);
+    stage.title_key = format!("guided.royal.{id}.title");
+    stage.explanation_key = format!("guided.royal.{id}.explanation");
+    stage.hint_keys = (1..=hints)
+        .map(|index| format!("guided.royal.{id}.hint.{index}"))
+        .collect();
+    stage.action_limit = Some(12);
+    stage.turn_limit = Some(6);
+    stage
+}
+
+fn royal_guide(
+    scenario: &mut ScenarioDefinition,
+    state: MatchState,
+    stages: Vec<GuidedStage>,
+    kind: GuidedKind,
+    ai: Option<GuidedAiConfig>,
+) {
+    guide_state(
+        scenario,
+        state,
+        Player::South,
+        "guided.category.royal",
+        kind,
+        stages,
+        ai,
+        Vec::new(),
+    );
+}
+
+fn en_passant_window() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-royal-en-passant",
+        "Royal I: The En Passant Window",
+        &common(&[
+            (Player::North, PieceKind::Pawn, Coord::new(3, 1)),
+            (Player::South, PieceKind::Pawn, Coord::new(4, 3)),
+        ]),
+    );
+    let mut state = start(&scenario);
+    state.active_player = Player::North;
+    let north_pawn = piece_at(&state, Coord::new(3, 1));
+    state = apply_action(
+        &scenario,
+        &state,
+        &Action::Move {
+            player: Player::North,
+            piece: north_pawn,
+            to: Coord::new(3, 3),
+        },
+    )
+    .expect("authored double-step must be legal")
+    .state;
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![royal_stage(
+            "en_passant",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::Capture {
+                piece: Some(north_pawn),
+            })],
+            2,
+            None,
+        )],
+        GuidedKind::Tutorial,
+        None,
+    );
+    scenario
+}
+
+fn knight_only_promotion() -> ScenarioDefinition {
+    let site = Coord::new(2, 2);
+    let mut scenario = base(
+        "guided-royal-promotion-knight",
+        "Royal II: Earn Promotion Choices",
+        &common(&[(Player::South, PieceKind::Pawn, site)]),
+    );
+    scenario.promotion_sites.push(PromotionSite {
+        id: "south-court".to_owned(),
+        at: site,
+    });
+    let mut state = start(&scenario);
+    let pawn = piece_at(&state, site);
+    let eligibility = PromotionEligibility::default();
+    state
+        .promotion_candidates
+        .insert(pawn, scenario.rules.promotion_cycles);
+    state.phase = TurnPhase::ResolvingChoices {
+        queue: vec![MandatoryChoice::Promote {
+            pawn,
+            site_index: 0,
+            eligibility,
+        }],
+    };
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![royal_stage(
+            "promotion_knight",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::Promotion {
+                pawn: Some(pawn),
+                kind: Some(PieceKind::Knight),
+            })],
+            2,
+            None,
+        )],
+        GuidedKind::Tutorial,
+        None,
+    );
+    scenario
+}
+
+fn frozen_promotion_batch() -> ScenarioDefinition {
+    let west = Coord::new(2, 2);
+    let east = Coord::new(5, 2);
+    let mut scenario = base(
+        "guided-royal-promotion-batch",
+        "Royal III: Frozen Promotion Batch",
+        &common(&[
+            (Player::South, PieceKind::Pawn, west),
+            (Player::South, PieceKind::Pawn, east),
+            (Player::South, PieceKind::Pawn, Coord::new(1, 4)),
+            (Player::South, PieceKind::Pawn, Coord::new(6, 4)),
+            (Player::South, PieceKind::Rook, Coord::new(1, 7)),
+            (Player::South, PieceKind::Rook, Coord::new(6, 7)),
+        ]),
+    );
+    scenario.promotion_sites = vec![
+        PromotionSite {
+            id: "west-court".to_owned(),
+            at: west,
+        },
+        PromotionSite {
+            id: "east-court".to_owned(),
+            at: east,
+        },
+    ];
+    add_settlement(&mut scenario, "west-realm", Coord::new(1, 4));
+    add_settlement(&mut scenario, "east-realm", Coord::new(6, 4));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::South,
+        Coord::new(1, 4),
+        true,
+    );
+    own_settlement(
+        &scenario,
+        &mut state,
+        1,
+        Player::South,
+        Coord::new(6, 4),
+        true,
+    );
+    let west_pawn = piece_at(&state, west);
+    let east_pawn = piece_at(&state, east);
+    state
+        .promotion_candidates
+        .insert(west_pawn, scenario.rules.promotion_cycles);
+    state
+        .promotion_candidates
+        .insert(east_pawn, scenario.rules.promotion_cycles);
+    let control = realm_control_score(&scenario, &state, Player::South)
+        .expect("authored realm control must be measurable");
+    assert_eq!(control.total(), 8);
+    let eligibility = PromotionEligibility::from_control(control, scenario.rules.promotion_unlocks);
+    state.phase = TurnPhase::ResolvingChoices {
+        queue: vec![
+            MandatoryChoice::Promote {
+                pawn: west_pawn,
+                site_index: 0,
+                eligibility: eligibility.clone(),
+            },
+            MandatoryChoice::Promote {
+                pawn: east_pawn,
+                site_index: 1,
+                eligibility,
+            },
+        ],
+    };
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![
+            royal_stage(
+                "promotion_bishop",
+                vec![GuidedPredicate::Event(GuidedEventPredicate::Promotion {
+                    pawn: Some(west_pawn),
+                    kind: Some(PieceKind::Bishop),
+                })],
+                2,
+                None,
+            ),
+            royal_stage(
+                "promotion_rook",
+                vec![GuidedPredicate::Event(GuidedEventPredicate::Promotion {
+                    pawn: Some(east_pawn),
+                    kind: Some(PieceKind::Rook),
+                })],
+                2,
+                Some("promotion_bishop"),
+            ),
+        ],
+        GuidedKind::Tutorial,
+        None,
+    );
+    scenario
+}
+
+fn answer_check() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-royal-answer-check",
+        "Royal IV: Answer Check Before Realm Work",
+        &[
+            (Player::North, PieceKind::King, Coord::new(0, 0)),
+            (Player::North, PieceKind::Rook, Coord::new(4, 0)),
+            (Player::North, PieceKind::Bishop, Coord::new(1, 4)),
+            (Player::South, PieceKind::King, Coord::new(4, 7)),
+            (Player::South, PieceKind::Bishop, Coord::new(5, 6)),
+            (Player::South, PieceKind::Knight, Coord::new(3, 6)),
+            (Player::South, PieceKind::Pawn, Coord::new(2, 6)),
+            (Player::South, PieceKind::Rook, Coord::new(2, 7)),
+        ],
+    );
+    add_settlement(&mut scenario, "delayed-realm", Coord::new(2, 6));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::South,
+        Coord::new(2, 6),
+        false,
+    );
+    state.settlements[0].establishment_progress = 1;
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![royal_stage(
+            "answer_check",
+            vec![
+                GuidedPredicate::InCheck {
+                    player: Player::South,
+                    expected: false,
+                },
+                GuidedPredicate::PieceAt {
+                    player: Player::South,
+                    kind: PieceKind::Bishop,
+                    at: Coord::new(4, 5),
+                },
+            ],
+            2,
+            None,
+        )],
+        GuidedKind::Tutorial,
+        None,
+    );
+    scenario
+}
+
+fn castle_safely() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-royal-castling",
+        "Royal V: Use an Authored Castling Route",
+        &common(&[(Player::South, PieceKind::Rook, Coord::new(7, 7))]),
+    );
+    scenario.deployments.iter_mut().for_each(|piece| {
+        if piece.player == Player::South && piece.kind == PieceKind::King {
+            piece.at = Coord::new(4, 7);
+        }
+    });
+    scenario.castling_routes.push(CastlingRoute {
+        id: "south-east".to_owned(),
+        player: Player::South,
+        king_start: Coord::new(4, 7),
+        rook_start: Coord::new(7, 7),
+        king_path: vec![Coord::new(5, 7), Coord::new(6, 7)],
+        king_destination: Coord::new(6, 7),
+        rook_destination: Coord::new(5, 7),
+    });
+    let state = start(&scenario);
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![royal_stage(
+            "castle",
+            vec![
+                GuidedPredicate::PieceAt {
+                    player: Player::South,
+                    kind: PieceKind::King,
+                    at: Coord::new(6, 7),
+                },
+                GuidedPredicate::PieceAt {
+                    player: Player::South,
+                    kind: PieceKind::Rook,
+                    at: Coord::new(5, 7),
+                },
+            ],
+            2,
+            None,
+        )],
+        GuidedKind::Tutorial,
+        None,
+    );
+    scenario
+}
+
+fn checkmate_finish() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-royal-checkmate",
+        "Royal VI: Finish Checkmate",
+        &[
+            (Player::North, PieceKind::King, Coord::new(0, 0)),
+            (Player::South, PieceKind::King, Coord::new(2, 2)),
+            (Player::South, PieceKind::Queen, Coord::new(1, 2)),
+        ],
+    );
+    let state = start(&scenario);
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![royal_stage(
+            "checkmate",
+            vec![GuidedPredicate::Outcome {
+                winner: Some(Player::South),
+                reason: OutcomeReason::Checkmate,
+            }],
+            2,
+            None,
+        )],
+        GuidedKind::Tutorial,
+        None,
+    );
+    scenario
+}
+
+fn accept_draw() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-royal-draw",
+        "Royal VII: A Canonical Draw",
+        &common(&[]),
+    );
+    let mut state = start(&scenario);
+    state.outstanding_draw_offer = Some(Player::North);
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![royal_stage(
+            "draw",
+            vec![GuidedPredicate::Outcome {
+                winner: None,
+                reason: OutcomeReason::AgreedDraw,
+            }],
+            1,
+            None,
+        )],
+        GuidedKind::Tutorial,
+        None,
+    );
+    scenario
+}
+
+fn royal_open_practice() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-royal-open-practice",
+        "Royal Assessment: Crown and Realm",
+        &[
+            (Player::North, PieceKind::King, Coord::new(3, 0)),
+            (Player::North, PieceKind::Rook, Coord::new(0, 0)),
+            (Player::North, PieceKind::Bishop, Coord::new(6, 1)),
+            (Player::North, PieceKind::Pawn, Coord::new(2, 2)),
+            (Player::North, PieceKind::Pawn, Coord::new(5, 2)),
+            (Player::South, PieceKind::King, Coord::new(4, 7)),
+            (Player::South, PieceKind::Rook, Coord::new(7, 7)),
+            (Player::South, PieceKind::Bishop, Coord::new(1, 6)),
+            (Player::South, PieceKind::Pawn, Coord::new(2, 5)),
+            (Player::South, PieceKind::Pawn, Coord::new(5, 5)),
+        ],
+    );
+    add_settlement(&mut scenario, "central-west", Coord::new(2, 4));
+    add_settlement(&mut scenario, "central-east", Coord::new(5, 3));
+    let mut final_stage = royal_stage(
+        "practice_finish",
+        vec![GuidedPredicate::Event(GuidedEventPredicate::MatchEnded)],
+        2,
+        None,
+    );
+    final_stage.action_limit = Some(80);
+    final_stage.turn_limit = Some(40);
+    let state = start(&scenario);
+    royal_guide(
+        &mut scenario,
+        state,
+        vec![final_stage],
+        GuidedKind::OpenPractice,
+        Some(GuidedAiConfig {
+            seat: Player::North,
+            mode: GuidedAiMode::GeneralProfile {
+                profile_id: "steward".to_owned(),
+            },
+            max_actions: Some(40),
+        }),
     );
     scenario
 }

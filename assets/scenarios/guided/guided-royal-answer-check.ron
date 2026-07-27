@@ -1,0 +1,279 @@
+(
+    schema_version: 2,
+    id: "guided-royal-answer-check",
+    metadata: (
+        name: "Royal IV: Answer Check Before Realm Work",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: north,
+            kind: rook,
+            at: (
+                x: 4,
+                y: 0,
+            ),
+        ),
+        (
+            player: north,
+            kind: bishop,
+            at: (
+                x: 1,
+                y: 4,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 4,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: bishop,
+            at: (
+                x: 5,
+                y: 6,
+            ),
+        ),
+        (
+            player: south,
+            kind: knight,
+            at: (
+                x: 3,
+                y: 6,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 2,
+                y: 6,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 2,
+                y: 7,
+            ),
+        ),
+    ],
+    settlements: [
+        (
+            id: "delayed-realm",
+            at: (
+                x: 2,
+                y: 6,
+            ),
+        ),
+    ],
+    promotion_sites: [],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "guided-royal-answer-check",
+        kind: tutorial,
+        category_key: "guided.category.royal",
+        start: (
+            state: (
+                scenario_id: "guided-royal-answer-check",
+                revision: 0,
+                turn_number: 1,
+                active_player: south,
+                phase: command,
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: north,
+                        kind: bishop,
+                        at: (
+                            x: 1,
+                            y: 4,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: north,
+                        kind: rook,
+                        at: (
+                            x: 4,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (3): (
+                        id: (3),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 2,
+                            y: 6,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (4): (
+                        id: (4),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 2,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (5): (
+                        id: (5),
+                        owner: south,
+                        kind: knight,
+                        at: (
+                            x: 3,
+                            y: 6,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (6): (
+                        id: (6),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 4,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (7): (
+                        id: (7),
+                        owner: south,
+                        kind: bishop,
+                        at: (
+                            x: 5,
+                            y: 6,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [
+                    (
+                        site_index: 0,
+                        owner: Some(south),
+                        founder: Some((3)),
+                        establishment_progress: 1,
+                        established: false,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                ],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {},
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "a16980ae9b9f3ebe5a418dcbb58af1f78621f27b1fed6ed37f231f3878491d1e": 1,
+                },
+                outcome: None,
+                next_piece_id: 8,
+            ),
+            human_seat: south,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "answer_check",
+                title_key: "guided.royal.answer_check.title",
+                explanation_key: "guided.royal.answer_check.explanation",
+                hint_keys: [
+                    "guided.royal.answer_check.hint.1",
+                    "guided.royal.answer_check.hint.2",
+                ],
+                prerequisites: [],
+                success: [
+                    in_check(
+                        player: south,
+                        expected: false,
+                    ),
+                    piece_at(
+                        player: south,
+                        kind: bishop,
+                        at: (
+                            x: 4,
+                            y: 5,
+                        ),
+                    ),
+                ],
+                failure: [],
+                action_limit: Some(12),
+                turn_limit: Some(6),
+            ),
+        ],
+        completion: Some((
+            completion_key: "guided.royal.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)
