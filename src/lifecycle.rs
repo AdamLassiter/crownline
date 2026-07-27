@@ -17,6 +17,7 @@ use crate::{
     config::unmodified_just_pressed,
     guided_play::GuidedRuntime,
     local_ai::AiCancellationEpoch,
+    menu::MenuState,
     rendering::{
         DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection,
@@ -260,7 +261,11 @@ fn handle_lifecycle_input(
     mut names: Query<(&mut EditableText, &PlayerNameInput)>,
     mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
     guided: Option<Res<GuidedRuntime>>,
+    menu: Option<Res<MenuState>>,
 ) {
+    if menu.as_deref().is_some_and(MenuState::is_open) {
+        return;
+    }
     match *flow {
         ClientFlow::Setup => {
             if guided.as_deref().is_some_and(GuidedRuntime::browser_open) {
@@ -426,7 +431,7 @@ fn handle_lifecycle_input(
     }
 }
 
-fn validate_names(north: &str, south: &str) -> Result<(String, String), &'static str> {
+pub(crate) fn validate_names(north: &str, south: &str) -> Result<(String, String), &'static str> {
     let north = north.trim();
     let south = south.trim();
     if north.is_empty() || south.is_empty() {
@@ -441,7 +446,7 @@ fn validate_names(north: &str, south: &str) -> Result<(String, String), &'static
     Ok((north.to_owned(), south.to_owned()))
 }
 
-fn start_fresh_match(
+pub(crate) fn start_fresh_match(
     scenario: &ScenarioDefinition,
     setup: &mut LocalSetup,
     game: &mut DisplayedGame,

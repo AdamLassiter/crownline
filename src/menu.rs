@@ -6,12 +6,20 @@ use bevy::{
         tab_navigation::{TabGroup, TabIndex},
     },
     prelude::*,
+    text::{EditableText, TextCursorStyle},
+};
+use crownline_core::{
+    ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES, scenario::Player,
 };
 
 use crate::{
-    lifecycle::{ClientFlow, LocalSetup},
+    lifecycle::{
+        ClientFlow, LocalSetup, ScenarioCatalog, SeatController, start_fresh_match, validate_names,
+    },
+    local_ai::AiCancellationEpoch,
     local_persistence::has_readable_local_save,
     panels::PanelSurface,
+    rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection},
 };
 
 const MENU_BACKGROUND: Color = Color::srgba(0.018, 0.026, 0.045, 0.985);
@@ -46,6 +54,16 @@ pub(crate) enum MenuAction {
     Cancel,
     OpenHelp,
     Quit,
+    PreviousScenario,
+    NextScenario,
+    CycleController(Player),
+    SwapSides,
+    ToggleClock,
+    DecreaseBase,
+    IncreaseBase,
+    DecreaseIncrement,
+    IncreaseIncrement,
+    StartLocal,
 }
 
 #[derive(Debug, Clone, Resource, Default)]
@@ -109,6 +127,9 @@ pub(crate) struct MenuTitle;
 
 #[derive(Component)]
 pub(crate) struct MenuFooter;
+
+#[derive(Component)]
+struct MenuNameInput(Player);
 
 #[derive(Debug, Clone, Copy, Component)]
 pub(crate) struct MenuButton {
@@ -221,6 +242,7 @@ impl Plugin for MenuPlugin {
                 (
                     dispatch_pointer_actions,
                     dispatch_focused_action,
+                    dispatch_local_setup_accelerators,
                     dispatch_escape,
                     handle_menu_intent,
                     sync_menu_shell,
@@ -356,6 +378,53 @@ fn dispatch_focused_action(
 }
 
 #[allow(clippy::needless_pass_by_value)]
+fn dispatch_local_setup_accelerators(
+    keys: Res<ButtonInput<KeyCode>>,
+    state: Res<MenuState>,
+    focus: Res<InputFocus>,
+    editable: Query<(), With<EditableText>>,
+    mut intent: ResMut<MenuIntent>,
+) {
+    if state.route != Some(MenuRoute::LocalSetup) || state.modal {
+        return;
+    }
+    let editing = focus
+        .get()
+        .is_some_and(|entity| editable.get(entity).is_ok());
+    if let Some(action) = local_setup_accelerator(&keys, editing) {
+        intent.send(action);
+    }
+}
+
+fn local_setup_accelerator(keys: &ButtonInput<KeyCode>, editing: bool) -> Option<MenuAction> {
+    if keys.just_pressed(KeyCode::F2) {
+        Some(MenuAction::StartLocal)
+    } else if keys.just_pressed(KeyCode::PageUp) {
+        Some(MenuAction::PreviousScenario)
+    } else if keys.just_pressed(KeyCode::PageDown) {
+        Some(MenuAction::NextScenario)
+    } else if keys.just_pressed(KeyCode::F7) {
+        Some(MenuAction::CycleController(Player::North))
+    } else if keys.just_pressed(KeyCode::F8) {
+        Some(MenuAction::CycleController(Player::South))
+    } else if !editing && keys.just_pressed(KeyCode::KeyX) {
+        Some(MenuAction::SwapSides)
+    } else if !editing && keys.just_pressed(KeyCode::KeyC) {
+        Some(MenuAction::ToggleClock)
+    } else if !editing && keys.just_pressed(KeyCode::Minus) {
+        Some(MenuAction::DecreaseBase)
+    } else if !editing && keys.just_pressed(KeyCode::Equal) {
+        Some(MenuAction::IncreaseBase)
+    } else if !editing && keys.just_pressed(KeyCode::Comma) {
+        Some(MenuAction::DecreaseIncrement)
+    } else if !editing && keys.just_pressed(KeyCode::Period) {
+        Some(MenuAction::IncreaseIncrement)
+    } else {
+        None
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
 fn dispatch_escape(
     keys: Res<ButtonInput<KeyCode>>,
     state: Res<MenuState>,
@@ -371,10 +440,19 @@ fn dispatch_escape(
 }
 
 #[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::too_many_arguments)]
 fn handle_menu_intent(
     mut state: ResMut<MenuState>,
     mut intent: ResMut<MenuIntent>,
     mut app_exit: MessageWriter<AppExit>,
+    catalog: Option<Res<ScenarioCatalog>>,
+    mut setup: Option<ResMut<LocalSetup>>,
+    mut flow: Option<ResMut<ClientFlow>>,
+    mut game: Option<ResMut<DisplayedGame>>,
+    mut selection: Option<ResMut<OverlaySelection>>,
+    mut history: Option<ResMut<LocalTransitionNoticeLog>>,
+    mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
+    mut names: Query<(&mut EditableText, &MenuNameInput)>,
 ) {
     let Some(action) = intent.take() else {
         return;
@@ -392,7 +470,149 @@ fn handle_menu_intent(
             app_exit.write(AppExit::Success);
         }
         MenuAction::Cancel if state.modal => state.modal = false,
+        MenuAction::PreviousScenario
+        | MenuAction::NextScenario
+        | MenuAction::CycleController(_)
+        | MenuAction::SwapSides
+        | MenuAction::ToggleClock
+        | MenuAction::DecreaseBase
+        | MenuAction::IncreaseBase
+        | MenuAction::DecreaseIncrement
+        | MenuAction::IncreaseIncrement
+        | MenuAction::StartLocal => {
+            let (
+                Some(catalog),
+                Some(setup),
+                Some(flow),
+                Some(game),
+                Some(selection),
+                Some(history),
+            ) = (
+                catalog.as_deref(),
+                setup.as_deref_mut(),
+                flow.as_deref_mut(),
+                game.as_deref_mut(),
+                selection.as_deref_mut(),
+                history.as_deref_mut(),
+            )
+            else {
+                return;
+            };
+            handle_local_setup_action(
+                action,
+                catalog,
+                setup,
+                flow,
+                game,
+                selection,
+                history,
+                ai_epoch.as_deref_mut(),
+                &mut names,
+                &mut state,
+            );
+        }
         MenuAction::Confirm | MenuAction::Cancel | MenuAction::OpenHelp => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn handle_local_setup_action(
+    action: MenuAction,
+    catalog: &ScenarioCatalog,
+    setup: &mut LocalSetup,
+    flow: &mut ClientFlow,
+    game: &mut DisplayedGame,
+    selection: &mut OverlaySelection,
+    history: &mut LocalTransitionNoticeLog,
+    ai_epoch: Option<&mut AiCancellationEpoch>,
+    names: &mut Query<(&mut EditableText, &MenuNameInput)>,
+    menu: &mut MenuState,
+) {
+    let mut north = setup.north_name.clone();
+    let mut south = setup.south_name.clone();
+    for (input, player) in names.iter_mut() {
+        match player.0 {
+            Player::North => north = input.value().to_string(),
+            Player::South => south = input.value().to_string(),
+        }
+    }
+    match action {
+        MenuAction::PreviousScenario => {
+            setup.selected_scenario =
+                (setup.selected_scenario + catalog.0.len() - 1) % catalog.0.len();
+        }
+        MenuAction::NextScenario => {
+            setup.selected_scenario = (setup.selected_scenario + 1) % catalog.0.len();
+        }
+        MenuAction::CycleController(player) => match player {
+            Player::North => setup.north_controller = setup.north_controller.next(),
+            Player::South => setup.south_controller = setup.south_controller.next(),
+        },
+        MenuAction::SwapSides => {
+            std::mem::swap(&mut north, &mut south);
+            std::mem::swap(&mut setup.north_controller, &mut setup.south_controller);
+            for (mut input, player) in names.iter_mut() {
+                input.editor_mut().set_text(match player.0 {
+                    Player::North => &north,
+                    Player::South => &south,
+                });
+            }
+            setup.north_name.clone_from(&north);
+            setup.south_name.clone_from(&south);
+        }
+        MenuAction::ToggleClock => {
+            setup.clock = setup.clock.is_none().then_some(ClockSettings {
+                base_minutes: 10,
+                increment_seconds: 0,
+            });
+        }
+        MenuAction::DecreaseBase => {
+            if let Some(clock) = setup.clock.as_mut() {
+                clock.base_minutes = clock.base_minutes.saturating_sub(1).max(MIN_BASE_MINUTES);
+            }
+        }
+        MenuAction::IncreaseBase => {
+            if let Some(clock) = setup.clock.as_mut() {
+                clock.base_minutes = clock.base_minutes.saturating_add(1).min(MAX_BASE_MINUTES);
+            }
+        }
+        MenuAction::DecreaseIncrement => {
+            if let Some(clock) = setup.clock.as_mut() {
+                clock.increment_seconds = clock.increment_seconds.saturating_sub(1);
+            }
+        }
+        MenuAction::IncreaseIncrement => {
+            if let Some(clock) = setup.clock.as_mut() {
+                clock.increment_seconds = clock
+                    .increment_seconds
+                    .saturating_add(1)
+                    .min(MAX_INCREMENT_SECONDS);
+            }
+        }
+        MenuAction::StartLocal => match validate_names(&north, &south) {
+            Ok((north, south)) => {
+                let scenario = &catalog.0[setup.selected_scenario];
+                if scenario.rules.fog.is_some()
+                    && (setup.north_controller.profile().is_some()
+                        || setup.south_controller.profile().is_some())
+                {
+                    "AI seats currently require a perfect-information scenario."
+                        .clone_into(&mut setup.error);
+                    return;
+                }
+                setup.north_name = north;
+                setup.south_name = south;
+                setup.error.clear();
+                start_fresh_match(scenario, setup, game, selection, history);
+                if let Some(epoch) = ai_epoch {
+                    epoch.cancel_pending();
+                }
+                *flow = ClientFlow::Playing;
+                menu.close();
+            }
+            Err(error) => error.clone_into(&mut setup.error),
+        },
+        _ => {}
     }
 }
 
@@ -431,6 +651,7 @@ fn sync_menu_shell(
 fn rebuild_menu_page(
     state: Res<MenuState>,
     setup: Option<Res<LocalSetup>>,
+    catalog: Option<Res<ScenarioCatalog>>,
     mut commands: Commands,
     content: Query<Entity, With<MenuContent>>,
 ) {
@@ -461,11 +682,11 @@ fn rebuild_menu_page(
         }
         match route {
             MenuRoute::Home => spawn_home_page(page),
-            MenuRoute::LocalSetup => spawn_placeholder(
-                page,
-                "New Local Match",
-                "Scenario, player, AI, and clock controls are grouped here.",
-            ),
+            MenuRoute::LocalSetup => {
+                if let (Some(setup), Some(catalog)) = (setup.as_deref(), catalog.as_deref()) {
+                    spawn_local_setup_page(page, setup, catalog);
+                }
+            }
             MenuRoute::Guided => spawn_placeholder(
                 page,
                 "Guided Play",
@@ -498,6 +719,167 @@ fn rebuild_menu_page(
             ),
         }
     });
+}
+
+#[allow(clippy::too_many_lines)]
+fn spawn_local_setup_page(
+    page: &mut ChildSpawnerCommands,
+    setup: &LocalSetup,
+    catalog: &ScenarioCatalog,
+) {
+    let scenario = &catalog.0[setup.selected_scenario];
+    page.spawn(section_heading("SCENARIO"));
+    page.spawn(body_text(format!(
+        "{} - {}x{} - {}-{} minutes\nFog: {} - Pawn double-step: {} - en passant: {} - castling routes: {}",
+        scenario.metadata.name,
+        scenario.board.width,
+        scenario.board.height,
+        scenario.metadata.expected_minutes.0,
+        scenario.metadata.expected_minutes.1,
+        enabled_label(scenario.rules.fog.is_some()),
+        enabled_label(scenario.rules.allow_pawn_double_step),
+        enabled_label(scenario.rules.allow_en_passant),
+        scenario.castling_routes.len(),
+    )));
+    page.spawn(menu_button(
+        "Previous scenario [PageUp]",
+        MenuAction::PreviousScenario,
+        0,
+    ));
+    page.spawn(menu_button(
+        "Next scenario [PageDown]",
+        MenuAction::NextScenario,
+        1,
+    ));
+
+    page.spawn(section_heading("PLAYERS"));
+    page.spawn(menu_name_input(
+        "North player",
+        &setup.north_name,
+        Player::North,
+        2,
+    ));
+    page.spawn(menu_button(
+        format!(
+            "North controller: {} [F7]",
+            controller_label(setup.north_controller)
+        ),
+        MenuAction::CycleController(Player::North),
+        3,
+    ));
+    page.spawn(menu_name_input(
+        "South player",
+        &setup.south_name,
+        Player::South,
+        4,
+    ));
+    page.spawn(menu_button(
+        format!(
+            "South controller: {} [F8]",
+            controller_label(setup.south_controller)
+        ),
+        MenuAction::CycleController(Player::South),
+        5,
+    ));
+    page.spawn(menu_button(
+        "Swap player names and controllers [X]",
+        MenuAction::SwapSides,
+        6,
+    ));
+
+    page.spawn(section_heading("TIME CONTROL"));
+    page.spawn(menu_button(
+        setup
+            .clock
+            .map_or("Untimed - enable clock [C]".to_owned(), |clock| {
+                format!(
+                    "Timed: {} min + {} sec - disable clock [C]",
+                    clock.base_minutes, clock.increment_seconds
+                )
+            }),
+        MenuAction::ToggleClock,
+        7,
+    ));
+    if setup.clock.is_some() {
+        page.spawn(menu_button(
+            "Decrease base time [-]",
+            MenuAction::DecreaseBase,
+            8,
+        ));
+        page.spawn(menu_button(
+            "Increase base time [+]",
+            MenuAction::IncreaseBase,
+            9,
+        ));
+        page.spawn(menu_button(
+            "Decrease increment [,]",
+            MenuAction::DecreaseIncrement,
+            10,
+        ));
+        page.spawn(menu_button(
+            "Increase increment [.]",
+            MenuAction::IncreaseIncrement,
+            11,
+        ));
+    }
+    if !setup.error.is_empty() {
+        page.spawn(error_text(&setup.error));
+    }
+    page.spawn(menu_button("Back [Esc]", MenuAction::Back, 12));
+    page.spawn(menu_button(
+        "Start Local Match [F2]",
+        MenuAction::StartLocal,
+        13,
+    ));
+}
+
+fn menu_name_input(label: &str, value: &str, player: Player, tab_index: i32) -> impl Bundle {
+    (
+        Node {
+            width: percent(100),
+            min_height: px(42),
+            border: UiRect::all(px(2)),
+            padding: UiRect::axes(px(10), px(7)),
+            ..default()
+        },
+        BorderColor::all(BORDER_IDLE),
+        BackgroundColor(CONTROL_IDLE),
+        EditableText::new(value),
+        TextFont {
+            font_size: FontSize::Px(16.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.92, 0.95, 1.0)),
+        TextCursorStyle::default(),
+        TabIndex(tab_index),
+        MenuNameInput(player),
+        PanelSurface,
+        Name::new(label.to_owned()),
+    )
+}
+
+fn error_text(text: impl Into<String>) -> impl Bundle {
+    (
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(14.0),
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 0.68, 0.62)),
+    )
+}
+
+const fn enabled_label(enabled: bool) -> &'static str {
+    if enabled { "enabled" } else { "disabled" }
+}
+
+const fn controller_label(controller: SeatController) -> &'static str {
+    match controller {
+        SeatController::Human => "Human",
+        SeatController::Ai(crownline_ai::DifficultyProfile::Apprentice) => "AI Apprentice",
+        SeatController::Ai(crownline_ai::DifficultyProfile::Steward) => "AI Steward",
+        SeatController::Ai(crownline_ai::DifficultyProfile::Warden) => "AI Warden",
+    }
 }
 
 fn spawn_home_page(page: &mut ChildSpawnerCommands) {
@@ -714,6 +1096,37 @@ mod tests {
         assert_eq!(
             app.world_mut().resource_mut::<MenuIntent>().take(),
             Some(MenuAction::Open(MenuRoute::Settings))
+        );
+    }
+
+    #[test]
+    fn bug_023_setup_accelerators_map_to_visible_actions_and_respect_text_editing() {
+        for (key, expected) in [
+            (KeyCode::KeyX, MenuAction::SwapSides),
+            (KeyCode::F2, MenuAction::StartLocal),
+            (KeyCode::KeyC, MenuAction::ToggleClock),
+            (KeyCode::Minus, MenuAction::DecreaseBase),
+            (KeyCode::Equal, MenuAction::IncreaseBase),
+            (KeyCode::PageUp, MenuAction::PreviousScenario),
+            (KeyCode::PageDown, MenuAction::NextScenario),
+            (KeyCode::F7, MenuAction::CycleController(Player::North)),
+            (KeyCode::F8, MenuAction::CycleController(Player::South)),
+        ] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert_eq!(local_setup_accelerator(&keys, false), Some(expected));
+        }
+
+        for key in [KeyCode::KeyX, KeyCode::KeyC, KeyCode::Minus, KeyCode::Equal] {
+            let mut keys = ButtonInput::default();
+            keys.press(key);
+            assert_eq!(local_setup_accelerator(&keys, true), None);
+        }
+        let mut function_key = ButtonInput::default();
+        function_key.press(KeyCode::F2);
+        assert_eq!(
+            local_setup_accelerator(&function_key, true),
+            Some(MenuAction::StartLocal)
         );
     }
 }
