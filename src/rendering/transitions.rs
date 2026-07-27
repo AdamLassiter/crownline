@@ -78,6 +78,7 @@ pub struct PresentationPlayback {
 pub struct TransitionEventQueue {
     events: VecDeque<TransitionEvent>,
     local_records: VecDeque<LocalTransitionRecord>,
+    guided_records: VecDeque<LocalTransitionRecord>,
     local_discontinuity: bool,
 }
 
@@ -95,26 +96,36 @@ impl TransitionEventQueue {
 
     pub(crate) fn push_local_action(&mut self, action: &Action, transition: &Transition) {
         self.push_transition(transition);
-        self.local_records.push_back(LocalTransitionRecord {
+        let record = LocalTransitionRecord {
             action: Some(action.clone()),
             state: transition.state.clone(),
             events: transition.events.clone(),
-        });
+        };
+        self.guided_records.push_back(record.clone());
+        self.local_records.push_back(record);
     }
 
     pub(crate) fn push_local_clock(&mut self, transition: &Transition) {
         self.push_transition(transition);
-        self.local_records.push_back(LocalTransitionRecord {
+        let record = LocalTransitionRecord {
             action: None,
             state: transition.state.clone(),
             events: transition.events.clone(),
-        });
+        };
+        self.guided_records.push_back(record.clone());
+        self.local_records.push_back(record);
     }
 
     pub(crate) fn drain_local_records(
         &mut self,
     ) -> impl Iterator<Item = LocalTransitionRecord> + '_ {
         self.local_records.drain(..)
+    }
+
+    pub(crate) fn drain_guided_records(
+        &mut self,
+    ) -> impl Iterator<Item = LocalTransitionRecord> + '_ {
+        self.guided_records.drain(..)
     }
 
     pub(crate) fn mark_local_discontinuity(&mut self) {
@@ -129,6 +140,7 @@ impl TransitionEventQueue {
     pub fn clear(&mut self) {
         self.events.clear();
         self.local_records.clear();
+        self.guided_records.clear();
     }
 }
 
@@ -353,6 +365,28 @@ mod tests {
         assert_eq!(messages[0], "Settlement 2 established");
         assert_eq!(messages[1], "Settlement 2 produced a Pawn");
         assert_eq!(messages[2], "Turn 7: North");
+    }
+
+    #[test]
+    fn local_actions_are_mirrored_to_independent_playtest_and_guidance_consumers() {
+        let transition = Transition {
+            state: state_for_queue_test(),
+            events: vec![TransitionEvent::TurnHeld {
+                player: Player::South,
+            }],
+        };
+        let action = Action::Hold {
+            player: Player::South,
+        };
+        let mut queue = TransitionEventQueue::default();
+        queue.push_local_action(&action, &transition);
+
+        let playtest = queue.drain_local_records().collect::<Vec<_>>();
+        assert_eq!(playtest.len(), 1);
+        let guided = queue.drain_guided_records().collect::<Vec<_>>();
+        assert_eq!(guided.len(), 1);
+        assert_eq!(guided[0].action, Some(action));
+        assert_eq!(guided[0].events, transition.events);
     }
 
     #[test]

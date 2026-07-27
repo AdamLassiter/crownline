@@ -10,6 +10,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    guided_play::GuidedRuntime,
     lifecycle::{ClientFlow, LocalClockRuntime, LocalSetup, ScenarioCatalog, SeatController},
     local_ai::AiCancellationEpoch,
     rendering::{
@@ -78,10 +79,18 @@ fn handle_save_load_keys(
     mut selection: ResMut<OverlaySelection>,
     mut fog: ResMut<FogPresentation>,
     mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
+    guided: Option<Res<GuidedRuntime>>,
 ) {
     if keys.just_pressed(KeyCode::F6) {
         status.slot = status.slot % SLOT_COUNT + 1;
         status.message = format!("Selected save slot {}.", status.slot);
+    }
+    if guided.as_deref().is_some_and(GuidedRuntime::is_active)
+        && (keys.just_pressed(KeyCode::F5) || keys.just_pressed(KeyCode::F9))
+    {
+        "Guided attempts save automatically in separate progress storage; ordinary slots were unchanged."
+            .clone_into(&mut status.message);
+        return;
     }
     if keys.just_pressed(KeyCode::F5) && !matches!(*flow, ClientFlow::Setup) {
         status.message = match save_slot(status.slot, &game, &setup, &history.entries) {

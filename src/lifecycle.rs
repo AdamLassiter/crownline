@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::unmodified_just_pressed,
+    guided_play::GuidedRuntime,
     local_ai::AiCancellationEpoch,
     rendering::{
         DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
@@ -170,6 +171,7 @@ fn spawn_lifecycle_ui(mut commands: Commands) {
             root.spawn(title_text("CROWNLINES\nLocal match setup", LifecycleText));
             root.spawn(name_input("North Player", Player::North, 0));
             root.spawn(name_input("South Player", Player::South, 1));
+            root.spawn(crate::guided_play::open_guided_button());
         });
     commands.spawn((modal_node(), Visibility::Hidden, PauseRoot, children![title_text(
         "PAUSED - SETTINGS\nP resume - F1 rules - I panels\nClocks and gameplay input are paused.",
@@ -257,9 +259,13 @@ fn handle_lifecycle_input(
     fog: Res<FogPresentation>,
     mut names: Query<(&mut EditableText, &PlayerNameInput)>,
     mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
+    guided: Option<Res<GuidedRuntime>>,
 ) {
     match *flow {
         ClientFlow::Setup => {
+            if guided.as_deref().is_some_and(GuidedRuntime::browser_open) {
+                return;
+            }
             if keys.just_pressed(KeyCode::F7) {
                 setup.north_controller = setup.north_controller.next();
             }
@@ -535,6 +541,7 @@ fn sync_lifecycle_ui(
     setup: Res<LocalSetup>,
     catalog: Res<ScenarioCatalog>,
     game: Res<DisplayedGame>,
+    guided: Option<Res<GuidedRuntime>>,
     mut roots: Query<
         (
             &mut Visibility,
@@ -547,7 +554,8 @@ fn sync_lifecycle_ui(
     mut texts: Query<&mut Text, With<LifecycleText>>,
 ) {
     for (mut visibility, setup_root, pause_root, outcome_root) in &mut roots {
-        let visible = (setup_root.is_some() && *flow == ClientFlow::Setup)
+        let guided_browser_open = guided.as_deref().is_some_and(GuidedRuntime::browser_open);
+        let visible = (setup_root.is_some() && *flow == ClientFlow::Setup && !guided_browser_open)
             || (pause_root.is_some()
                 && matches!(*flow, ClientFlow::Paused | ClientFlow::ConfirmResign))
             || (outcome_root.is_some() && *flow == ClientFlow::Outcome);

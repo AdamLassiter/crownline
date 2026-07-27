@@ -23,7 +23,7 @@ const HISTORY_LIMIT: usize = 12;
 const LOW_CLOCK_MILLIS: u64 = 60_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-enum PanelKind {
+pub(crate) enum PanelKind {
     Match,
     Settlements,
 }
@@ -72,7 +72,7 @@ pub(crate) struct PanelSurface;
 struct PanelToggle(PanelKind);
 
 #[derive(Component)]
-struct PanelBody(PanelKind);
+pub(crate) struct PanelBody(pub(crate) PanelKind);
 
 #[derive(Component)]
 struct MatchPanelText;

@@ -1,4 +1,5 @@
 mod config;
+mod guided_play;
 mod help;
 mod lifecycle;
 mod local_ai;
@@ -21,6 +22,7 @@ use bevy::{
     window::WindowResolution,
 };
 use config::ClientSettings;
+use guided_play::GuidedPlayPlugin;
 use help::RulesHelpPlugin;
 use lifecycle::LocalLifecyclePlugin;
 use local_ai::LocalAiPlugin;
@@ -77,6 +79,7 @@ fn main() {
         .add_plugins(InformationPanelsPlugin)
         .add_plugins(RulesHelpPlugin)
         .add_plugins(LocalLifecyclePlugin)
+        .add_plugins(GuidedPlayPlugin)
         .add_plugins(OnlineLobbyPlugin)
         .add_plugins(OnlineConnectionPlugin)
         .add_plugins(OnlineStatusPlugin)
