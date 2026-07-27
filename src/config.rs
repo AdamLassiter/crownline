@@ -36,7 +36,7 @@ pub struct SavedOnlineSeat {
     pub credential_id: Uuid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CameraKey {
     W,
@@ -165,7 +165,7 @@ impl ClientSettings {
             .map_err(|error| SettingsError::Write { path, error })
     }
 
-    fn validate(&self) -> Result<(), SettingsError> {
+    pub(crate) fn validate(&self) -> Result<(), SettingsError> {
         if !(640..=7680).contains(&self.window_width) {
             return Err(SettingsError::InvalidField(
                 "window_width must be between 640 and 7680",
@@ -191,6 +191,23 @@ impl ClientSettings {
         if !(self.server_url.starts_with("ws://") || self.server_url.starts_with("wss://")) {
             return Err(SettingsError::InvalidField(
                 "server_url must begin with ws:// or wss://",
+            ));
+        }
+        let bindings = [
+            self.camera_bindings.pan_up,
+            self.camera_bindings.pan_down,
+            self.camera_bindings.pan_left,
+            self.camera_bindings.pan_right,
+            self.camera_bindings.zoom_in,
+            self.camera_bindings.zoom_out,
+            self.camera_bindings.reset,
+        ];
+        let unique = bindings
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        if unique.len() != bindings.len() {
+            return Err(SettingsError::InvalidField(
+                "camera bindings must use seven distinct keys",
             ));
         }
         Ok(())
@@ -299,5 +316,18 @@ mod tests {
 
         keys.release(KeyCode::ShiftLeft);
         assert!(unmodified_just_pressed(&keys, KeyCode::KeyQ));
+    }
+
+    #[test]
+    fn duplicate_camera_bindings_are_rejected() {
+        let mut settings = ClientSettings::default();
+        settings.camera_bindings.pan_down = settings.camera_bindings.pan_up;
+        assert!(
+            settings
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("seven distinct keys")
+        );
     }
 }

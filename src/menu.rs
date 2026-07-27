@@ -7,12 +7,15 @@ use bevy::{
     },
     prelude::*,
     text::{EditableText, TextCursorStyle},
+    ui::UiScale,
+    window::PrimaryWindow,
 };
 use crownline_core::{
     ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES, scenario::Player,
 };
 
 use crate::{
+    config::{CameraBindingsSettings, CameraKey, ClientSettings},
     guided_play::GuidedRuntime,
     help::HelpState,
     lifecycle::{
@@ -67,13 +70,49 @@ pub(crate) enum MenuAction {
     DecreaseIncrement,
     IncreaseIncrement,
     StartLocal,
+    SelectSettingsTab(SettingsTab),
+    NextResolution,
+    DecreaseUiScale,
+    IncreaseUiScale,
+    ToggleReducedMotion,
+    CaptureCameraBinding(CameraBindingSlot),
+    ResetCameraBindings,
+    ApplySettings,
+    CancelSettings,
+    ForgetSavedSeat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SettingsTab {
+    #[default]
+    Display,
+    Accessibility,
+    Controls,
+    Online,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CameraBindingSlot {
+    PanUp,
+    PanDown,
+    PanLeft,
+    PanRight,
+    ZoomIn,
+    ZoomOut,
+    Reset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MenuModal {
+    Quit,
+    ForgetSavedSeat,
 }
 
 #[derive(Debug, Clone, Resource, Default)]
 pub(crate) struct MenuState {
     pub(crate) route: Option<MenuRoute>,
     pub(crate) previous: Vec<MenuRoute>,
-    pub(crate) modal: bool,
+    pub(crate) modal: Option<MenuModal>,
 }
 
 impl MenuState {
@@ -92,13 +131,13 @@ impl MenuState {
 
     pub(crate) fn back(&mut self) {
         self.route = self.previous.pop();
-        self.modal = false;
+        self.modal = None;
     }
 
     pub(crate) fn close(&mut self) {
         self.route = None;
         self.previous.clear();
-        self.modal = false;
+        self.modal = None;
     }
 
     pub(crate) const fn is_open(&self) -> bool {
@@ -117,6 +156,10 @@ impl MenuIntent {
     pub(crate) fn take(&mut self) -> Option<MenuAction> {
         self.0.take()
     }
+
+    const fn peek(&self) -> Option<MenuAction> {
+        self.0
+    }
 }
 
 #[derive(Component)]
@@ -133,6 +176,22 @@ pub(crate) struct MenuFooter;
 
 #[derive(Component)]
 struct MenuNameInput(Player);
+
+#[derive(Debug, Clone, Copy, Component)]
+enum SettingsTextInput {
+    WindowWidth,
+    WindowHeight,
+    ServerUrl,
+}
+
+#[derive(Debug, Clone, Resource, Default)]
+struct SettingsMenuState {
+    original: Option<ClientSettings>,
+    draft: Option<ClientSettings>,
+    tab: SettingsTab,
+    capturing: Option<CameraBindingSlot>,
+    message: String,
+}
 
 #[derive(Debug, Clone, Copy, Component)]
 pub(crate) struct MenuButton {
@@ -239,6 +298,7 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuState>()
             .init_resource::<MenuIntent>()
+            .init_resource::<SettingsMenuState>()
             .add_systems(Startup, (spawn_menu_shell, open_home_on_startup).chain())
             .add_systems(
                 Update,
@@ -246,8 +306,12 @@ impl Plugin for MenuPlugin {
                     dispatch_pointer_actions,
                     dispatch_focused_action,
                     dispatch_local_setup_accelerators,
+                    capture_camera_binding,
                     dispatch_escape,
-                    handle_menu_intent,
+                    handle_navigation_action,
+                    handle_local_setup_intent,
+                    handle_settings_intent,
+                    clear_menu_intent,
                     restore_home_after_submenu,
                     sync_menu_shell,
                     rebuild_menu_page,
@@ -389,7 +453,7 @@ fn dispatch_local_setup_accelerators(
     editable: Query<(), With<EditableText>>,
     mut intent: ResMut<MenuIntent>,
 ) {
-    if state.route != Some(MenuRoute::LocalSetup) || state.modal {
+    if state.route != Some(MenuRoute::LocalSetup) || state.modal.is_some() {
         return;
     }
     let editing = focus
@@ -429,39 +493,109 @@ fn local_setup_accelerator(keys: &ButtonInput<KeyCode>, editing: bool) -> Option
 }
 
 #[allow(clippy::needless_pass_by_value)]
+fn capture_camera_binding(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut settings: ResMut<SettingsMenuState>,
+) {
+    let Some(slot) = settings.capturing else {
+        return;
+    };
+    let Some(key) = supported_camera_keys()
+        .into_iter()
+        .find(|(_, key_code)| keys.just_pressed(*key_code))
+        .map(|(key, _)| key)
+    else {
+        return;
+    };
+    let Some(draft) = settings.draft.as_mut() else {
+        settings.capturing = None;
+        return;
+    };
+    let previous = camera_binding(&draft.camera_bindings, slot);
+    set_camera_binding(&mut draft.camera_bindings, slot, key);
+    if let Err(error) = draft.validate() {
+        set_camera_binding(&mut draft.camera_bindings, slot, previous);
+        settings.message = error.to_string();
+    } else {
+        settings.message = format!("Captured Shift+{key:?}. Apply to save.");
+    }
+    settings.capturing = None;
+}
+
+const fn supported_camera_keys() -> [(CameraKey, KeyCode); 13] {
+    [
+        (CameraKey::W, KeyCode::KeyW),
+        (CameraKey::A, KeyCode::KeyA),
+        (CameraKey::S, KeyCode::KeyS),
+        (CameraKey::D, KeyCode::KeyD),
+        (CameraKey::Q, KeyCode::KeyQ),
+        (CameraKey::E, KeyCode::KeyE),
+        (CameraKey::F, KeyCode::KeyF),
+        (CameraKey::Up, KeyCode::ArrowUp),
+        (CameraKey::Down, KeyCode::ArrowDown),
+        (CameraKey::Left, KeyCode::ArrowLeft),
+        (CameraKey::Right, KeyCode::ArrowRight),
+        (CameraKey::Minus, KeyCode::Minus),
+        (CameraKey::Equal, KeyCode::Equal),
+    ]
+}
+
+const fn camera_binding(bindings: &CameraBindingsSettings, slot: CameraBindingSlot) -> CameraKey {
+    match slot {
+        CameraBindingSlot::PanUp => bindings.pan_up,
+        CameraBindingSlot::PanDown => bindings.pan_down,
+        CameraBindingSlot::PanLeft => bindings.pan_left,
+        CameraBindingSlot::PanRight => bindings.pan_right,
+        CameraBindingSlot::ZoomIn => bindings.zoom_in,
+        CameraBindingSlot::ZoomOut => bindings.zoom_out,
+        CameraBindingSlot::Reset => bindings.reset,
+    }
+}
+
+const fn set_camera_binding(
+    bindings: &mut CameraBindingsSettings,
+    slot: CameraBindingSlot,
+    key: CameraKey,
+) {
+    match slot {
+        CameraBindingSlot::PanUp => bindings.pan_up = key,
+        CameraBindingSlot::PanDown => bindings.pan_down = key,
+        CameraBindingSlot::PanLeft => bindings.pan_left = key,
+        CameraBindingSlot::PanRight => bindings.pan_right = key,
+        CameraBindingSlot::ZoomIn => bindings.zoom_in = key,
+        CameraBindingSlot::ZoomOut => bindings.zoom_out = key,
+        CameraBindingSlot::Reset => bindings.reset = key,
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
 fn dispatch_escape(
     keys: Res<ButtonInput<KeyCode>>,
     state: Res<MenuState>,
     mut intent: ResMut<MenuIntent>,
 ) {
     if keys.just_pressed(KeyCode::Escape) && state.is_open() {
-        intent.send(if state.modal {
+        intent.send(if state.modal.is_some() {
             MenuAction::Cancel
+        } else if state.route == Some(MenuRoute::Settings) {
+            MenuAction::CancelSettings
         } else {
             MenuAction::Back
         });
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
-#[allow(clippy::too_many_arguments)]
-fn handle_menu_intent(
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+fn handle_navigation_action(
     mut state: ResMut<MenuState>,
-    mut intent: ResMut<MenuIntent>,
+    intent: Res<MenuIntent>,
     mut app_exit: MessageWriter<AppExit>,
-    catalog: Option<Res<ScenarioCatalog>>,
-    mut setup: Option<ResMut<LocalSetup>>,
     mut flow: Option<ResMut<ClientFlow>>,
-    mut game: Option<ResMut<DisplayedGame>>,
-    mut selection: Option<ResMut<OverlaySelection>>,
-    mut history: Option<ResMut<LocalTransitionNoticeLog>>,
-    mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
-    mut names: Query<(&mut EditableText, &MenuNameInput)>,
     mut guided: Option<ResMut<GuidedRuntime>>,
     mut lobby: Option<ResMut<OnlineLobby>>,
     mut help: Option<ResMut<HelpState>>,
 ) {
-    let Some(action) = intent.take() else {
+    let Some(action) = intent.peek() else {
         return;
     };
     match action {
@@ -482,19 +616,39 @@ fn handle_menu_intent(
                 state.open(MenuRoute::Online);
             }
         }
+        MenuAction::Open(MenuRoute::Settings) => {}
         MenuAction::Open(route) => state.open(route),
-        MenuAction::Back => {
-            if state.route != Some(MenuRoute::Home) {
-                state.back();
-            }
-        }
+        MenuAction::Back if state.route != Some(MenuRoute::Home) => state.back(),
         MenuAction::Close => state.close(),
-        MenuAction::Quit => state.modal = true,
-        MenuAction::Confirm if state.modal && state.route == Some(MenuRoute::Home) => {
+        MenuAction::Quit => state.modal = Some(MenuModal::Quit),
+        MenuAction::Confirm if state.modal == Some(MenuModal::Quit) => {
             app_exit.write(AppExit::Success);
         }
-        MenuAction::Cancel if state.modal => state.modal = false,
-        MenuAction::PreviousScenario
+        MenuAction::Cancel if state.modal.is_some() => state.modal = None,
+        MenuAction::OpenHelp => {
+            if let Some(help) = help.as_deref_mut() {
+                help.open_overview();
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+fn handle_local_setup_intent(
+    intent: Res<MenuIntent>,
+    catalog: Option<Res<ScenarioCatalog>>,
+    mut setup: Option<ResMut<LocalSetup>>,
+    mut flow: Option<ResMut<ClientFlow>>,
+    mut game: Option<ResMut<DisplayedGame>>,
+    mut selection: Option<ResMut<OverlaySelection>>,
+    mut history: Option<ResMut<LocalTransitionNoticeLog>>,
+    mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
+    mut names: Query<(&mut EditableText, &MenuNameInput)>,
+    mut state: ResMut<MenuState>,
+) {
+    let Some(
+        action @ (MenuAction::PreviousScenario
         | MenuAction::NextScenario
         | MenuAction::CycleController(_)
         | MenuAction::SwapSides
@@ -503,45 +657,97 @@ fn handle_menu_intent(
         | MenuAction::IncreaseBase
         | MenuAction::DecreaseIncrement
         | MenuAction::IncreaseIncrement
-        | MenuAction::StartLocal => {
-            let (
-                Some(catalog),
-                Some(setup),
-                Some(flow),
-                Some(game),
-                Some(selection),
-                Some(history),
-            ) = (
-                catalog.as_deref(),
-                setup.as_deref_mut(),
-                flow.as_deref_mut(),
-                game.as_deref_mut(),
-                selection.as_deref_mut(),
-                history.as_deref_mut(),
-            )
-            else {
-                return;
-            };
-            handle_local_setup_action(
-                action,
-                catalog,
-                setup,
-                flow,
-                game,
-                selection,
-                history,
-                ai_epoch.as_deref_mut(),
-                &mut names,
-                &mut state,
-            );
+        | MenuAction::StartLocal),
+    ) = intent.peek()
+    else {
+        return;
+    };
+    let (Some(catalog), Some(setup), Some(flow), Some(game), Some(selection), Some(history)) = (
+        catalog.as_deref(),
+        setup.as_deref_mut(),
+        flow.as_deref_mut(),
+        game.as_deref_mut(),
+        selection.as_deref_mut(),
+        history.as_deref_mut(),
+    ) else {
+        return;
+    };
+    handle_local_setup_action(
+        action,
+        catalog,
+        setup,
+        flow,
+        game,
+        selection,
+        history,
+        ai_epoch.as_deref_mut(),
+        &mut names,
+        &mut state,
+    );
+}
+
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+fn handle_settings_intent(
+    intent: Res<MenuIntent>,
+    mut menu: ResMut<SettingsMenuState>,
+    mut settings: Option<ResMut<ClientSettings>>,
+    mut ui_scale: Option<ResMut<UiScale>>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    fields: Query<(&EditableText, &SettingsTextInput)>,
+    mut state: ResMut<MenuState>,
+) {
+    let Some(action) = intent.peek() else {
+        return;
+    };
+    if action == MenuAction::Open(MenuRoute::Settings) {
+        if let Some(settings) = settings.as_deref() {
+            menu.original = Some(settings.clone());
+            menu.draft = Some(settings.clone());
+            menu.tab = SettingsTab::Display;
+            menu.capturing = None;
+            menu.message.clear();
         }
-        MenuAction::OpenHelp => {
-            if let Some(help) = help.as_deref_mut() {
-                help.open_overview();
-            }
-        }
-        MenuAction::Confirm | MenuAction::Cancel => {}
+        state.open(MenuRoute::Settings);
+        return;
     }
+    if action == MenuAction::Confirm && state.modal == Some(MenuModal::ForgetSavedSeat) {
+        if let Some(draft) = menu.draft.as_mut() {
+            draft.saved_online_seat = None;
+            "Saved seat will be forgotten when settings are applied.".clone_into(&mut menu.message);
+        }
+        state.modal = None;
+        return;
+    }
+    if let MenuAction::SelectSettingsTab(tab) = action {
+        menu.tab = tab;
+        return;
+    }
+    if matches!(
+        action,
+        MenuAction::NextResolution
+            | MenuAction::DecreaseUiScale
+            | MenuAction::IncreaseUiScale
+            | MenuAction::ToggleReducedMotion
+            | MenuAction::CaptureCameraBinding(_)
+            | MenuAction::ResetCameraBindings
+            | MenuAction::ApplySettings
+            | MenuAction::CancelSettings
+            | MenuAction::ForgetSavedSeat
+    ) {
+        handle_settings_action(
+            action,
+            &mut menu,
+            settings.as_deref_mut(),
+            ui_scale.as_deref_mut(),
+            &mut windows,
+            &fields,
+            &mut state,
+        );
+    }
+}
+
+fn clear_menu_intent(mut intent: ResMut<MenuIntent>) {
+    let _ = intent.take();
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -645,6 +851,145 @@ fn handle_local_setup_action(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::cast_precision_loss
+)]
+fn handle_settings_action(
+    action: MenuAction,
+    menu: &mut SettingsMenuState,
+    settings: Option<&mut ClientSettings>,
+    ui_scale: Option<&mut UiScale>,
+    windows: &mut Query<&mut Window, With<PrimaryWindow>>,
+    fields: &Query<(&EditableText, &SettingsTextInput)>,
+    state: &mut MenuState,
+) {
+    let Some(draft) = menu.draft.as_mut() else {
+        return;
+    };
+    match action {
+        MenuAction::NextResolution => {
+            const PRESETS: [(u32, u32); 6] = [
+                (800, 600),
+                (1280, 720),
+                (1280, 800),
+                (1600, 900),
+                (1920, 1080),
+                (2560, 1440),
+            ];
+            let current = PRESETS
+                .iter()
+                .position(|preset| *preset == (draft.window_width, draft.window_height))
+                .unwrap_or(1);
+            let next = PRESETS[(current + 1) % PRESETS.len()];
+            draft.window_width = next.0;
+            draft.window_height = next.1;
+        }
+        MenuAction::DecreaseUiScale => {
+            draft.ui_scale = (draft.ui_scale - 0.05).max(0.75);
+            preview_accessibility(draft, settings, ui_scale);
+        }
+        MenuAction::IncreaseUiScale => {
+            draft.ui_scale = (draft.ui_scale + 0.05).min(2.5);
+            preview_accessibility(draft, settings, ui_scale);
+        }
+        MenuAction::ToggleReducedMotion => {
+            draft.reduced_motion = !draft.reduced_motion;
+            preview_accessibility(draft, settings, ui_scale);
+        }
+        MenuAction::CaptureCameraBinding(slot) => {
+            menu.capturing = Some(slot);
+            menu.message = "Press one supported key; camera controls always require Shift.".into();
+        }
+        MenuAction::ResetCameraBindings => {
+            draft.camera_bindings = CameraBindingsSettings::default();
+            "Camera bindings reset in the draft. Apply to save.".clone_into(&mut menu.message);
+        }
+        MenuAction::ForgetSavedSeat => {
+            state.modal = Some(MenuModal::ForgetSavedSeat);
+        }
+        MenuAction::ApplySettings => {
+            for (value, field) in fields {
+                match field {
+                    SettingsTextInput::WindowWidth => {
+                        let Ok(width) = value.value().to_string().parse() else {
+                            "Window width must be a whole number.".clone_into(&mut menu.message);
+                            return;
+                        };
+                        draft.window_width = width;
+                    }
+                    SettingsTextInput::WindowHeight => {
+                        let Ok(height) = value.value().to_string().parse() else {
+                            "Window height must be a whole number.".clone_into(&mut menu.message);
+                            return;
+                        };
+                        draft.window_height = height;
+                    }
+                    SettingsTextInput::ServerUrl => {
+                        value
+                            .value()
+                            .to_string()
+                            .trim()
+                            .clone_into(&mut draft.server_url);
+                    }
+                }
+            }
+            if let Err(error) = draft.validate() {
+                menu.message = error.to_string();
+                return;
+            }
+            if let Err(error) = draft.save() {
+                menu.message = format!("Settings were not saved; previous values remain. {error}");
+                return;
+            }
+            if let Some(settings) = settings {
+                settings.clone_from(draft);
+            }
+            if let Some(ui_scale) = ui_scale {
+                ui_scale.0 = draft.ui_scale;
+            }
+            if let Ok(mut window) = windows.single_mut() {
+                window
+                    .resolution
+                    .set(draft.window_width as f32, draft.window_height as f32);
+            }
+            menu.original = Some(draft.clone());
+            "Settings applied.".clone_into(&mut menu.message);
+            state.back();
+        }
+        MenuAction::CancelSettings => {
+            if let Some(original) = menu.original.take() {
+                if let Some(settings) = settings {
+                    settings.clone_from(&original);
+                }
+                if let Some(ui_scale) = ui_scale {
+                    ui_scale.0 = original.ui_scale;
+                }
+            }
+            menu.draft = None;
+            menu.capturing = None;
+            menu.message.clear();
+            state.back();
+        }
+        _ => {}
+    }
+}
+
+fn preview_accessibility(
+    draft: &ClientSettings,
+    settings: Option<&mut ClientSettings>,
+    ui_scale: Option<&mut UiScale>,
+) {
+    if let Some(settings) = settings {
+        settings.ui_scale = draft.ui_scale;
+        settings.reduced_motion = draft.reduced_motion;
+    }
+    if let Some(ui_scale) = ui_scale {
+        ui_scale.0 = draft.ui_scale;
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
 fn restore_home_after_submenu(
     flow: Option<Res<ClientFlow>>,
@@ -698,10 +1043,12 @@ fn rebuild_menu_page(
     state: Res<MenuState>,
     setup: Option<Res<LocalSetup>>,
     catalog: Option<Res<ScenarioCatalog>>,
+    settings: Res<SettingsMenuState>,
     mut commands: Commands,
     content: Query<Entity, With<MenuContent>>,
 ) {
     if !state.is_changed()
+        && !settings.is_changed()
         && !setup
             .as_ref()
             .is_some_and(bevy::prelude::DetectChanges::is_changed)
@@ -716,13 +1063,23 @@ fn rebuild_menu_page(
         return;
     };
     commands.entity(content).with_children(|page| {
-        if state.modal {
-            page.spawn(section_heading("QUIT CROWNLINES?"));
-            page.spawn(body_text(
-                "Any unsaved local match progress will be lost. Choose Quit to close the application.",
-            ));
+        if let Some(modal) = state.modal {
+            let (heading, copy, confirm) = match modal {
+                MenuModal::Quit => (
+                    "QUIT CROWNLINES?",
+                    "Any unsaved local match progress will be lost. Choose Quit to close the application.",
+                    "Quit",
+                ),
+                MenuModal::ForgetSavedSeat => (
+                    "FORGET SAVED ONLINE SEAT?",
+                    "The local reconnect credential will be removed. This cannot be undone.",
+                    "Forget seat",
+                ),
+            };
+            page.spawn(section_heading(heading));
+            page.spawn(body_text(copy));
             page.spawn(menu_button("Cancel [Esc]", MenuAction::Cancel, 0));
-            page.spawn(menu_button("Quit", MenuAction::Confirm, 1))
+            page.spawn(menu_button(confirm, MenuAction::Confirm, 1))
                 .insert(MenuButton::new(MenuAction::Confirm).destructive());
             return;
         }
@@ -743,11 +1100,7 @@ fn rebuild_menu_page(
                 "Online Play",
                 "Host, Join, reconnect, and waiting-room controls are grouped here.",
             ),
-            MenuRoute::Settings => spawn_placeholder(
-                page,
-                "Settings",
-                "Display, Accessibility, Controls, and Online settings are grouped here.",
-            ),
+            MenuRoute::Settings => spawn_settings_page(page, &settings),
             MenuRoute::Saves => spawn_placeholder(
                 page,
                 "Continue / Load Game",
@@ -765,6 +1118,176 @@ fn rebuild_menu_page(
             ),
         }
     });
+}
+
+#[allow(clippy::too_many_lines)]
+fn spawn_settings_page(page: &mut ChildSpawnerCommands, menu: &SettingsMenuState) {
+    let Some(draft) = menu.draft.as_ref() else {
+        page.spawn(error_text("Settings could not be loaded."));
+        page.spawn(menu_button("Back [Esc]", MenuAction::CancelSettings, 0));
+        return;
+    };
+    page.spawn(body_text(
+        "Changes remain a draft until Apply. UI scale and reduced motion preview immediately; Cancel restores them.",
+    ));
+    for (index, (label, tab)) in [
+        ("Display", SettingsTab::Display),
+        ("Accessibility", SettingsTab::Accessibility),
+        ("Controls", SettingsTab::Controls),
+        ("Online", SettingsTab::Online),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        page.spawn(menu_button(
+            label,
+            MenuAction::SelectSettingsTab(tab),
+            i32::try_from(index).unwrap(),
+        ))
+        .insert(if menu.tab == tab {
+            MenuButton::new(MenuAction::SelectSettingsTab(tab)).selected()
+        } else {
+            MenuButton::new(MenuAction::SelectSettingsTab(tab))
+        });
+    }
+    match menu.tab {
+        SettingsTab::Display => {
+            page.spawn(section_heading("DISPLAY"));
+            page.spawn(body_text(format!(
+                "Window size: {}x{}. Presets cycle through supported desktop sizes; custom values are validated on Apply.",
+                draft.window_width, draft.window_height
+            )));
+            page.spawn(menu_button(
+                "Next window-size preset",
+                MenuAction::NextResolution,
+                10,
+            ));
+            page.spawn(settings_text_input(
+                "Custom window width",
+                draft.window_width.to_string(),
+                SettingsTextInput::WindowWidth,
+                11,
+            ));
+            page.spawn(settings_text_input(
+                "Custom window height",
+                draft.window_height.to_string(),
+                SettingsTextInput::WindowHeight,
+                12,
+            ));
+        }
+        SettingsTab::Accessibility => {
+            page.spawn(section_heading("ACCESSIBILITY"));
+            page.spawn(body_text(format!("UI scale: {:.2}", draft.ui_scale)));
+            page.spawn(menu_button(
+                "Decrease UI scale",
+                MenuAction::DecreaseUiScale,
+                10,
+            ));
+            page.spawn(menu_button(
+                "Increase UI scale",
+                MenuAction::IncreaseUiScale,
+                11,
+            ));
+            page.spawn(menu_button(
+                format!("Reduced motion: {}", enabled_label(draft.reduced_motion)),
+                MenuAction::ToggleReducedMotion,
+                12,
+            ));
+        }
+        SettingsTab::Controls => {
+            page.spawn(section_heading("CAMERA CONTROLS"));
+            page.spawn(body_text(
+                "Camera bindings always use Shift, keeping them separate from menu and match commands.",
+            ));
+            for (index, (label, slot)) in [
+                ("Pan up", CameraBindingSlot::PanUp),
+                ("Pan down", CameraBindingSlot::PanDown),
+                ("Pan left", CameraBindingSlot::PanLeft),
+                ("Pan right", CameraBindingSlot::PanRight),
+                ("Zoom in", CameraBindingSlot::ZoomIn),
+                ("Zoom out", CameraBindingSlot::ZoomOut),
+                ("Reset", CameraBindingSlot::Reset),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let binding = camera_binding(&draft.camera_bindings, slot);
+                let capture = menu.capturing == Some(slot);
+                page.spawn(menu_button(
+                    if capture {
+                        format!("{label}: press a key...")
+                    } else {
+                        format!("{label}: Shift+{binding:?}")
+                    },
+                    MenuAction::CaptureCameraBinding(slot),
+                    10 + i32::try_from(index).unwrap(),
+                ));
+            }
+            page.spawn(menu_button(
+                "Reset camera bindings",
+                MenuAction::ResetCameraBindings,
+                17,
+            ));
+        }
+        SettingsTab::Online => {
+            page.spawn(section_heading("ONLINE"));
+            page.spawn(settings_text_input(
+                "Default server URL",
+                &draft.server_url,
+                SettingsTextInput::ServerUrl,
+                10,
+            ));
+            page.spawn(menu_button(
+                if draft.saved_online_seat.is_some() {
+                    "Forget saved online seat"
+                } else {
+                    "Forget saved online seat - none stored"
+                },
+                MenuAction::ForgetSavedSeat,
+                11,
+            ))
+            .insert(if draft.saved_online_seat.is_some() {
+                MenuButton::new(MenuAction::ForgetSavedSeat).destructive()
+            } else {
+                MenuButton::new(MenuAction::ForgetSavedSeat).disabled()
+            });
+        }
+    }
+    if !menu.message.is_empty() {
+        page.spawn(body_text(&menu.message));
+    }
+    page.spawn(menu_button("Cancel [Esc]", MenuAction::CancelSettings, 30));
+    page.spawn(menu_button("Apply Settings", MenuAction::ApplySettings, 31));
+}
+
+fn settings_text_input(
+    label: &str,
+    value: impl AsRef<str>,
+    field: SettingsTextInput,
+    tab_index: i32,
+) -> impl Bundle {
+    (
+        Node {
+            width: percent(100),
+            min_height: px(42),
+            border: UiRect::all(px(2)),
+            padding: UiRect::axes(px(10), px(7)),
+            ..default()
+        },
+        BorderColor::all(BORDER_IDLE),
+        BackgroundColor(CONTROL_IDLE),
+        EditableText::new(value),
+        TextFont {
+            font_size: FontSize::Px(16.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.92, 0.95, 1.0)),
+        TextCursorStyle::default(),
+        TabIndex(tab_index),
+        field,
+        PanelSurface,
+        Name::new(label.to_owned()),
+    )
 }
 
 #[allow(clippy::too_many_lines)]
