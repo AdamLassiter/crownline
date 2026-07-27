@@ -161,14 +161,16 @@ impl Plugin for BoardRenderingPlugin {
                 Update,
                 (
                     rebuild_changed_scenario,
+                    ApplyDeferred,
                     sync_piece_visuals,
                     sync_settlement_visuals,
                     update_hovered_square,
-                    sync_overlays.after(update_hovered_square),
-                    process_piece_motion_requests.after(sync_piece_visuals),
-                    animate_piece_presentations.after(process_piece_motion_requests),
+                    sync_overlays,
+                    process_piece_motion_requests,
+                    animate_piece_presentations,
                     process_transition_events,
-                ),
+                )
+                    .chain(),
             );
     }
 }
@@ -736,6 +738,7 @@ mod tests {
     #[test]
     fn changing_scenario_rebuilds_tiles_features_and_geometry_without_stale_visuals() {
         let mut app = App::new();
+        app.set_error_handler(bevy::ecs::error::panic);
         app.add_plugins(BoardRenderingPlugin);
         app.update();
         let scenario: ScenarioDefinition =

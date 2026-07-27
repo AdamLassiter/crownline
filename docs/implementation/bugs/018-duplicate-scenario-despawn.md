@@ -2,7 +2,14 @@
 
 ## Status
 
-- [ ] Not started
+- [x] Done
+
+## Resolution
+
+- The rendering update is now one explicit ordered chain. `rebuild_changed_scenario` runs first and an `ApplyDeferred` boundary commits its recursive teardown before piece, settlement, overlay, motion, and transition systems query the projection.
+- The scenario-replacement regression test installs Bevy's panic error handler, so a duplicate deferred despawn or any other command error fails the test instead of being reduced to a warning.
+- `./scripts/check.sh` passed with 257 tests passing and the two scheduled-only tests ignored.
+- A live 800x480 Xephyr pass loaded a valid different-scenario save at revision 4. The rebuilt board, pieces, terrain/features, coordinate labels, side panels, and bottom mandatory-choice region remained visible and correct, with no `Entity despawned` warning.
 
 ## Linked tasks and introducing commits
 
