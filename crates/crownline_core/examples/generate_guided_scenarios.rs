@@ -5,20 +5,21 @@ use std::{
 };
 
 use crownline_core::{
-    GUIDED_SCHEMA_VERSION, GuidedAiConfig, GuidedAiMode, GuidedCompletion, GuidedContent,
-    GuidedEventPredicate, GuidedKind, GuidedPredicate, GuidedStage, GuidedStart, MatchState,
-    ScenarioDefinition,
+    Action, GUIDED_SCHEMA_VERSION, GuidedAiConfig, GuidedAiMode, GuidedCompletion, GuidedContent,
+    GuidedEventPredicate, GuidedKind, GuidedPredicate, GuidedReplyNode, GuidedStage, GuidedStart,
+    MatchState, ScenarioDefinition, apply_action,
     scenario::{
         ArmySetup, BoardSize, Coord, Deployment, Edge, EdgeKind, Fortification, KeepDefinition,
-        PieceKind, Player, SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules, TileTerrain,
+        PieceKind, Player, SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules,
+        SettlementSite, TileTerrain,
     },
-    state::PieceId,
+    state::{MandatoryChoice, PieceId, TurnPhase},
 };
 
 fn main() {
     let output = Path::new("assets/scenarios/guided");
     fs::create_dir_all(output).expect("guided scenario directory must be writable");
-    for scenario in movement_pack() {
+    for scenario in guided_pack() {
         scenario
             .validate()
             .expect("generated guided scenario must validate");
@@ -35,8 +36,8 @@ fn main() {
     }
 }
 
-fn movement_pack() -> Vec<ScenarioDefinition> {
-    vec![
+fn guided_pack() -> Vec<ScenarioDefinition> {
+    let mut scenarios = vec![
         capture_and_blocking(),
         knight_jump(),
         forest_stop(),
@@ -44,7 +45,9 @@ fn movement_pack() -> Vec<ScenarioDefinition> {
         bridge_crossing(),
         tower_rook_wall(),
         crossing_open_practice(),
-    ]
+    ];
+    scenarios.extend(realm_pack());
+    scenarios
 }
 
 fn base(id: &str, name: &str, pieces: &[(Player, PieceKind, Coord)]) -> ScenarioDefinition {
@@ -120,30 +123,63 @@ fn stage(
 
 fn guide(scenario: &mut ScenarioDefinition, stages: Vec<GuidedStage>, ai: Option<GuidedAiConfig>) {
     let state = start(scenario);
+    let kind = if ai.is_some() {
+        GuidedKind::OpenPractice
+    } else {
+        GuidedKind::Tutorial
+    };
+    guide_state(
+        scenario,
+        state,
+        Player::South,
+        "guided.category.movement_terrain",
+        kind,
+        stages,
+        ai,
+        Vec::new(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn guide_state(
+    scenario: &mut ScenarioDefinition,
+    mut state: MatchState,
+    human_seat: Player,
+    category_key: &str,
+    kind: GuidedKind,
+    stages: Vec<GuidedStage>,
+    ai: Option<GuidedAiConfig>,
+    reply_nodes: Vec<GuidedReplyNode>,
+) {
+    state.repetition_counts.clear();
+    state
+        .repetition_counts
+        .insert(state.repetition_key().expect("guided state must hash"), 1);
     scenario.guided = Some(GuidedContent {
         schema_version: GUIDED_SCHEMA_VERSION,
         id: scenario.id.clone(),
-        kind: if ai.is_some() {
-            GuidedKind::OpenPractice
-        } else {
-            GuidedKind::Tutorial
-        },
-        category_key: "guided.category.movement_terrain".to_owned(),
+        kind,
+        category_key: category_key.to_owned(),
         start: GuidedStart {
             state,
-            human_seat: Player::South,
+            human_seat,
             allow_clock: false,
             allow_controller_changes: false,
         },
         stages,
         ai,
         completion: Some(GuidedCompletion {
-            completion_key: "guided.movement.complete".to_owned(),
+            completion_key: if category_key == "guided.category.realm" {
+                "guided.realm.complete"
+            } else {
+                "guided.movement.complete"
+            }
+            .to_owned(),
             next_guided_id: None,
             records_best_actions: true,
             records_best_turns: true,
         }),
-        reply_nodes: Vec::new(),
+        reply_nodes,
     });
 }
 
@@ -395,6 +431,357 @@ fn crossing_open_practice() -> ScenarioDefinition {
             },
             max_actions: Some(8),
         }),
+    );
+    scenario
+}
+
+fn realm_pack() -> Vec<ScenarioDefinition> {
+    vec![
+        settlement_claim(),
+        governance_cycle(),
+        production_choice(),
+        settlement_transfer(),
+        transfer_cancellation(),
+        realm_open_practice(),
+    ]
+}
+
+fn realm_stage(
+    id: &str,
+    success: Vec<GuidedPredicate>,
+    hints: usize,
+    prerequisite: Option<&str>,
+) -> GuidedStage {
+    let mut stage = stage(id, success, hints, prerequisite);
+    stage.title_key = format!("guided.realm.{id}.title");
+    stage.explanation_key = format!("guided.realm.{id}.explanation");
+    stage.hint_keys = (1..=hints)
+        .map(|index| format!("guided.realm.{id}.hint.{index}"))
+        .collect();
+    stage.action_limit = Some(10);
+    stage.turn_limit = Some(5);
+    stage
+}
+
+fn add_settlement(scenario: &mut ScenarioDefinition, id: &str, at: Coord) {
+    scenario.settlements.push(SettlementSite {
+        id: id.to_owned(),
+        at,
+    });
+}
+
+fn own_settlement(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+    index: usize,
+    owner: Player,
+    founder_at: Coord,
+    established: bool,
+) {
+    let founder = piece_at(state, founder_at);
+    let settlement = &mut state.settlements[index];
+    settlement.owner = Some(owner);
+    settlement.founder = Some(founder);
+    settlement.established = established;
+    settlement.establishment_progress = if established {
+        scenario.rules.establishment_cycles
+    } else {
+        0
+    };
+}
+
+fn settlement_claim() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-realm-claim",
+        "Realm I: Claim and Founder",
+        &common(&[(Player::South, PieceKind::Pawn, Coord::new(3, 5))]),
+    );
+    add_settlement(&mut scenario, "claim-village", Coord::new(3, 4));
+    let state = start(&scenario);
+    guide_state(
+        &mut scenario,
+        state,
+        Player::South,
+        "guided.category.realm",
+        GuidedKind::Tutorial,
+        vec![realm_stage(
+            "claim",
+            vec![GuidedPredicate::Event(
+                GuidedEventPredicate::SettlementClaimed {
+                    settlement_index: Some(0),
+                },
+            )],
+            2,
+            None,
+        )],
+        None,
+        Vec::new(),
+    );
+    scenario
+}
+
+fn governance_cycle() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-realm-governance",
+        "Realm II: Governance and Continuity",
+        &common(&[
+            (Player::South, PieceKind::Pawn, Coord::new(3, 3)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 7)),
+        ]),
+    );
+    scenario.rules.establishment_cycles = 2;
+    add_settlement(&mut scenario, "governed-village", Coord::new(3, 3));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::South,
+        Coord::new(3, 3),
+        false,
+    );
+    state.settlements[0].establishment_progress = 1;
+    state.active_player = Player::North;
+    guide_state(
+        &mut scenario,
+        state,
+        Player::North,
+        "guided.category.realm",
+        GuidedKind::Tutorial,
+        vec![realm_stage(
+            "governance",
+            vec![GuidedPredicate::Event(
+                GuidedEventPredicate::SettlementEstablished {
+                    settlement_index: Some(0),
+                },
+            )],
+            2,
+            None,
+        )],
+        None,
+        Vec::new(),
+    );
+    scenario
+}
+
+fn production_choice() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-realm-production",
+        "Realm III: Production and Placement",
+        &common(&[
+            (Player::South, PieceKind::Pawn, Coord::new(3, 3)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 7)),
+        ]),
+    );
+    add_settlement(&mut scenario, "productive-village", Coord::new(3, 3));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::South,
+        Coord::new(3, 3),
+        true,
+    );
+    state.settlements[0].production_progress = scenario.rules.production_cycles;
+    state.phase = TurnPhase::ResolvingChoices {
+        queue: vec![MandatoryChoice::PlacePawn {
+            settlement_index: 0,
+            legal_squares: BTreeSet::from([
+                Coord::new(2, 2),
+                Coord::new(3, 2),
+                Coord::new(4, 2),
+                Coord::new(2, 3),
+                Coord::new(4, 3),
+                Coord::new(2, 4),
+                Coord::new(3, 4),
+                Coord::new(4, 4),
+            ]),
+        }],
+    };
+    guide_state(
+        &mut scenario,
+        state,
+        Player::South,
+        "guided.category.realm",
+        GuidedKind::Tutorial,
+        vec![realm_stage(
+            "production",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::PawnProduced {
+                settlement_index: Some(0),
+            })],
+            2,
+            None,
+        )],
+        None,
+        Vec::new(),
+    );
+    scenario
+}
+
+fn contested_base(id: &str, name: &str) -> (ScenarioDefinition, MatchState, PieceId) {
+    let mut scenario = base(
+        id,
+        name,
+        &common(&[
+            (Player::North, PieceKind::Pawn, Coord::new(0, 1)),
+            (Player::North, PieceKind::Rook, Coord::new(3, 0)),
+            (Player::South, PieceKind::Pawn, Coord::new(3, 4)),
+        ]),
+    );
+    add_settlement(&mut scenario, "contested-village", Coord::new(3, 3));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::North,
+        Coord::new(0, 1),
+        true,
+    );
+    let candidate = piece_at(&state, Coord::new(3, 4));
+    let contested = apply_action(
+        &scenario,
+        &state,
+        &Action::Move {
+            player: Player::South,
+            piece: candidate,
+            to: Coord::new(3, 3),
+        },
+    )
+    .expect("contest setup move must be legal")
+    .state;
+    (scenario, contested, candidate)
+}
+
+fn settlement_transfer() -> ScenarioDefinition {
+    let (mut scenario, state, _) =
+        contested_base("guided-realm-transfer", "Realm IV: Contest and Transfer");
+    guide_state(
+        &mut scenario,
+        state,
+        Player::North,
+        "guided.category.realm",
+        GuidedKind::Tutorial,
+        vec![realm_stage(
+            "transfer",
+            vec![GuidedPredicate::Event(
+                GuidedEventPredicate::SettlementTransferred {
+                    settlement_index: Some(0),
+                },
+            )],
+            2,
+            None,
+        )],
+        None,
+        Vec::new(),
+    );
+    scenario
+}
+
+fn transfer_cancellation() -> ScenarioDefinition {
+    let (mut scenario, state, _) = contested_base(
+        "guided-realm-transfer-cancel",
+        "Realm V: Defend a Contested Settlement",
+    );
+    guide_state(
+        &mut scenario,
+        state,
+        Player::North,
+        "guided.category.realm",
+        GuidedKind::Tutorial,
+        vec![realm_stage(
+            "transfer_cancel",
+            vec![GuidedPredicate::Event(
+                GuidedEventPredicate::SettlementTransferCancelled {
+                    settlement_index: Some(0),
+                },
+            )],
+            2,
+            None,
+        )],
+        None,
+        Vec::new(),
+    );
+    scenario
+}
+
+fn realm_open_practice() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-realm-open-practice",
+        "Realm Assessment: Shared Governance",
+        &common(&[
+            (Player::South, PieceKind::Pawn, Coord::new(3, 3)),
+            (Player::South, PieceKind::Pawn, Coord::new(5, 6)),
+            (Player::South, PieceKind::Pawn, Coord::new(6, 7)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 7)),
+        ]),
+    );
+    add_settlement(&mut scenario, "south-road", Coord::new(3, 3));
+    add_settlement(&mut scenario, "south-flank", Coord::new(6, 7));
+    add_settlement(&mut scenario, "open-village", Coord::new(5, 5));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::South,
+        Coord::new(3, 3),
+        true,
+    );
+    own_settlement(
+        &scenario,
+        &mut state,
+        1,
+        Player::South,
+        Coord::new(6, 7),
+        true,
+    );
+    guide_state(
+        &mut scenario,
+        state,
+        Player::South,
+        "guided.category.realm",
+        GuidedKind::OpenPractice,
+        vec![
+            realm_stage(
+                "practice_claim",
+                vec![GuidedPredicate::Event(
+                    GuidedEventPredicate::SettlementClaimed {
+                        settlement_index: Some(2),
+                    },
+                )],
+                0,
+                None,
+            ),
+            realm_stage(
+                "practice_govern",
+                vec![
+                    GuidedPredicate::SettlementGoverned {
+                        settlement_index: 0,
+                        player: Player::South,
+                    },
+                    GuidedPredicate::SettlementGoverned {
+                        settlement_index: 1,
+                        player: Player::South,
+                    },
+                    GuidedPredicate::SettlementOwned {
+                        settlement_index: 2,
+                        player: Player::South,
+                    },
+                ],
+                0,
+                Some("practice_claim"),
+            ),
+        ],
+        Some(GuidedAiConfig {
+            seat: Player::North,
+            mode: GuidedAiMode::GeneralProfile {
+                profile_id: "steward".to_owned(),
+            },
+            max_actions: Some(12),
+        }),
+        Vec::new(),
     );
     scenario
 }

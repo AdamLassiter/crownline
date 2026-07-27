@@ -1,0 +1,300 @@
+(
+    schema_version: 2,
+    id: "guided-realm-open-practice",
+    metadata: (
+        name: "Realm Assessment: Shared Governance",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 3,
+                y: 3,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 5,
+                y: 6,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 6,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 3,
+                y: 7,
+            ),
+        ),
+    ],
+    settlements: [
+        (
+            id: "south-road",
+            at: (
+                x: 3,
+                y: 3,
+            ),
+        ),
+        (
+            id: "south-flank",
+            at: (
+                x: 6,
+                y: 7,
+            ),
+        ),
+        (
+            id: "open-village",
+            at: (
+                x: 5,
+                y: 5,
+            ),
+        ),
+    ],
+    promotion_sites: [],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "guided-realm-open-practice",
+        kind: open_practice,
+        category_key: "guided.category.realm",
+        start: (
+            state: (
+                scenario_id: "guided-realm-open-practice",
+                revision: 0,
+                turn_number: 1,
+                active_player: south,
+                phase: command,
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 3,
+                            y: 3,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 3,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (3): (
+                        id: (3),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 5,
+                            y: 6,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (4): (
+                        id: (4),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 6,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (5): (
+                        id: (5),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 7,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [
+                    (
+                        site_index: 0,
+                        owner: Some(south),
+                        founder: Some((1)),
+                        establishment_progress: 3,
+                        established: true,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                    (
+                        site_index: 1,
+                        owner: Some(south),
+                        founder: Some((4)),
+                        establishment_progress: 3,
+                        established: true,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                    (
+                        site_index: 2,
+                        owner: None,
+                        founder: None,
+                        establishment_progress: 0,
+                        established: false,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                ],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {},
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "8b3e3b2fdb928afc07061db54715ea6546d0f17589a3d5dec9a1de4c6b3f14fa": 1,
+                },
+                outcome: None,
+                next_piece_id: 6,
+            ),
+            human_seat: south,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "practice_claim",
+                title_key: "guided.realm.practice_claim.title",
+                explanation_key: "guided.realm.practice_claim.explanation",
+                hint_keys: [],
+                prerequisites: [],
+                success: [
+                    event(settlement_claimed(
+                        settlement_index: Some(2),
+                    )),
+                ],
+                failure: [],
+                action_limit: Some(10),
+                turn_limit: Some(5),
+            ),
+            (
+                id: "practice_govern",
+                title_key: "guided.realm.practice_govern.title",
+                explanation_key: "guided.realm.practice_govern.explanation",
+                hint_keys: [],
+                prerequisites: [
+                    "practice_claim",
+                ],
+                success: [
+                    settlement_governed(
+                        settlement_index: 0,
+                        player: south,
+                    ),
+                    settlement_governed(
+                        settlement_index: 1,
+                        player: south,
+                    ),
+                    settlement_owned(
+                        settlement_index: 2,
+                        player: south,
+                    ),
+                ],
+                failure: [],
+                action_limit: Some(10),
+                turn_limit: Some(5),
+            ),
+        ],
+        ai: Some((
+            seat: north,
+            mode: general_profile(
+                profile_id: "steward",
+            ),
+            max_actions: Some(12),
+        )),
+        completion: Some((
+            completion_key: "guided.realm.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)

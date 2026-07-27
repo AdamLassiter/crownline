@@ -46,6 +46,12 @@ impl Default for GuidedScenarioCatalog {
             include_str!("../assets/scenarios/guided/guided-crossing-bridge.ron"),
             include_str!("../assets/scenarios/guided/guided-crossing-tower-rook.ron"),
             include_str!("../assets/scenarios/guided/guided-movement-open-practice.ron"),
+            include_str!("../assets/scenarios/guided/guided-realm-claim.ron"),
+            include_str!("../assets/scenarios/guided/guided-realm-governance.ron"),
+            include_str!("../assets/scenarios/guided/guided-realm-production.ron"),
+            include_str!("../assets/scenarios/guided/guided-realm-transfer.ron"),
+            include_str!("../assets/scenarios/guided/guided-realm-transfer-cancel.ron"),
+            include_str!("../assets/scenarios/guided/guided-realm-open-practice.ron"),
         ]
         .into_iter()
         .map(|source| {
@@ -54,6 +60,28 @@ impl Default for GuidedScenarioCatalog {
             scenario
                 .validate()
                 .expect("bundled guided scenario must validate");
+            let guided = scenario
+                .guided
+                .as_ref()
+                .expect("guided catalog entries contain guided content");
+            for key in std::iter::once(&guided.category_key)
+                .chain(
+                    guided
+                        .completion
+                        .iter()
+                        .map(|completion| &completion.completion_key),
+                )
+                .chain(guided.stages.iter().flat_map(|stage| {
+                    std::iter::once(&stage.title_key)
+                        .chain(std::iter::once(&stage.explanation_key))
+                        .chain(stage.hint_keys.iter())
+                }))
+            {
+                assert!(
+                    GUIDED_TEXT.contains_key(key),
+                    "missing guided text key {key:?}"
+                );
+            }
             scenario
         })
         .collect();
@@ -1186,11 +1214,26 @@ fn describe_event(event: &GuidedEventPredicate) -> String {
         GuidedEventPredicate::SettlementClaimed { settlement_index } => {
             describe_settlement_event("claim", *settlement_index)
         }
+        GuidedEventPredicate::SettlementContested { settlement_index } => {
+            describe_settlement_event("contest", *settlement_index)
+        }
+        GuidedEventPredicate::SettlementContinuityInterrupted { settlement_index } => {
+            describe_settlement_event("interrupt continuity at", *settlement_index)
+        }
+        GuidedEventPredicate::SettlementDevelopmentAdvanced { settlement_index } => {
+            describe_settlement_event("advance development at", *settlement_index)
+        }
         GuidedEventPredicate::SettlementEstablished { settlement_index } => {
             describe_settlement_event("establish", *settlement_index)
         }
+        GuidedEventPredicate::SettlementProductionAdvanced { settlement_index } => {
+            describe_settlement_event("advance production at", *settlement_index)
+        }
         GuidedEventPredicate::PawnProduced { settlement_index } => {
             describe_settlement_event("produce a Pawn at", *settlement_index)
+        }
+        GuidedEventPredicate::SettlementTransferCancelled { settlement_index } => {
+            describe_settlement_event("cancel transfer at", *settlement_index)
         }
         GuidedEventPredicate::SettlementTransferred { settlement_index } => {
             describe_settlement_event("transfer", *settlement_index)

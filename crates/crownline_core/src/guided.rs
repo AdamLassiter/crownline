@@ -189,10 +189,25 @@ pub enum GuidedEventPredicate {
     SettlementClaimed {
         settlement_index: Option<u16>,
     },
+    SettlementContested {
+        settlement_index: Option<u16>,
+    },
+    SettlementContinuityInterrupted {
+        settlement_index: Option<u16>,
+    },
+    SettlementDevelopmentAdvanced {
+        settlement_index: Option<u16>,
+    },
     SettlementEstablished {
         settlement_index: Option<u16>,
     },
+    SettlementProductionAdvanced {
+        settlement_index: Option<u16>,
+    },
     PawnProduced {
+        settlement_index: Option<u16>,
+    },
+    SettlementTransferCancelled {
         settlement_index: Option<u16>,
     },
     SettlementTransferred {
@@ -495,6 +510,7 @@ impl GuidedPredicate {
             | Self::SettlementProducedPawn {
                 settlement_index, ..
             } => Some(*settlement_index),
+            Self::Event(event) => event.settlement_index(),
             _ => None,
         };
         if settlement.is_some_and(|index| usize::from(index) >= scenario.settlements.len()) {
@@ -600,6 +616,27 @@ impl GuidedPredicate {
 }
 
 impl GuidedEventPredicate {
+    const fn settlement_index(&self) -> Option<u16> {
+        match self {
+            Self::SettlementClaimed { settlement_index }
+            | Self::SettlementContested { settlement_index }
+            | Self::SettlementContinuityInterrupted { settlement_index }
+            | Self::SettlementDevelopmentAdvanced { settlement_index }
+            | Self::SettlementEstablished { settlement_index }
+            | Self::SettlementProductionAdvanced { settlement_index }
+            | Self::PawnProduced { settlement_index }
+            | Self::SettlementTransferCancelled { settlement_index }
+            | Self::SettlementTransferred { settlement_index } => *settlement_index,
+            Self::Move { .. }
+            | Self::Capture { .. }
+            | Self::CrossEdge { .. }
+            | Self::EnterTerrain { .. }
+            | Self::Promotion { .. }
+            | Self::MatchEnded => None,
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn matches(&self, context: &GuidedPredicateContext<'_>) -> bool {
         context.events.iter().any(|event| match (self, event) {
             (Self::Move { piece }, TransitionEvent::PieceMoved { piece: found, .. }) => {
@@ -616,14 +653,48 @@ impl GuidedEventPredicate {
                 },
             )
             | (
+                Self::SettlementContested { settlement_index },
+                TransitionEvent::SettlementContested {
+                    settlement_index: found,
+                    ..
+                },
+            )
+            | (
+                Self::SettlementContinuityInterrupted { settlement_index },
+                TransitionEvent::SettlementContinuityInterrupted {
+                    settlement_index: found,
+                },
+            )
+            | (
+                Self::SettlementDevelopmentAdvanced { settlement_index },
+                TransitionEvent::SettlementDevelopmentAdvanced {
+                    settlement_index: found,
+                    ..
+                },
+            )
+            | (
                 Self::SettlementEstablished { settlement_index },
                 TransitionEvent::SettlementEstablished {
                     settlement_index: found,
                 },
             )
             | (
+                Self::SettlementProductionAdvanced { settlement_index },
+                TransitionEvent::SettlementProductionAdvanced {
+                    settlement_index: found,
+                    ..
+                },
+            )
+            | (
                 Self::PawnProduced { settlement_index },
                 TransitionEvent::PawnProduced {
+                    settlement_index: found,
+                    ..
+                },
+            )
+            | (
+                Self::SettlementTransferCancelled { settlement_index },
+                TransitionEvent::SettlementTransferCancelled {
                     settlement_index: found,
                     ..
                 },
