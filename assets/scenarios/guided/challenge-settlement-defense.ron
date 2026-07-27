@@ -1,0 +1,219 @@
+(
+    schema_version: 2,
+    id: "challenge-settlement-defense",
+    metadata: (
+        name: "Silver Challenge: Break the Claim",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: north,
+            kind: pawn,
+            at: (
+                x: 0,
+                y: 1,
+            ),
+        ),
+        (
+            player: north,
+            kind: rook,
+            at: (
+                x: 3,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 3,
+                y: 4,
+            ),
+        ),
+    ],
+    settlements: [
+        (
+            id: "contested-village",
+            at: (
+                x: 3,
+                y: 3,
+            ),
+        ),
+    ],
+    promotion_sites: [],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "challenge-settlement-defense",
+        kind: challenge,
+        category_key: "guided.category.challenge",
+        start: (
+            state: (
+                scenario_id: "challenge-settlement-defense",
+                revision: 1,
+                turn_number: 2,
+                active_player: north,
+                phase: command,
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: north,
+                        kind: pawn,
+                        at: (
+                            x: 0,
+                            y: 1,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: north,
+                        kind: rook,
+                        at: (
+                            x: 3,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (3): (
+                        id: (3),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 3,
+                            y: 3,
+                        ),
+                        origin: deployed,
+                        has_moved: true,
+                    ),
+                    (4): (
+                        id: (4),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 7,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [
+                    (
+                        site_index: 0,
+                        owner: Some(north),
+                        founder: Some((1)),
+                        establishment_progress: 3,
+                        established: true,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: true,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: Some((3)),
+                    ),
+                ],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {},
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "8ac606f0ab5c36ba6be5cb95617d06642c73d2f1f31a7a09911fbbe983ce6b4e": 1,
+                },
+                outcome: None,
+                next_piece_id: 5,
+            ),
+            human_seat: north,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "settlement_defense",
+                title_key: "guided.challenge.settlement_defense.title",
+                explanation_key: "guided.challenge.settlement_defense.explanation",
+                hint_keys: [
+                    "guided.challenge.settlement_defense.hint.1",
+                    "guided.challenge.settlement_defense.hint.2",
+                ],
+                prerequisites: [],
+                success: [
+                    piece_survives(
+                        piece: (1),
+                    ),
+                    event(capture(
+                        piece: Some((3)),
+                    )),
+                    event(settlement_transfer_cancelled(
+                        settlement_index: Some(0),
+                    )),
+                ],
+                failure: [],
+                action_limit: Some(4),
+                turn_limit: Some(2),
+            ),
+        ],
+        completion: Some((
+            completion_key: "guided.challenge.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)

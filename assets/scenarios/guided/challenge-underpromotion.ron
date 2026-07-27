@@ -1,0 +1,301 @@
+(
+    schema_version: 2,
+    id: "challenge-underpromotion",
+    metadata: (
+        name: "Gold Challenge: Refuse the Crown",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 2,
+                y: 2,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 1,
+                y: 4,
+            ),
+        ),
+        (
+            player: south,
+            kind: pawn,
+            at: (
+                x: 6,
+                y: 4,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 1,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 6,
+                y: 7,
+            ),
+        ),
+    ],
+    settlements: [
+        (
+            id: "west-realm",
+            at: (
+                x: 1,
+                y: 4,
+            ),
+        ),
+        (
+            id: "east-realm",
+            at: (
+                x: 6,
+                y: 4,
+            ),
+        ),
+    ],
+    promotion_sites: [
+        (
+            id: "choice-court",
+            at: (
+                x: 2,
+                y: 2,
+            ),
+        ),
+    ],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "challenge-underpromotion",
+        kind: challenge,
+        category_key: "guided.category.challenge",
+        start: (
+            state: (
+                scenario_id: "challenge-underpromotion",
+                revision: 0,
+                turn_number: 1,
+                active_player: south,
+                phase: resolving_choices(
+                    queue: [
+                        promote(
+                            pawn: (3),
+                            site_index: 0,
+                            eligibility: (
+                                control: (
+                                    owned_settlements: 2,
+                                    governed_settlements: 2,
+                                    established_settlements: 2,
+                                ),
+                                allowed_kinds: [
+                                    queen,
+                                    rook,
+                                    bishop,
+                                    knight,
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 1,
+                            y: 4,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 1,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (3): (
+                        id: (3),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 2,
+                            y: 2,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (4): (
+                        id: (4),
+                        owner: south,
+                        kind: pawn,
+                        at: (
+                            x: 6,
+                            y: 4,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (5): (
+                        id: (5),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 6,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (6): (
+                        id: (6),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 7,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [
+                    (
+                        site_index: 0,
+                        owner: Some(south),
+                        founder: Some((1)),
+                        establishment_progress: 3,
+                        established: true,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                    (
+                        site_index: 1,
+                        owner: Some(south),
+                        founder: Some((4)),
+                        establishment_progress: 3,
+                        established: true,
+                        production_progress: 0,
+                        produced_pawn: None,
+                        cycle_interrupted: false,
+                        completed_cycle_continuous: false,
+                        transfer_candidate: None,
+                    ),
+                ],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {
+                    (3): 1,
+                },
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "06699f103bf5d01cab4327e2aa51061a1b835c199cff7c95373c545aed2bf861": 1,
+                },
+                outcome: None,
+                next_piece_id: 7,
+            ),
+            human_seat: south,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "underpromotion",
+                title_key: "guided.challenge.underpromotion.title",
+                explanation_key: "guided.challenge.underpromotion.explanation",
+                hint_keys: [
+                    "guided.challenge.underpromotion.hint.1",
+                    "guided.challenge.underpromotion.hint.2",
+                ],
+                prerequisites: [],
+                success: [
+                    event(promotion(
+                        pawn: Some((3)),
+                        kind: Some(knight),
+                    )),
+                ],
+                failure: [],
+                action_limit: Some(4),
+                turn_limit: Some(2),
+            ),
+        ],
+        completion: Some((
+            completion_key: "guided.challenge.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)

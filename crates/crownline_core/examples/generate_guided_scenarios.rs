@@ -6,8 +6,9 @@ use std::{
 
 use crownline_core::{
     Action, GUIDED_SCHEMA_VERSION, GuidedAiConfig, GuidedAiMode, GuidedCompletion, GuidedContent,
-    GuidedEventPredicate, GuidedKind, GuidedPredicate, GuidedReplyNode, GuidedStage, GuidedStart,
-    MatchState, ScenarioDefinition, apply_action, realm_control_score,
+    GuidedEventPredicate, GuidedKind, GuidedPredicate, GuidedPredicateContext, GuidedReplyNode,
+    GuidedStage, GuidedStart, MatchState, ObjectiveResult, ScenarioDefinition, apply_action,
+    legal_mandatory_choice_actions, legal_moves, realm_control_score,
     scenario::{
         ArmySetup, BoardSize, CastlingRoute, Coord, Deployment, Edge, EdgeKind, Fortification,
         KeepDefinition, PieceKind, Player, PromotionSite, SCENARIO_SCHEMA_VERSION,
@@ -15,11 +16,23 @@ use crownline_core::{
     },
     state::{MandatoryChoice, OutcomeReason, PieceId, PromotionEligibility, TurnPhase},
 };
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ChallengeSolutionEntry {
+    scenario_hash: String,
+    start_hash: String,
+    branching_factor: u16,
+    shortest_solution_actions: u16,
+    solutions: Vec<Action>,
+    feature_tags: Vec<String>,
+}
 
 fn main() {
     let output = Path::new("assets/scenarios/guided");
     fs::create_dir_all(output).expect("guided scenario directory must be writable");
-    for scenario in guided_pack() {
+    let scenarios = guided_pack();
+    for scenario in &scenarios {
         scenario
             .validate()
             .expect("generated guided scenario must validate");
@@ -27,13 +40,21 @@ fn main() {
             .expect("guided scenario must serialize");
         let decoded: ScenarioDefinition =
             ron::from_str(&encoded).expect("generated guided scenario must round-trip");
-        assert_eq!(decoded, scenario);
+        assert_eq!(&decoded, scenario);
         fs::write(
             output.join(format!("{}.ron", scenario.id)),
             format!("{encoded}\n"),
         )
         .expect("guided scenario must be writable");
     }
+    let archive = challenge_solution_archive(&scenarios);
+    let encoded = ron::ser::to_string_pretty(&archive, ron::ser::PrettyConfig::default())
+        .expect("challenge archive must serialize");
+    fs::write(
+        output.join("challenge-solutions.ron"),
+        format!("{encoded}\n"),
+    )
+    .expect("challenge archive must be writable");
 }
 
 fn guided_pack() -> Vec<ScenarioDefinition> {
@@ -48,6 +69,7 @@ fn guided_pack() -> Vec<ScenarioDefinition> {
     ];
     scenarios.extend(realm_pack());
     scenarios.extend(royal_pack());
+    scenarios.extend(challenge_pack());
     scenarios
 }
 
@@ -173,6 +195,7 @@ fn guide_state(
             completion_key: match category_key {
                 "guided.category.realm" => "guided.realm.complete",
                 "guided.category.royal" => "guided.royal.complete",
+                "guided.category.challenge" => "guided.challenge.complete",
                 _ => "guided.movement.complete",
             }
             .to_owned(),
@@ -1212,4 +1235,402 @@ fn royal_open_practice() -> ScenarioDefinition {
         }),
     );
     scenario
+}
+
+fn challenge_pack() -> Vec<ScenarioDefinition> {
+    vec![
+        challenge_mate(),
+        challenge_capture(),
+        challenge_terrain_route(),
+        challenge_settlement_defense(),
+        challenge_production(),
+        challenge_underpromotion(),
+        challenge_warden(),
+    ]
+}
+
+fn challenge_stage(id: &str, success: Vec<GuidedPredicate>, hints: usize) -> GuidedStage {
+    let mut stage = stage(id, success, hints, None);
+    stage.title_key = format!("guided.challenge.{id}.title");
+    stage.explanation_key = format!("guided.challenge.{id}.explanation");
+    stage.hint_keys = (1..=hints)
+        .map(|index| format!("guided.challenge.{id}.hint.{index}"))
+        .collect();
+    stage.action_limit = Some(4);
+    stage.turn_limit = Some(2);
+    stage
+}
+
+fn challenge_guide(
+    scenario: &mut ScenarioDefinition,
+    state: MatchState,
+    objective_stage: GuidedStage,
+    ai: Option<GuidedAiConfig>,
+) {
+    let human_seat = state.active_player;
+    guide_state(
+        scenario,
+        state,
+        human_seat,
+        "guided.category.challenge",
+        GuidedKind::Challenge,
+        vec![objective_stage],
+        ai,
+        Vec::new(),
+    );
+}
+
+fn challenge_mate() -> ScenarioDefinition {
+    let mut scenario = base(
+        "challenge-mate-court",
+        "Bronze Challenge: Close the Court",
+        &[
+            (Player::North, PieceKind::King, Coord::new(0, 0)),
+            (Player::South, PieceKind::King, Coord::new(2, 2)),
+            (Player::South, PieceKind::Queen, Coord::new(1, 2)),
+        ],
+    );
+    let state = start(&scenario);
+    challenge_guide(
+        &mut scenario,
+        state,
+        challenge_stage(
+            "mate_court",
+            vec![GuidedPredicate::Outcome {
+                winner: Some(Player::South),
+                reason: OutcomeReason::Checkmate,
+            }],
+            2,
+        ),
+        None,
+    );
+    scenario
+}
+
+fn challenge_capture() -> ScenarioDefinition {
+    let mut scenario = base(
+        "challenge-capture-line",
+        "Bronze Challenge: Clear the Line",
+        &common(&[
+            (Player::North, PieceKind::Queen, Coord::new(3, 5)),
+            (Player::North, PieceKind::Pawn, Coord::new(5, 5)),
+            (Player::South, PieceKind::Rook, Coord::new(1, 5)),
+        ]),
+    );
+    let state = start(&scenario);
+    let queen = piece_at(&state, Coord::new(3, 5));
+    challenge_guide(
+        &mut scenario,
+        state,
+        challenge_stage(
+            "capture_line",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::Capture {
+                piece: Some(queen),
+            })],
+            2,
+        ),
+        None,
+    );
+    scenario
+}
+
+fn challenge_terrain_route() -> ScenarioDefinition {
+    let mut scenario = base(
+        "challenge-terrain-route",
+        "Silver Challenge: Bridge Strike",
+        &common(&[
+            (Player::North, PieceKind::Rook, Coord::new(3, 2)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 5)),
+        ]),
+    );
+    for x in 0..scenario.board.width {
+        scenario.edges.insert(
+            Edge::new(Coord::new(x, 3), Coord::new(x, 4)),
+            if x == 3 {
+                EdgeKind::Bridge
+            } else {
+                EdgeKind::River
+            },
+        );
+    }
+    let state = start(&scenario);
+    let target = piece_at(&state, Coord::new(3, 2));
+    challenge_guide(
+        &mut scenario,
+        state,
+        challenge_stage(
+            "terrain_route",
+            vec![
+                GuidedPredicate::Event(GuidedEventPredicate::CrossEdge {
+                    piece: None,
+                    kind: EdgeKind::Bridge,
+                }),
+                GuidedPredicate::Event(GuidedEventPredicate::Capture {
+                    piece: Some(target),
+                }),
+            ],
+            2,
+        ),
+        None,
+    );
+    scenario
+}
+
+fn challenge_settlement_defense() -> ScenarioDefinition {
+    let (mut scenario, state, candidate) = contested_base(
+        "challenge-settlement-defense",
+        "Silver Challenge: Break the Claim",
+    );
+    let founder = piece_at(&state, Coord::new(0, 1));
+    challenge_guide(
+        &mut scenario,
+        state,
+        challenge_stage(
+            "settlement_defense",
+            vec![
+                GuidedPredicate::PieceSurvives { piece: founder },
+                GuidedPredicate::Event(GuidedEventPredicate::Capture {
+                    piece: Some(candidate),
+                }),
+                GuidedPredicate::Event(GuidedEventPredicate::SettlementTransferCancelled {
+                    settlement_index: Some(0),
+                }),
+            ],
+            2,
+        ),
+        None,
+    );
+    scenario
+}
+
+fn challenge_production() -> ScenarioDefinition {
+    let mut scenario = base(
+        "challenge-production-deployment",
+        "Silver Challenge: Deploy the Levy",
+        &common(&[
+            (Player::South, PieceKind::Pawn, Coord::new(3, 3)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 7)),
+            (Player::North, PieceKind::Rook, Coord::new(0, 2)),
+        ]),
+    );
+    add_settlement(&mut scenario, "levy-town", Coord::new(3, 3));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::South,
+        Coord::new(3, 3),
+        true,
+    );
+    state.phase = TurnPhase::ResolvingChoices {
+        queue: vec![MandatoryChoice::PlacePawn {
+            settlement_index: 0,
+            legal_squares: BTreeSet::from([
+                Coord::new(2, 3),
+                Coord::new(4, 3),
+                Coord::new(2, 4),
+                Coord::new(3, 4),
+                Coord::new(4, 4),
+            ]),
+        }],
+    };
+    challenge_guide(
+        &mut scenario,
+        state,
+        challenge_stage(
+            "production_deployment",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::PawnProduced {
+                settlement_index: Some(0),
+            })],
+            2,
+        ),
+        None,
+    );
+    scenario
+}
+
+fn challenge_underpromotion() -> ScenarioDefinition {
+    let site = Coord::new(2, 2);
+    let mut scenario = base(
+        "challenge-underpromotion",
+        "Gold Challenge: Refuse the Crown",
+        &common(&[
+            (Player::South, PieceKind::Pawn, site),
+            (Player::South, PieceKind::Pawn, Coord::new(1, 4)),
+            (Player::South, PieceKind::Pawn, Coord::new(6, 4)),
+            (Player::South, PieceKind::Rook, Coord::new(1, 7)),
+            (Player::South, PieceKind::Rook, Coord::new(6, 7)),
+        ]),
+    );
+    scenario.promotion_sites.push(PromotionSite {
+        id: "choice-court".to_owned(),
+        at: site,
+    });
+    add_settlement(&mut scenario, "west-realm", Coord::new(1, 4));
+    add_settlement(&mut scenario, "east-realm", Coord::new(6, 4));
+    let mut state = start(&scenario);
+    own_settlement(
+        &scenario,
+        &mut state,
+        0,
+        Player::South,
+        Coord::new(1, 4),
+        true,
+    );
+    own_settlement(
+        &scenario,
+        &mut state,
+        1,
+        Player::South,
+        Coord::new(6, 4),
+        true,
+    );
+    let pawn = piece_at(&state, site);
+    let control = realm_control_score(&scenario, &state, Player::South)
+        .expect("underpromotion control must be measurable");
+    assert_eq!(control.total(), 8);
+    let eligibility = PromotionEligibility::from_control(control, scenario.rules.promotion_unlocks);
+    state
+        .promotion_candidates
+        .insert(pawn, scenario.rules.promotion_cycles);
+    state.phase = TurnPhase::ResolvingChoices {
+        queue: vec![MandatoryChoice::Promote {
+            pawn,
+            site_index: 0,
+            eligibility,
+        }],
+    };
+    challenge_guide(
+        &mut scenario,
+        state,
+        challenge_stage(
+            "underpromotion",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::Promotion {
+                pawn: Some(pawn),
+                kind: Some(PieceKind::Knight),
+            })],
+            2,
+        ),
+        None,
+    );
+    scenario
+}
+
+fn challenge_warden() -> ScenarioDefinition {
+    let mut scenario = base(
+        "challenge-warden-realm",
+        "Gold Challenge: Hold the Divided Realm",
+        &common(&[
+            (Player::North, PieceKind::Rook, Coord::new(3, 0)),
+            (Player::North, PieceKind::Pawn, Coord::new(5, 2)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 7)),
+            (Player::South, PieceKind::Pawn, Coord::new(2, 5)),
+        ]),
+    );
+    add_settlement(&mut scenario, "central-realm", Coord::new(2, 4));
+    let state = start(&scenario);
+    let mut objective_stage = challenge_stage(
+        "warden_realm",
+        vec![GuidedPredicate::Event(GuidedEventPredicate::MatchEnded)],
+        2,
+    );
+    objective_stage.action_limit = Some(100);
+    objective_stage.turn_limit = Some(50);
+    challenge_guide(
+        &mut scenario,
+        state,
+        objective_stage,
+        Some(GuidedAiConfig {
+            seat: Player::North,
+            mode: GuidedAiMode::GeneralProfile {
+                profile_id: "warden".to_owned(),
+            },
+            max_actions: Some(50),
+        }),
+    );
+    scenario
+}
+
+fn challenge_solution_archive(
+    scenarios: &[ScenarioDefinition],
+) -> BTreeMap<String, ChallengeSolutionEntry> {
+    scenarios
+        .iter()
+        .filter(|scenario| {
+            scenario
+                .guided
+                .as_ref()
+                .is_some_and(|guided| guided.kind == GuidedKind::Challenge && guided.ai.is_none())
+        })
+        .map(|scenario| {
+            let state = MatchState::from_scenario(scenario).expect("challenge start must load");
+            let actions = challenge_legal_actions(scenario, &state);
+            let guided = scenario.guided.as_ref().expect("challenge must be guided");
+            let solutions = actions
+                .iter()
+                .filter_map(|action| {
+                    let transition = apply_action(scenario, &state, action).ok()?;
+                    (guided.stages[0]
+                        .evaluate(&GuidedPredicateContext {
+                            scenario,
+                            state: &transition.state,
+                            events: &transition.events,
+                            actions_taken: 1,
+                            turns_elapsed: u16::from(
+                                transition.state.active_player != state.active_player,
+                            ),
+                        })
+                        .ok()?
+                        == ObjectiveResult::Succeeded)
+                        .then(|| action.clone())
+                })
+                .collect::<Vec<_>>();
+            assert!(!solutions.is_empty(), "{} must be solvable", scenario.id);
+            let tags = match scenario.id.as_str() {
+                "challenge-mate-court" => vec!["checkmate"],
+                "challenge-capture-line" => vec!["capture", "blocking"],
+                "challenge-terrain-route" => vec!["terrain", "capture"],
+                "challenge-settlement-defense" => vec!["settlement", "transfer"],
+                "challenge-production-deployment" => vec!["production"],
+                "challenge-underpromotion" => vec!["promotion", "realm_control"],
+                _ => unreachable!("filtered exact challenge has feature tags"),
+            }
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+            let entry = ChallengeSolutionEntry {
+                scenario_hash: scenario.canonical_hash().expect("challenge must hash"),
+                start_hash: state.canonical_hash().expect("challenge start must hash"),
+                branching_factor: u16::try_from(actions.len()).expect("bounded legal actions"),
+                shortest_solution_actions: 1,
+                solutions,
+                feature_tags: tags,
+            };
+            (scenario.id.clone(), entry)
+        })
+        .collect()
+}
+
+fn challenge_legal_actions(scenario: &ScenarioDefinition, state: &MatchState) -> Vec<Action> {
+    let choices = legal_mandatory_choice_actions(state);
+    if !choices.is_empty() {
+        return choices;
+    }
+    let mut actions = legal_moves(scenario, state)
+        .expect("challenge legal moves must enumerate")
+        .into_iter()
+        .map(|movement| Action::Move {
+            player: state.active_player,
+            piece: movement.piece,
+            to: movement.to,
+        })
+        .collect::<Vec<_>>();
+    let hold = Action::Hold {
+        player: state.active_player,
+    };
+    if apply_action(scenario, state, &hold).is_ok() {
+        actions.push(hold);
+    }
+    actions
 }

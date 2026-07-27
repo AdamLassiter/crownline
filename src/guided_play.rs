@@ -60,6 +60,13 @@ impl Default for GuidedScenarioCatalog {
             include_str!("../assets/scenarios/guided/guided-royal-checkmate.ron"),
             include_str!("../assets/scenarios/guided/guided-royal-draw.ron"),
             include_str!("../assets/scenarios/guided/guided-royal-open-practice.ron"),
+            include_str!("../assets/scenarios/guided/challenge-mate-court.ron"),
+            include_str!("../assets/scenarios/guided/challenge-capture-line.ron"),
+            include_str!("../assets/scenarios/guided/challenge-terrain-route.ron"),
+            include_str!("../assets/scenarios/guided/challenge-settlement-defense.ron"),
+            include_str!("../assets/scenarios/guided/challenge-production-deployment.ron"),
+            include_str!("../assets/scenarios/guided/challenge-underpromotion.ron"),
+            include_str!("../assets/scenarios/guided/challenge-warden-realm.ron"),
         ]
         .into_iter()
         .map(|source| {

@@ -1,0 +1,149 @@
+{
+    "challenge-capture-line": (
+        scenario_hash: "1189354af24a2a2f8cec2e14cbd1942d21f0f18cf4cb248a543513c7ab76b0c0",
+        start_hash: "4b5d0b70a1232f429ea16b4bfad5c5e2cf645483d6a27a541694b65b8e37b6a6",
+        branching_factor: 13,
+        shortest_solution_actions: 1,
+        solutions: [
+            move(
+                player: south,
+                piece: (3),
+                to: (
+                    x: 3,
+                    y: 5,
+                ),
+            ),
+        ],
+        feature_tags: [
+            "capture",
+            "blocking",
+        ],
+    ),
+    "challenge-mate-court": (
+        scenario_hash: "c2ba18e3d47817b0310bf6b03e689b5e773e4845440d02bffc67eabc739b1b25",
+        start_hash: "585171f3e0e4435d1da90ed8a0f65d974b06311edec1be0c2ab1e0b6ca1d69a9",
+        branching_factor: 24,
+        shortest_solution_actions: 1,
+        solutions: [
+            move(
+                player: south,
+                piece: (1),
+                to: (
+                    x: 1,
+                    y: 1,
+                ),
+            ),
+        ],
+        feature_tags: [
+            "checkmate",
+        ],
+    ),
+    "challenge-production-deployment": (
+        scenario_hash: "301ab71cff832d2e1628c38ac52d0011829f4bcf44920bdaffbdf96bc5affbf0",
+        start_hash: "741fe719c923ac927231c255d1f1c49bfd383857ddfa34276a93ae4119edaabe",
+        branching_factor: 5,
+        shortest_solution_actions: 1,
+        solutions: [
+            place_pawn(
+                player: south,
+                settlement_index: 0,
+                at: (
+                    x: 2,
+                    y: 3,
+                ),
+            ),
+            place_pawn(
+                player: south,
+                settlement_index: 0,
+                at: (
+                    x: 2,
+                    y: 4,
+                ),
+            ),
+            place_pawn(
+                player: south,
+                settlement_index: 0,
+                at: (
+                    x: 3,
+                    y: 4,
+                ),
+            ),
+            place_pawn(
+                player: south,
+                settlement_index: 0,
+                at: (
+                    x: 4,
+                    y: 3,
+                ),
+            ),
+            place_pawn(
+                player: south,
+                settlement_index: 0,
+                at: (
+                    x: 4,
+                    y: 4,
+                ),
+            ),
+        ],
+        feature_tags: [
+            "production",
+        ],
+    ),
+    "challenge-settlement-defense": (
+        scenario_hash: "bdf5e1bfa34d1485716db08de7f1bc0ca68bffd4dbc6e301cc36736a494824c3",
+        start_hash: "3429a006417f39af37200fdcbbbf0bb83bbf2478868d40f7292ce65d1126b8c7",
+        branching_factor: 14,
+        shortest_solution_actions: 1,
+        solutions: [
+            move(
+                player: north,
+                piece: (2),
+                to: (
+                    x: 3,
+                    y: 3,
+                ),
+            ),
+        ],
+        feature_tags: [
+            "settlement",
+            "transfer",
+        ],
+    ),
+    "challenge-terrain-route": (
+        scenario_hash: "f5adcb3c36f9c2fee8257636e42377065125cab8e23538029137af359c4f0b09",
+        start_hash: "6f0cdd66857c1c06f3662d9b91d48524ad1b849f6481430fb9e401f4acd98b62",
+        branching_factor: 16,
+        shortest_solution_actions: 1,
+        solutions: [
+            move(
+                player: south,
+                piece: (2),
+                to: (
+                    x: 3,
+                    y: 2,
+                ),
+            ),
+        ],
+        feature_tags: [
+            "terrain",
+            "capture",
+        ],
+    ),
+    "challenge-underpromotion": (
+        scenario_hash: "f2907741611a5a11f80a14f9fefad7786842d93157194755d54193ec9d65caa5",
+        start_hash: "f0b835a9457cd6c2df90b834023a27f29f06d104791d18375fa0138527f0f6eb",
+        branching_factor: 4,
+        shortest_solution_actions: 1,
+        solutions: [
+            choose_promotion(
+                player: south,
+                pawn: (3),
+                promote_to: knight,
+            ),
+        ],
+        feature_tags: [
+            "promotion",
+            "realm_control",
+        ],
+    ),
+}
