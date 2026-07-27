@@ -23,6 +23,10 @@ const LOCAL_SAVE_FORMAT_VERSION: u16 = 2;
 const LEGACY_LOCAL_SAVE_FORMAT_VERSION: u16 = 1;
 const SLOT_COUNT: u8 = 3;
 
+pub(crate) fn has_readable_local_save() -> bool {
+    (1..=SLOT_COUNT).any(|slot| load_slot(slot).is_ok())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LocalSaveDocument {
     format_version: u16,

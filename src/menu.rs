@@ -8,7 +8,11 @@ use bevy::{
     prelude::*,
 };
 
-use crate::panels::PanelSurface;
+use crate::{
+    lifecycle::{ClientFlow, LocalSetup},
+    local_persistence::has_readable_local_save,
+    panels::PanelSurface,
+};
 
 const MENU_BACKGROUND: Color = Color::srgba(0.018, 0.026, 0.045, 0.985);
 const CONTROL_IDLE: Color = Color::srgb(0.09, 0.13, 0.2);
@@ -40,6 +44,7 @@ pub(crate) enum MenuAction {
     Close,
     Confirm,
     Cancel,
+    OpenHelp,
     Quit,
 }
 
@@ -210,13 +215,16 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuState>()
             .init_resource::<MenuIntent>()
-            .add_systems(Startup, spawn_menu_shell)
+            .add_systems(Startup, (spawn_menu_shell, open_home_on_startup).chain())
             .add_systems(
                 Update,
                 (
                     dispatch_pointer_actions,
                     dispatch_focused_action,
+                    dispatch_escape,
+                    handle_menu_intent,
                     sync_menu_shell,
+                    rebuild_menu_page,
                     style_menu_controls,
                 )
                     .chain(),
@@ -310,6 +318,12 @@ fn spawn_menu_shell(mut commands: Commands) {
         });
 }
 
+fn open_home_on_startup(flow: Option<Res<ClientFlow>>, mut state: ResMut<MenuState>) {
+    if flow.is_some_and(|flow| *flow == ClientFlow::Setup) {
+        state.open(MenuRoute::Home);
+    }
+}
+
 fn dispatch_pointer_actions(
     buttons: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
     mut intent: ResMut<MenuIntent>,
@@ -342,6 +356,47 @@ fn dispatch_focused_action(
 }
 
 #[allow(clippy::needless_pass_by_value)]
+fn dispatch_escape(
+    keys: Res<ButtonInput<KeyCode>>,
+    state: Res<MenuState>,
+    mut intent: ResMut<MenuIntent>,
+) {
+    if keys.just_pressed(KeyCode::Escape) && state.is_open() {
+        intent.send(if state.modal {
+            MenuAction::Cancel
+        } else {
+            MenuAction::Back
+        });
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn handle_menu_intent(
+    mut state: ResMut<MenuState>,
+    mut intent: ResMut<MenuIntent>,
+    mut app_exit: MessageWriter<AppExit>,
+) {
+    let Some(action) = intent.take() else {
+        return;
+    };
+    match action {
+        MenuAction::Open(route) => state.open(route),
+        MenuAction::Back => {
+            if state.route != Some(MenuRoute::Home) {
+                state.back();
+            }
+        }
+        MenuAction::Close => state.close(),
+        MenuAction::Quit => state.modal = true,
+        MenuAction::Confirm if state.modal && state.route == Some(MenuRoute::Home) => {
+            app_exit.write(AppExit::Success);
+        }
+        MenuAction::Cancel if state.modal => state.modal = false,
+        MenuAction::Confirm | MenuAction::Cancel | MenuAction::OpenHelp => {}
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
 fn sync_menu_shell(
     state: Res<MenuState>,
     mut roots: Query<&mut Node, With<MenuRoot>>,
@@ -370,6 +425,144 @@ fn sync_menu_shell(
     for mut text in &mut titles {
         title.clone_into(&mut text.0);
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn rebuild_menu_page(
+    state: Res<MenuState>,
+    setup: Option<Res<LocalSetup>>,
+    mut commands: Commands,
+    content: Query<Entity, With<MenuContent>>,
+) {
+    if !state.is_changed()
+        && !setup
+            .as_ref()
+            .is_some_and(bevy::prelude::DetectChanges::is_changed)
+    {
+        return;
+    }
+    let Ok(content) = content.single() else {
+        return;
+    };
+    commands.entity(content).despawn_related::<Children>();
+    let Some(route) = state.route else {
+        return;
+    };
+    commands.entity(content).with_children(|page| {
+        if state.modal {
+            page.spawn(section_heading("QUIT CROWNLINES?"));
+            page.spawn(body_text(
+                "Any unsaved local match progress will be lost. Choose Quit to close the application.",
+            ));
+            page.spawn(menu_button("Cancel [Esc]", MenuAction::Cancel, 0));
+            page.spawn(menu_button("Quit", MenuAction::Confirm, 1))
+                .insert(MenuButton::new(MenuAction::Confirm).destructive());
+            return;
+        }
+        match route {
+            MenuRoute::Home => spawn_home_page(page),
+            MenuRoute::LocalSetup => spawn_placeholder(
+                page,
+                "New Local Match",
+                "Scenario, player, AI, and clock controls are grouped here.",
+            ),
+            MenuRoute::Guided => spawn_placeholder(
+                page,
+                "Guided Play",
+                "Tutorials and challenge scenarios are grouped here.",
+            ),
+            MenuRoute::Online => spawn_placeholder(
+                page,
+                "Online Play",
+                "Host, Join, reconnect, and waiting-room controls are grouped here.",
+            ),
+            MenuRoute::Settings => spawn_placeholder(
+                page,
+                "Settings",
+                "Display, Accessibility, Controls, and Online settings are grouped here.",
+            ),
+            MenuRoute::Saves => spawn_placeholder(
+                page,
+                "Continue / Load Game",
+                "The three local save slots are grouped here.",
+            ),
+            MenuRoute::Pause => spawn_placeholder(
+                page,
+                "Match Menu",
+                "Resume, persistence, rules, and match controls are grouped here.",
+            ),
+            MenuRoute::Outcome => spawn_placeholder(
+                page,
+                "Match Complete",
+                "Outcome, rematch, and return actions are grouped here.",
+            ),
+        }
+    });
+}
+
+fn spawn_home_page(page: &mut ChildSpawnerCommands) {
+    page.spawn(body_text(
+        "Choose a mode. Every action is available by pointer or keyboard; shown shortcuts are optional.",
+    ));
+    for (index, (label, action)) in [
+        ("New Local Match", MenuAction::Open(MenuRoute::LocalSetup)),
+        ("Guided Play", MenuAction::Open(MenuRoute::Guided)),
+        ("Online Play", MenuAction::Open(MenuRoute::Online)),
+        ("Settings", MenuAction::Open(MenuRoute::Settings)),
+        ("Rules & Legend [F1]", MenuAction::OpenHelp),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        page.spawn(menu_button(label, action, i32::try_from(index).unwrap()));
+    }
+    let readable_save = has_readable_local_save();
+    page.spawn(menu_button(
+        if readable_save {
+            "Continue / Load Game"
+        } else {
+            "Continue / Load Game - no readable saves"
+        },
+        MenuAction::Open(MenuRoute::Saves),
+        5,
+    ))
+    .insert(if readable_save {
+        MenuButton::new(MenuAction::Open(MenuRoute::Saves))
+    } else {
+        MenuButton::new(MenuAction::Open(MenuRoute::Saves)).disabled()
+    });
+    page.spawn(menu_button("Quit", MenuAction::Quit, 6))
+        .insert(MenuButton::new(MenuAction::Quit).destructive());
+    page.spawn((
+        Text::new(format!(
+            "Crownlines {} - native desktop client",
+            env!("CARGO_PKG_VERSION")
+        )),
+        TextFont {
+            font_size: FontSize::Px(12.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.58, 0.64, 0.72)),
+        TextLayout::justify(Justify::Center),
+    ));
+}
+
+fn spawn_placeholder(page: &mut ChildSpawnerCommands, heading: &str, description: &str) {
+    page.spawn(section_heading(heading));
+    page.spawn(body_text(description));
+    page.spawn(menu_button("Back [Esc]", MenuAction::Back, 0));
+}
+
+fn body_text(text: impl Into<String>) -> impl Bundle {
+    (
+        Text::new(text),
+        TextFont {
+            font_size: FontSize::Px(15.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.82, 0.86, 0.92)),
+        TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
+    )
 }
 
 type MenuControlStyleQuery<'w, 's> = Query<
@@ -458,6 +651,36 @@ mod tests {
             content.single(world).unwrap().overflow,
             Overflow::scroll_y()
         );
+    }
+
+    #[test]
+    fn home_opens_for_setup_and_exposes_every_destination() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputFocus>()
+            .init_resource::<ClientFlow>()
+            .init_resource::<LocalSetup>()
+            .add_plugins(MenuPlugin);
+        app.update();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<MenuState>().route,
+            Some(MenuRoute::Home)
+        );
+        let world = app.world_mut();
+        let mut labels = world.query::<&Text>();
+        let copy: Vec<_> = labels.iter(world).map(|text| text.0.as_str()).collect();
+        for expected in [
+            "New Local Match",
+            "Guided Play",
+            "Online Play",
+            "Settings",
+            "Rules & Legend [F1]",
+            "Quit",
+        ] {
+            assert!(copy.contains(&expected), "missing Home action {expected}");
+        }
     }
 
     #[test]
