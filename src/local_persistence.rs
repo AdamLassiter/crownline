@@ -10,7 +10,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    lifecycle::{ClientFlow, LocalClockRuntime, LocalSetup, SeatController},
+    lifecycle::{ClientFlow, LocalClockRuntime, LocalSetup, ScenarioCatalog, SeatController},
     local_ai::AiCancellationEpoch,
     rendering::{
         DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
@@ -244,7 +244,7 @@ fn decode_document(bytes: &[u8]) -> Result<LocalSaveDocument, String> {
     {
         return Err("saved player names are invalid".to_owned());
     }
-    if document.selected_scenario >= 3 {
+    if document.selected_scenario >= ScenarioCatalog::default().0.len() {
         return Err("saved scenario selection is invalid".to_owned());
     }
     Ok(document)
@@ -352,6 +352,23 @@ mod tests {
         assert_eq!(decoded.history, document.history);
         assert_eq!(decoded.application_version, "test");
         assert_eq!(decoded.scenario_schema_version, SCENARIO_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn every_current_catalog_index_is_accepted_in_a_save_wrapper() {
+        let catalog_len = ScenarioCatalog::default().0.len();
+        for selected_scenario in 0..catalog_len {
+            let mut document = fixture_document();
+            document.selected_scenario = selected_scenario;
+            let bytes = serde_json::to_vec(&document).unwrap();
+            assert_eq!(
+                decode_document(&bytes).unwrap().selected_scenario,
+                selected_scenario
+            );
+        }
+        let mut invalid = fixture_document();
+        invalid.selected_scenario = catalog_len;
+        assert!(decode_document(&serde_json::to_vec(&invalid).unwrap()).is_err());
     }
 
     #[test]
