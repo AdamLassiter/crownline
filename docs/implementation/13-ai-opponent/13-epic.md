@@ -4,7 +4,12 @@ Provide a modest, deterministic opponent built around extensible adversarial sea
 
 ## Status
 
-- [ ] Not started
+- [x] Done
+
+## Implementation notes
+
+- Stories 13.01 and 13.02 are complete: the AI crate owns extensible deterministic search/evaluation, while the Bevy client owns cancellable background scheduling and the core reducer remains the only rules authority.
+- Named profiles and diagnostics are bounded and reproducible without random blunders or hidden advantages. AI is rejected for fog scenarios until an explicit imperfect-information policy exists.
 
 ## Stories
 
