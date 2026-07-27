@@ -16,7 +16,11 @@ use crownline_core::{
 };
 use thiserror::Error;
 
+mod difficulty;
 mod evaluation;
+pub use difficulty::{
+    DIFFICULTY_SCHEMA_VERSION, DifficultyConfig, DifficultyProfile, ScenarioDifficultyOverride,
+};
 mod search;
 pub use evaluation::{BaselineEvaluator, EVALUATION_SCHEMA_VERSION, EvaluationWeights};
 pub use search::{AlphaBetaSearch, StableMoveOrderer, is_noisy_action};
