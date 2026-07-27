@@ -21,9 +21,16 @@ pub(crate) enum HelpSection {
 pub(crate) struct HelpLink(pub HelpSection);
 
 #[derive(Resource, Default)]
-struct HelpState {
+pub(crate) struct HelpState {
     open: bool,
     section: HelpSection,
+}
+
+impl HelpState {
+    pub(crate) fn open_overview(&mut self) {
+        self.open = true;
+        self.section = HelpSection::Overview;
+    }
 }
 
 #[derive(Component)]

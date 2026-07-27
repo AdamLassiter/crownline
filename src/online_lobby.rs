@@ -91,6 +91,13 @@ impl FromWorld for OnlineLobby {
     }
 }
 
+impl OnlineLobby {
+    pub(crate) fn open_menu(&mut self) {
+        self.screen = LobbyScreen::Menu;
+        self.status.clear();
+    }
+}
+
 #[derive(Component)]
 struct OnlineLobbyRoot;
 
@@ -102,6 +109,26 @@ enum OnlineField {
     ServerUrl,
     PlayerName,
     RoomCode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+enum LobbyControl {
+    Host,
+    Join,
+    Back,
+    PreviousScenario,
+    NextScenario,
+    ToggleClock,
+    DecreaseBase,
+    IncreaseBase,
+    DecreaseIncrement,
+    IncreaseIncrement,
+    Create,
+    SubmitJoin,
+    ToggleShareAddress,
+    CopyInvitation,
+    Ready,
+    Leave,
 }
 
 #[derive(Debug)]
@@ -204,7 +231,59 @@ fn spawn_online_lobby(mut commands: Commands, settings: Res<ClientSettings>) {
             ));
             root.spawn(online_input("Player", OnlineField::PlayerName, 11));
             root.spawn(online_input("", OnlineField::RoomCode, 12));
+            root.spawn(Node {
+                display: Display::Flex,
+                flex_wrap: FlexWrap::Wrap,
+                justify_content: JustifyContent::Center,
+                column_gap: px(7),
+                row_gap: px(7),
+                ..default()
+            })
+            .with_children(|controls| {
+                for (label, control) in [
+                    ("Host private room", LobbyControl::Host),
+                    ("Join with code", LobbyControl::Join),
+                    ("Back", LobbyControl::Back),
+                    ("Previous scenario", LobbyControl::PreviousScenario),
+                    ("Next scenario", LobbyControl::NextScenario),
+                    ("Toggle clock", LobbyControl::ToggleClock),
+                    ("Base -", LobbyControl::DecreaseBase),
+                    ("Base +", LobbyControl::IncreaseBase),
+                    ("Increment -", LobbyControl::DecreaseIncrement),
+                    ("Increment +", LobbyControl::IncreaseIncrement),
+                    ("Create room", LobbyControl::Create),
+                    ("Join room", LobbyControl::SubmitJoin),
+                    ("Include server address", LobbyControl::ToggleShareAddress),
+                    ("Copy invitation", LobbyControl::CopyInvitation),
+                    ("Ready", LobbyControl::Ready),
+                    ("Leave", LobbyControl::Leave),
+                ] {
+                    controls.spawn(lobby_button(label, control));
+                }
+            });
         });
+}
+
+fn lobby_button(label: &'static str, control: LobbyControl) -> impl Bundle {
+    (
+        Button,
+        Node {
+            min_height: px(36),
+            padding: UiRect::axes(px(10), px(6)),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BackgroundColor(Color::srgb(0.11, 0.2, 0.29)),
+        control,
+        children![(
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(13.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.9, 0.94, 1.0)),
+        )],
+    )
 }
 
 fn online_input(value: &str, field: OnlineField, tab: i32) -> impl Bundle {
@@ -237,10 +316,16 @@ fn handle_online_lobby_input(
     transport: Res<LobbyTransport>,
     catalog: Res<ScenarioCatalog>,
     fields: Query<(&EditableText, &OnlineField)>,
+    buttons: Query<(&Interaction, &LobbyControl), Changed<Interaction>>,
 ) {
+    let pressed = buttons
+        .iter()
+        .filter_map(|(interaction, control)| {
+            (*interaction == Interaction::Pressed).then_some(*control)
+        })
+        .collect::<Vec<_>>();
     if *flow == ClientFlow::Setup && keys.just_pressed(KeyCode::F3) {
-        lobby.screen = LobbyScreen::Menu;
-        lobby.status.clear();
+        lobby.open_menu();
         *flow = ClientFlow::OnlineLobby;
         return;
     }
@@ -251,43 +336,53 @@ fn handle_online_lobby_input(
     match lobby.screen {
         LobbyScreen::Closed => {}
         LobbyScreen::Menu => {
-            if keys.just_pressed(KeyCode::KeyH) {
+            if keys.just_pressed(KeyCode::KeyH) || pressed.contains(&LobbyControl::Host) {
                 lobby.screen = LobbyScreen::Host;
-            } else if keys.just_pressed(KeyCode::KeyJ) {
+            } else if keys.just_pressed(KeyCode::KeyJ) || pressed.contains(&LobbyControl::Join) {
                 lobby.screen = LobbyScreen::Join;
-            } else if keys.just_pressed(KeyCode::Escape) {
+            } else if keys.just_pressed(KeyCode::Escape) || pressed.contains(&LobbyControl::Back) {
                 lobby.screen = LobbyScreen::Closed;
                 *flow = ClientFlow::Setup;
             }
         }
         LobbyScreen::Host => {
-            update_host_settings(&keys, &mut lobby, catalog.0.len());
-            if keys.just_pressed(KeyCode::Enter) && !lobby.request_pending {
+            update_host_settings(&keys, &pressed, &mut lobby, catalog.0.len());
+            if (keys.just_pressed(KeyCode::Enter) || pressed.contains(&LobbyControl::Create))
+                && !lobby.request_pending
+            {
                 submit_create(&mut lobby, &transport, &catalog);
-            } else if keys.just_pressed(KeyCode::Escape) && !lobby.request_pending {
+            } else if (keys.just_pressed(KeyCode::Escape) || pressed.contains(&LobbyControl::Back))
+                && !lobby.request_pending
+            {
                 lobby.screen = LobbyScreen::Menu;
             }
         }
         LobbyScreen::Join => {
-            if keys.just_pressed(KeyCode::Enter) && !lobby.request_pending {
+            if (keys.just_pressed(KeyCode::Enter) || pressed.contains(&LobbyControl::SubmitJoin))
+                && !lobby.request_pending
+            {
                 submit_join(&mut lobby, &transport);
-            } else if keys.just_pressed(KeyCode::Escape) && !lobby.request_pending {
+            } else if (keys.just_pressed(KeyCode::Escape) || pressed.contains(&LobbyControl::Back))
+                && !lobby.request_pending
+            {
                 lobby.screen = LobbyScreen::Menu;
             }
         }
         LobbyScreen::Waiting => {
-            if keys.just_pressed(KeyCode::KeyA) {
+            if keys.just_pressed(KeyCode::KeyA)
+                || pressed.contains(&LobbyControl::ToggleShareAddress)
+            {
                 lobby.share_server_address = !lobby.share_server_address;
             }
-            if keys.just_pressed(KeyCode::KeyC) {
+            if keys.just_pressed(KeyCode::KeyC) || pressed.contains(&LobbyControl::CopyInvitation) {
                 copy_room_share(&mut lobby);
             }
-            if keys.just_pressed(KeyCode::KeyR) {
+            if keys.just_pressed(KeyCode::KeyR) || pressed.contains(&LobbyControl::Ready) {
                 lobby.ready_requested = true;
                 "Ready selected. Waiting for the authoritative match connection."
                     .clone_into(&mut lobby.status);
             }
-            if keys.just_pressed(KeyCode::Escape) {
+            if keys.just_pressed(KeyCode::Escape) || pressed.contains(&LobbyControl::Leave) {
                 lobby.seat = None;
                 lobby.ready_requested = false;
                 lobby.screen = LobbyScreen::Menu;
@@ -308,16 +403,17 @@ fn sync_field_values(lobby: &mut OnlineLobby, fields: &Query<(&EditableText, &On
 
 fn update_host_settings(
     keys: &ButtonInput<KeyCode>,
+    pressed: &[LobbyControl],
     lobby: &mut OnlineLobby,
     scenario_count: usize,
 ) {
-    if keys.just_pressed(KeyCode::PageUp) {
+    if keys.just_pressed(KeyCode::PageUp) || pressed.contains(&LobbyControl::PreviousScenario) {
         lobby.selected_scenario = (lobby.selected_scenario + scenario_count - 1) % scenario_count;
     }
-    if keys.just_pressed(KeyCode::PageDown) {
+    if keys.just_pressed(KeyCode::PageDown) || pressed.contains(&LobbyControl::NextScenario) {
         lobby.selected_scenario = (lobby.selected_scenario + 1) % scenario_count;
     }
-    if keys.just_pressed(KeyCode::KeyC) {
+    if keys.just_pressed(KeyCode::KeyC) || pressed.contains(&LobbyControl::ToggleClock) {
         lobby.clock = lobby.clock.is_none().then_some(ClockSettings {
             base_minutes: 10,
             increment_seconds: 0,
@@ -326,16 +422,16 @@ fn update_host_settings(
     let Some(clock) = lobby.clock.as_mut() else {
         return;
     };
-    if keys.just_pressed(KeyCode::Minus) {
+    if keys.just_pressed(KeyCode::Minus) || pressed.contains(&LobbyControl::DecreaseBase) {
         clock.base_minutes = clock.base_minutes.saturating_sub(1).max(MIN_BASE_MINUTES);
     }
-    if keys.just_pressed(KeyCode::Equal) {
+    if keys.just_pressed(KeyCode::Equal) || pressed.contains(&LobbyControl::IncreaseBase) {
         clock.base_minutes = clock.base_minutes.saturating_add(1).min(MAX_BASE_MINUTES);
     }
-    if keys.just_pressed(KeyCode::Comma) {
+    if keys.just_pressed(KeyCode::Comma) || pressed.contains(&LobbyControl::DecreaseIncrement) {
         clock.increment_seconds = clock.increment_seconds.saturating_sub(1);
     }
-    if keys.just_pressed(KeyCode::Period) {
+    if keys.just_pressed(KeyCode::Period) || pressed.contains(&LobbyControl::IncreaseIncrement) {
         clock.increment_seconds = clock
             .increment_seconds
             .saturating_add(1)
@@ -470,6 +566,8 @@ fn sync_online_lobby_ui(
     catalog: Res<ScenarioCatalog>,
     mut roots: Query<&mut Visibility, With<OnlineLobbyRoot>>,
     mut texts: Query<&mut Text, With<OnlineLobbyText>>,
+    mut controls: Query<(&LobbyControl, &mut Visibility)>,
+    mut fields: Query<(&OnlineField, &mut Node)>,
 ) {
     for mut visibility in &mut roots {
         *visibility = if *flow == ClientFlow::OnlineLobby {
@@ -521,6 +619,52 @@ fn sync_online_lobby_ui(
     };
     for mut text in &mut texts {
         text.0.clone_from(&body);
+    }
+    for (control, mut visibility) in &mut controls {
+        let visible = match lobby.screen {
+            LobbyScreen::Closed => false,
+            LobbyScreen::Menu => matches!(
+                control,
+                LobbyControl::Host | LobbyControl::Join | LobbyControl::Back
+            ),
+            LobbyScreen::Host => match control {
+                LobbyControl::Back
+                | LobbyControl::PreviousScenario
+                | LobbyControl::NextScenario
+                | LobbyControl::ToggleClock
+                | LobbyControl::Create => true,
+                LobbyControl::DecreaseBase
+                | LobbyControl::IncreaseBase
+                | LobbyControl::DecreaseIncrement
+                | LobbyControl::IncreaseIncrement => lobby.clock.is_some(),
+                _ => false,
+            },
+            LobbyScreen::Join => {
+                matches!(control, LobbyControl::Back | LobbyControl::SubmitJoin)
+            }
+            LobbyScreen::Waiting => matches!(
+                control,
+                LobbyControl::ToggleShareAddress
+                    | LobbyControl::CopyInvitation
+                    | LobbyControl::Ready
+                    | LobbyControl::Leave
+            ),
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (field, mut node) in &mut fields {
+        node.display = match lobby.screen {
+            LobbyScreen::Closed | LobbyScreen::Waiting => Display::None,
+            LobbyScreen::Menu | LobbyScreen::Host => match field {
+                OnlineField::ServerUrl | OnlineField::PlayerName => Display::Flex,
+                OnlineField::RoomCode => Display::None,
+            },
+            LobbyScreen::Join => Display::Flex,
+        };
     }
 }
 
@@ -827,5 +971,15 @@ mod tests {
         let world = app.world_mut();
         let mut roots = world.query_filtered::<&Node, With<OnlineLobbyRoot>>();
         assert_eq!(roots.single(world).unwrap().overflow, Overflow::scroll_y());
+
+        let mut controls = world.query::<&LobbyControl>();
+        let exposed: std::collections::BTreeSet<_> = controls
+            .iter(world)
+            .map(|control| format!("{control:?}"))
+            .collect();
+        assert_eq!(exposed.len(), 16);
+        for required in ["Host", "Join", "Create", "SubmitJoin", "Ready", "Leave"] {
+            assert!(exposed.contains(required), "missing {required} control");
+        }
     }
 }

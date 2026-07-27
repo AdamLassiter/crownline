@@ -183,6 +183,15 @@ pub(crate) struct GuidedRuntime {
 }
 
 impl GuidedRuntime {
+    pub(crate) fn open_browser(&mut self) {
+        self.browser_open = true;
+        self.reset_armed = None;
+    }
+
+    pub(crate) const fn browser_is_open(&self) -> bool {
+        self.browser_open
+    }
+
     pub(crate) const fn browser_open(&self) -> bool {
         self.browser_open
     }
@@ -481,8 +490,7 @@ fn handle_guided_controls(
     for control in controls {
         match control {
             GuidedControl::Open if *flow == ClientFlow::Setup => {
-                runtime.browser_open = true;
-                runtime.reset_armed = None;
+                runtime.open_browser();
             }
             GuidedControl::Previous if runtime.browser_open => {
                 select_relative(&catalog, &mut runtime, -1);

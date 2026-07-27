@@ -13,11 +13,14 @@ use crownline_core::{
 };
 
 use crate::{
+    guided_play::GuidedRuntime,
+    help::HelpState,
     lifecycle::{
         ClientFlow, LocalSetup, ScenarioCatalog, SeatController, start_fresh_match, validate_names,
     },
     local_ai::AiCancellationEpoch,
     local_persistence::has_readable_local_save,
+    online_lobby::{LobbyScreen, OnlineLobby},
     panels::PanelSurface,
     rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection},
 };
@@ -245,6 +248,7 @@ impl Plugin for MenuPlugin {
                     dispatch_local_setup_accelerators,
                     dispatch_escape,
                     handle_menu_intent,
+                    restore_home_after_submenu,
                     sync_menu_shell,
                     rebuild_menu_page,
                     style_menu_controls,
@@ -453,11 +457,31 @@ fn handle_menu_intent(
     mut history: Option<ResMut<LocalTransitionNoticeLog>>,
     mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
     mut names: Query<(&mut EditableText, &MenuNameInput)>,
+    mut guided: Option<ResMut<GuidedRuntime>>,
+    mut lobby: Option<ResMut<OnlineLobby>>,
+    mut help: Option<ResMut<HelpState>>,
 ) {
     let Some(action) = intent.take() else {
         return;
     };
     match action {
+        MenuAction::Open(MenuRoute::Guided) => {
+            if let Some(guided) = guided.as_deref_mut() {
+                guided.open_browser();
+                state.close();
+            } else {
+                state.open(MenuRoute::Guided);
+            }
+        }
+        MenuAction::Open(MenuRoute::Online) => {
+            if let (Some(lobby), Some(flow)) = (lobby.as_deref_mut(), flow.as_deref_mut()) {
+                lobby.open_menu();
+                *flow = ClientFlow::OnlineLobby;
+                state.close();
+            } else {
+                state.open(MenuRoute::Online);
+            }
+        }
         MenuAction::Open(route) => state.open(route),
         MenuAction::Back => {
             if state.route != Some(MenuRoute::Home) {
@@ -511,7 +535,12 @@ fn handle_menu_intent(
                 &mut state,
             );
         }
-        MenuAction::Confirm | MenuAction::Cancel | MenuAction::OpenHelp => {}
+        MenuAction::OpenHelp => {
+            if let Some(help) = help.as_deref_mut() {
+                help.open_overview();
+            }
+        }
+        MenuAction::Confirm | MenuAction::Cancel => {}
     }
 }
 
@@ -614,6 +643,23 @@ fn handle_local_setup_action(
         },
         _ => {}
     }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn restore_home_after_submenu(
+    flow: Option<Res<ClientFlow>>,
+    guided: Option<Res<GuidedRuntime>>,
+    lobby: Option<Res<OnlineLobby>>,
+    mut state: ResMut<MenuState>,
+) {
+    if state.is_open()
+        || !flow.is_some_and(|flow| *flow == ClientFlow::Setup)
+        || guided.is_some_and(|guided| guided.browser_is_open())
+        || lobby.is_some_and(|lobby| lobby.screen != LobbyScreen::Closed)
+    {
+        return;
+    }
+    state.replace(MenuRoute::Home);
 }
 
 #[allow(clippy::needless_pass_by_value)]
