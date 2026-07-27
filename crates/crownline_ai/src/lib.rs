@@ -16,7 +16,9 @@ use crownline_core::{
 };
 use thiserror::Error;
 
+mod evaluation;
 mod search;
+pub use evaluation::{BaselineEvaluator, EVALUATION_SCHEMA_VERSION, EvaluationWeights};
 pub use search::{AlphaBetaSearch, StableMoveOrderer, is_noisy_action};
 
 pub const MATE_SCORE: i32 = 1_000_000;

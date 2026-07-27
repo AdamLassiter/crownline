@@ -8,6 +8,7 @@ description = "Deterministic, bounded Crownlines adversarial search"
 
 [dependencies]
 crownline_core = { path = "../crownline_core" }
+serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

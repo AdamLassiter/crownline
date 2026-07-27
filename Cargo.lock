@@ -2371,6 +2371,7 @@ version = "0.1.0"
 dependencies = [
  "crownline_core",
  "ron 0.10.1",
+ "serde",
  "thiserror 2.0.19",
 ]
 
