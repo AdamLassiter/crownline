@@ -656,7 +656,12 @@ impl GuidedEventPredicate {
                 },
             ) => {
                 piece.is_none_or(|id| id == *found)
-                    && context.scenario.edges.get(&Edge::new(*from, *to)) == Some(kind)
+                    && context
+                        .state
+                        .pieces
+                        .get(found)
+                        .is_some_and(|moved| moved.kind != PieceKind::Knight)
+                    && move_crosses_edge_kind(context.scenario, *from, *to, *kind)
             }
             (
                 Self::EnterTerrain { piece, terrain },
@@ -676,6 +681,42 @@ impl GuidedEventPredicate {
             _ => false,
         })
     }
+}
+
+fn move_crosses_edge_kind(
+    scenario: &ScenarioDefinition,
+    from: Coord,
+    to: Coord,
+    kind: EdgeKind,
+) -> bool {
+    let dx = (i32::from(to.x) - i32::from(from.x)).signum();
+    let dy = (i32::from(to.y) - i32::from(from.y)).signum();
+    let mut current = from;
+    while current != to {
+        let next = Coord::new(
+            u16::try_from(i32::from(current.x) + dx).expect("move path remains on board"),
+            u16::try_from(i32::from(current.y) + dy).expect("move path remains on board"),
+        );
+        let crossed = if dx != 0 && dy != 0 {
+            let horizontal = Coord::new(next.x, current.y);
+            let vertical = Coord::new(current.x, next.y);
+            [
+                Edge::new(current, horizontal),
+                Edge::new(current, vertical),
+                Edge::new(horizontal, next),
+                Edge::new(vertical, next),
+            ]
+            .into_iter()
+            .any(|edge| scenario.edges.get(&edge) == Some(&kind))
+        } else {
+            scenario.edges.get(&Edge::new(current, next)) == Some(&kind)
+        };
+        if crossed {
+            return true;
+        }
+        current = next;
+    }
+    false
 }
 
 impl GuidedAiConfig {
@@ -1076,6 +1117,37 @@ mod tests {
         assert!(scenario.validate().unwrap_err().iter().any(|error| {
             matches!(error, crate::scenario::ScenarioError::InvalidGuidedContent(message) if message.contains("action is illegal"))
         }));
+    }
+
+    #[test]
+    fn crossing_path_checks_orthogonal_and_diagonal_unit_boundaries() {
+        let (mut scenario, _) = fixture();
+        scenario.edges.insert(
+            Edge::new(Coord::new(2, 2), Coord::new(2, 3)),
+            EdgeKind::Bridge,
+        );
+        assert!(move_crosses_edge_kind(
+            &scenario,
+            Coord::new(2, 5),
+            Coord::new(2, 1),
+            EdgeKind::Bridge,
+        ));
+        scenario.edges.insert(
+            Edge::new(Coord::new(0, 1), Coord::new(1, 1)),
+            EdgeKind::Gate,
+        );
+        assert!(move_crosses_edge_kind(
+            &scenario,
+            Coord::new(0, 0),
+            Coord::new(2, 2),
+            EdgeKind::Gate,
+        ));
+        assert!(!move_crosses_edge_kind(
+            &scenario,
+            Coord::new(0, 0),
+            Coord::new(2, 2),
+            EdgeKind::River,
+        ));
     }
 
     #[test]
