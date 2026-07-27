@@ -6,7 +6,7 @@ use crownline_core::{
 };
 
 use crate::{
-    lifecycle::ClientFlow,
+    lifecycle::{ClientFlow, LocalSetup},
     online_connection::{OnlineActionIntent, OnlineIntentOutbox},
     panels::PanelSurface,
     rendering::{
@@ -31,6 +31,10 @@ impl BoardInteraction {
     pub(crate) fn resolve_online(&mut self, status: &str) {
         self.submitting = false;
         status.clone_into(&mut self.status);
+    }
+
+    pub(crate) fn set_status(&mut self, status: impl Into<String>) {
+        self.status = status.into();
     }
 }
 
@@ -220,6 +224,7 @@ fn handle_board_input(
     mut online_outbox: Option<ResMut<OnlineIntentOutbox>>,
     mut promotion_pointer: ResMut<PromotionPointerIntent>,
     flow: Option<Res<ClientFlow>>,
+    setup: Option<Res<LocalSetup>>,
     fog: Res<FogPresentation>,
 ) {
     let online = flow
@@ -237,6 +242,19 @@ fn handle_board_input(
         interaction.keyboard_focus = None;
         promotion_pointer.0 = None;
         "Private handoff: board input and clocks are paused.".clone_into(&mut interaction.status);
+        return;
+    }
+    if !online
+        && setup.as_deref().is_some_and(|setup| {
+            setup
+                .controller(game.state.active_player)
+                .profile()
+                .is_some()
+        })
+    {
+        selection.piece = None;
+        interaction.keyboard_focus = None;
+        promotion_pointer.0 = None;
         return;
     }
     if interaction.observed_revision != Some(game.state.revision) {

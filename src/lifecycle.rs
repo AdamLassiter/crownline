@@ -3,6 +3,7 @@ use bevy::{
     prelude::*,
     text::{EditableText, TextCursorStyle},
 };
+use crownline_ai::DifficultyProfile;
 use crownline_core::{
     Action, ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES,
     advance_clock, apply_timed_action,
@@ -10,9 +11,11 @@ use crownline_core::{
     start_clocks,
     state::MatchState,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{
     config::unmodified_just_pressed,
+    local_ai::AiCancellationEpoch,
     rendering::{
         DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection,
@@ -58,6 +61,52 @@ pub(crate) struct LocalSetup {
     pub(crate) south_name: String,
     pub(crate) error: String,
     pub(crate) clock: Option<ClockSettings>,
+    pub(crate) north_controller: SeatController,
+    pub(crate) south_controller: SeatController,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SeatController {
+    #[default]
+    Human,
+    Ai(DifficultyProfile),
+}
+
+impl SeatController {
+    pub(crate) const fn next(self) -> Self {
+        match self {
+            Self::Human => Self::Ai(DifficultyProfile::Apprentice),
+            Self::Ai(DifficultyProfile::Apprentice) => Self::Ai(DifficultyProfile::Steward),
+            Self::Ai(DifficultyProfile::Steward) => Self::Ai(DifficultyProfile::Warden),
+            Self::Ai(DifficultyProfile::Warden) => Self::Human,
+        }
+    }
+
+    pub(crate) const fn profile(self) -> Option<DifficultyProfile> {
+        match self {
+            Self::Human => None,
+            Self::Ai(profile) => Some(profile),
+        }
+    }
+}
+
+impl std::fmt::Display for SeatController {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Human => formatter.write_str("Human"),
+            Self::Ai(profile) => write!(formatter, "AI {profile:?}"),
+        }
+    }
+}
+
+impl LocalSetup {
+    pub(crate) const fn controller(&self, player: Player) -> SeatController {
+        match player {
+            Player::North => self.north_controller,
+            Player::South => self.south_controller,
+        }
+    }
 }
 
 impl Default for LocalSetup {
@@ -69,6 +118,8 @@ impl Default for LocalSetup {
             south_name: "South Player".to_owned(),
             error: String::new(),
             clock: None,
+            north_controller: SeatController::Human,
+            south_controller: SeatController::Human,
         }
     }
 }
@@ -89,6 +140,9 @@ struct LifecycleText;
 #[derive(Component)]
 struct PlayerNameInput(Player);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub(crate) struct LifecycleInputSet;
+
 pub struct LocalLifecyclePlugin;
 
 impl Plugin for LocalLifecyclePlugin {
@@ -100,7 +154,12 @@ impl Plugin for LocalLifecyclePlugin {
             .init_resource::<ScenarioCatalog>()
             .add_systems(Startup, spawn_lifecycle_ui)
             .add_systems(PreUpdate, tick_local_clock)
-            .add_systems(Update, (handle_lifecycle_input, sync_lifecycle_ui).chain());
+            .add_systems(
+                Update,
+                (handle_lifecycle_input, sync_lifecycle_ui)
+                    .chain()
+                    .in_set(LifecycleInputSet),
+            );
     }
 }
 
@@ -197,9 +256,16 @@ fn handle_lifecycle_input(
     mut history: ResMut<LocalTransitionNoticeLog>,
     fog: Res<FogPresentation>,
     mut names: Query<(&mut EditableText, &PlayerNameInput)>,
+    mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
 ) {
     match *flow {
         ClientFlow::Setup => {
+            if keys.just_pressed(KeyCode::F7) {
+                setup.north_controller = setup.north_controller.next();
+            }
+            if keys.just_pressed(KeyCode::F8) {
+                setup.south_controller = setup.south_controller.next();
+            }
             if keys.just_pressed(KeyCode::PageUp) {
                 setup.selected_scenario =
                     (setup.selected_scenario + catalog.0.len() - 1) % catalog.0.len();
@@ -209,6 +275,9 @@ fn handle_lifecycle_input(
             }
             update_clock_setup(&keys, &mut setup);
             if keys.just_pressed(KeyCode::KeyX) {
+                let north_controller = setup.north_controller;
+                setup.north_controller = setup.south_controller;
+                setup.south_controller = north_controller;
                 let mut north = String::new();
                 let mut south = String::new();
                 for (input, player) in &names {
@@ -235,6 +304,14 @@ fn handle_lifecycle_input(
                 }
                 match validate_names(&north, &south) {
                     Ok((north, south)) => {
+                        if catalog.0[setup.selected_scenario].rules.fog.is_some()
+                            && (setup.north_controller.profile().is_some()
+                                || setup.south_controller.profile().is_some())
+                        {
+                            "AI seats currently require a perfect-information scenario."
+                                .clone_into(&mut setup.error);
+                            return;
+                        }
                         setup.north_name = north;
                         setup.south_name = south;
                         setup.error.clear();
@@ -245,6 +322,9 @@ fn handle_lifecycle_input(
                             &mut selection,
                             &mut history,
                         );
+                        if let Some(epoch) = ai_epoch.as_deref_mut() {
+                            epoch.cancel_pending();
+                        }
                         *flow = ClientFlow::Playing;
                     }
                     Err(error) => error.clone_into(&mut setup.error),
@@ -258,7 +338,16 @@ fn handle_lifecycle_input(
             } else if fog.blocks_local_input(&game) || fog.confirmed_this_frame() {
                 return;
             } else if keys.just_pressed(KeyCode::KeyP) {
+                if let Some(epoch) = ai_epoch.as_deref_mut() {
+                    epoch.cancel_pending();
+                }
                 *flow = ClientFlow::Paused;
+            } else if setup
+                .controller(game.state.active_player)
+                .profile()
+                .is_some()
+            {
+                return;
             } else if unmodified_just_pressed(&keys, KeyCode::KeyQ) {
                 *flow = ClientFlow::ConfirmResign;
             } else if unmodified_just_pressed(&keys, KeyCode::KeyD) {
@@ -322,6 +411,9 @@ fn handle_lifecycle_input(
                     &mut selection,
                     &mut history,
                 );
+                if let Some(epoch) = ai_epoch.as_deref_mut() {
+                    epoch.cancel_pending();
+                }
                 *flow = ClientFlow::Playing;
             }
         }
@@ -467,7 +559,7 @@ fn sync_lifecycle_ui(
     }
     let scenario = &catalog.0[setup.selected_scenario];
     let setup_text = format!(
-        "CROWNLINES - LOCAL SETUP\nScenario: {} - {}x{} - {}-{} minutes\nDouble-step: {} - en passant: {} - castling routes: {}\nTab edits names - X swaps colors - PageUp/PageDown scenario - F2 local start - F3 online\nClock: {} - C toggle - -/+ base - ,/. increment\nNorth blue/pale: {} - South orange/dark: {}\n{}",
+        "CROWNLINES - LOCAL SETUP\nScenario: {} - {}x{} - {}-{} minutes\nDouble-step: {} - en passant: {} - castling routes: {}\nTab edits names - X swaps colors - PageUp/PageDown scenario - F2 local start - F3 online\nF7 North seat: {} - F8 South seat: {}\nClock: {} - C toggle - -/+ base - ,/. increment\nNorth blue/pale: {} - South orange/dark: {}\n{}",
         scenario.metadata.name,
         scenario.board.width,
         scenario.board.height,
@@ -476,6 +568,8 @@ fn sync_lifecycle_ui(
         yes_no(scenario.rules.allow_pawn_double_step),
         yes_no(scenario.rules.allow_en_passant),
         scenario.castling_routes.len(),
+        setup.north_controller,
+        setup.south_controller,
         setup.clock.map_or_else(
             || "untimed (default)".to_owned(),
             |clock| format!(
@@ -527,6 +621,20 @@ const fn yes_no(value: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seat_controller_cycle_is_stable_and_defaults_to_human() {
+        let setup = LocalSetup::default();
+        assert_eq!(setup.controller(Player::North), SeatController::Human);
+        assert_eq!(setup.controller(Player::South), SeatController::Human);
+        let apprentice = SeatController::Human.next();
+        let steward = apprentice.next();
+        let warden = steward.next();
+        assert_eq!(apprentice.profile(), Some(DifficultyProfile::Apprentice));
+        assert_eq!(steward.profile(), Some(DifficultyProfile::Steward));
+        assert_eq!(warden.profile(), Some(DifficultyProfile::Warden));
+        assert_eq!(warden.next(), SeatController::Human);
+    }
 
     #[test]
     fn invalid_names_are_rejected_and_trimmed_names_are_accepted() {

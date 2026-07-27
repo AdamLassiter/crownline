@@ -1,6 +1,7 @@
 mod config;
 mod help;
 mod lifecycle;
+mod local_ai;
 mod local_interaction;
 mod local_persistence;
 mod online_connection;
@@ -22,6 +23,7 @@ use bevy::{
 use config::ClientSettings;
 use help::RulesHelpPlugin;
 use lifecycle::LocalLifecyclePlugin;
+use local_ai::LocalAiPlugin;
 use local_interaction::LocalInteractionPlugin;
 use local_persistence::LocalPersistencePlugin;
 use online_connection::OnlineConnectionPlugin;
@@ -71,6 +73,7 @@ fn main() {
         .add_plugins(BoardRenderingPlugin)
         .add_plugins(CameraControlPlugin)
         .add_plugins(LocalInteractionPlugin)
+        .add_plugins(LocalAiPlugin)
         .add_plugins(InformationPanelsPlugin)
         .add_plugins(RulesHelpPlugin)
         .add_plugins(LocalLifecyclePlugin)

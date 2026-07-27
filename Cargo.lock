@@ -2348,6 +2348,7 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "bevy",
+ "crownline_ai",
  "crownline_core",
  "crownline_protocol",
  "directories",

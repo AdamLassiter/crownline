@@ -49,6 +49,7 @@ uuid = { version = "1.16.0", features = ["serde", "v4"] }
 arboard.workspace = true
 bevy.workspace = true
 crownline_core = { path = "crates/crownline_core" }
+crownline_ai = { path = "crates/crownline_ai" }
 crownline_protocol = { path = "crates/crownline_protocol" }
 directories.workspace = true
 futures-util.workspace = true

@@ -10,7 +10,8 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    lifecycle::{ClientFlow, LocalClockRuntime, LocalSetup},
+    lifecycle::{ClientFlow, LocalClockRuntime, LocalSetup, SeatController},
+    local_ai::AiCancellationEpoch,
     rendering::{
         DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection,
@@ -34,6 +35,10 @@ struct LocalSaveDocument {
     north_name: String,
     south_name: String,
     clock: Option<crownline_core::ClockSettings>,
+    #[serde(default)]
+    north_controller: SeatController,
+    #[serde(default)]
+    south_controller: SeatController,
 }
 
 #[derive(Resource)]
@@ -72,6 +77,7 @@ fn handle_save_load_keys(
     mut events: ResMut<LocalTransitionEventQueue>,
     mut selection: ResMut<OverlaySelection>,
     mut fog: ResMut<FogPresentation>,
+    mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
 ) {
     if keys.just_pressed(KeyCode::F6) {
         status.slot = status.slot % SLOT_COUNT + 1;
@@ -97,11 +103,16 @@ fn handle_save_load_keys(
                 setup.north_name = document.north_name;
                 setup.south_name = document.south_name;
                 setup.clock = document.clock;
+                setup.north_controller = document.north_controller;
+                setup.south_controller = document.south_controller;
                 setup.error.clear();
                 runtime.sub_millisecond_nanos = 0;
                 selection.piece = None;
                 events.mark_local_discontinuity();
                 fog.require_handoff(&game);
+                if let Some(epoch) = ai_epoch.as_deref_mut() {
+                    epoch.cancel_pending();
+                }
                 *flow = if game.state.outcome.is_some() {
                     ClientFlow::Outcome
                 } else {
@@ -140,6 +151,8 @@ fn save_slot(
         north_name: setup.north_name.clone(),
         south_name: setup.south_name.clone(),
         clock: setup.clock,
+        north_controller: setup.north_controller,
+        south_controller: setup.south_controller,
     };
     let bytes = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
     let path = slot_path(slot)?;
@@ -316,6 +329,8 @@ mod tests {
             north_name: "North".to_owned(),
             south_name: "South".to_owned(),
             clock: None,
+            north_controller: SeatController::Human,
+            south_controller: SeatController::Human,
         }
     }
 
@@ -337,6 +352,29 @@ mod tests {
         assert_eq!(decoded.history, document.history);
         assert_eq!(decoded.application_version, "test");
         assert_eq!(decoded.scenario_schema_version, SCENARIO_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn ai_seats_round_trip_and_older_documents_default_to_humans() {
+        let mut document = fixture_document();
+        document.north_controller = SeatController::Ai(crownline_ai::DifficultyProfile::Steward);
+        document.south_controller = SeatController::Ai(crownline_ai::DifficultyProfile::Apprentice);
+        let decoded = decode_document(&serde_json::to_vec(&document).unwrap()).unwrap();
+        assert_eq!(decoded.north_controller, document.north_controller);
+        assert_eq!(decoded.south_controller, document.south_controller);
+
+        let mut legacy_shape = serde_json::to_value(fixture_document()).unwrap();
+        legacy_shape
+            .as_object_mut()
+            .unwrap()
+            .remove("north_controller");
+        legacy_shape
+            .as_object_mut()
+            .unwrap()
+            .remove("south_controller");
+        let decoded = decode_document(&serde_json::to_vec(&legacy_shape).unwrap()).unwrap();
+        assert_eq!(decoded.north_controller, SeatController::Human);
+        assert_eq!(decoded.south_controller, SeatController::Human);
     }
 
     #[test]
