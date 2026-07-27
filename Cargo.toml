@@ -11,6 +11,7 @@ resolver = "2"
 members = [
     ".",
     "crates/crownline_core",
+    "crates/crownline_ai",
     "crates/crownline_protocol",
     "crates/crownline_server",
 ]

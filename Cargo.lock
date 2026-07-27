@@ -2366,6 +2366,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crownline_ai"
+version = "0.1.0"
+dependencies = [
+ "crownline_core",
+ "ron 0.10.1",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "crownline_core"
 version = "0.1.0"
 dependencies = [
