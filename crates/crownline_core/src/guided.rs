@@ -100,6 +100,7 @@ pub enum GuidedAiMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuidedReplyNode {
     pub id: String,
+    pub state: MatchState,
     pub position_key: String,
     pub action: Action,
     #[serde(default)]
@@ -249,7 +250,7 @@ impl GuidedContent {
         }
         validate_acyclic(&self.stages)?;
         if let Some(ai) = &self.ai {
-            ai.validate(&ids, &self.reply_nodes)?;
+            ai.validate(&ids, &self.reply_nodes, self.start.human_seat)?;
         }
         if let Some(completion) = &self.completion {
             validate_key("completion key", &completion.completion_key)?;
@@ -257,7 +258,7 @@ impl GuidedContent {
                 validate_key("next guided id", next)?;
             }
         }
-        validate_reply_nodes(&self.reply_nodes)?;
+        validate_reply_nodes(scenario, &self.start, self.ai.as_ref(), &self.reply_nodes)?;
         Ok(())
     }
 }
@@ -682,7 +683,11 @@ impl GuidedAiConfig {
         &self,
         _stage_ids: &BTreeSet<&str>,
         reply_nodes: &[GuidedReplyNode],
+        human_seat: Player,
     ) -> Result<(), String> {
+        if self.seat == human_seat {
+            return Err("guided AI seat must oppose the human seat".to_owned());
+        }
         match &self.mode {
             GuidedAiMode::GeneralProfile { profile_id } => {
                 validate_key("AI profile id", profile_id)
@@ -699,7 +704,12 @@ impl GuidedAiConfig {
     }
 }
 
-fn validate_reply_nodes(nodes: &[GuidedReplyNode]) -> Result<(), String> {
+fn validate_reply_nodes(
+    scenario: &ScenarioDefinition,
+    start: &GuidedStart,
+    ai: Option<&GuidedAiConfig>,
+    nodes: &[GuidedReplyNode],
+) -> Result<(), String> {
     if nodes.len() > MAX_REPLY_NODES {
         return Err(format!("reply tree exceeds {MAX_REPLY_NODES} nodes"));
     }
@@ -707,9 +717,57 @@ fn validate_reply_nodes(nodes: &[GuidedReplyNode]) -> Result<(), String> {
     if ids.len() != nodes.len() {
         return Err("reply-tree node ids must be unique".to_owned());
     }
+    let reply_root = ai.and_then(|ai| match &ai.mode {
+        GuidedAiMode::ReplyTree { root_node_id } => Some((ai.seat, root_node_id.as_str())),
+        GuidedAiMode::GeneralProfile { .. } | GuidedAiMode::RegisteredPolicy { .. } => None,
+    });
+    if !nodes.is_empty() && reply_root.is_none() {
+        return Err("reply nodes require reply-tree AI mode".to_owned());
+    }
+    let mut rules_scenario = scenario.clone();
+    rules_scenario.guided = None;
+    let mut positions = BTreeSet::new();
     for node in nodes {
         validate_key("reply-tree node id", &node.id)?;
         validate_key("reply-tree position key", &node.position_key)?;
+        let Some((ai_seat, _)) = reply_root else {
+            return Err("reply nodes require reply-tree AI mode".to_owned());
+        };
+        if node.state.active_player != ai_seat {
+            return Err(format!(
+                "reply node {:?} has the wrong active player",
+                node.id
+            ));
+        }
+        GuidedStart {
+            state: node.state.clone(),
+            human_seat: ai_seat.opponent(),
+            allow_clock: true,
+            allow_controller_changes: false,
+        }
+        .validate(scenario)
+        .map_err(|error| format!("reply node {:?}: {error}", node.id))?;
+        let actual_key = node
+            .state
+            .repetition_key()
+            .map_err(|error| error.to_string())?;
+        if node.position_key != actual_key {
+            return Err(format!("reply node {:?} position key has drifted", node.id));
+        }
+        if !positions.insert(node.position_key.as_str()) {
+            return Err("reply-tree position keys must be unique".to_owned());
+        }
+        crate::apply_action(&rules_scenario, &node.state, &node.action)
+            .map_err(|error| format!("reply node {:?} action is illegal: {error}", node.id))?;
+        let child_count = node.child_ids.iter().collect::<BTreeSet<_>>().len();
+        if child_count != node.child_ids.len()
+            || node.child_ids.iter().any(|child| child == &node.id)
+        {
+            return Err(format!(
+                "reply node {:?} has duplicate or self children",
+                node.id
+            ));
+        }
         if node
             .child_ids
             .iter()
@@ -721,6 +779,66 @@ fn validate_reply_nodes(nodes: &[GuidedReplyNode]) -> Result<(), String> {
             ));
         }
     }
+    if let Some((ai_seat, root)) = reply_root {
+        if start.state.active_player == ai_seat {
+            let root_state = nodes
+                .iter()
+                .find(|node| node.id == root)
+                .expect("reply root existence was validated");
+            if root_state.position_key
+                != start
+                    .state
+                    .repetition_key()
+                    .map_err(|error| error.to_string())?
+            {
+                return Err("reply-tree root does not match the guided start position".to_owned());
+            }
+        }
+        validate_reply_tree_reachability(root, nodes)?;
+    }
+    Ok(())
+}
+
+fn validate_reply_tree_reachability(root: &str, nodes: &[GuidedReplyNode]) -> Result<(), String> {
+    fn visit<'a>(
+        id: &'a str,
+        by_id: &BTreeMap<&'a str, &'a GuidedReplyNode>,
+        visiting: &mut BTreeSet<&'a str>,
+        visited: &mut BTreeSet<&'a str>,
+    ) -> Result<(), String> {
+        if visited.contains(id) {
+            return Ok(());
+        }
+        if !visiting.insert(id) {
+            return Err(format!("reply-tree cycle includes {id:?}"));
+        }
+        for child in &by_id[id].child_ids {
+            visit(child, by_id, visiting, visited)?;
+        }
+        visiting.remove(id);
+        visited.insert(id);
+        Ok(())
+    }
+
+    let by_id = nodes
+        .iter()
+        .map(|node| (node.id.as_str(), node))
+        .collect::<BTreeMap<_, _>>();
+    let mut pending = vec![root];
+    let mut reached = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !reached.insert(id) {
+            continue;
+        }
+        let node = by_id
+            .get(id)
+            .ok_or_else(|| "reply-tree root references an unknown node".to_owned())?;
+        pending.extend(node.child_ids.iter().map(String::as_str));
+    }
+    if reached.len() != nodes.len() {
+        return Err("reply tree contains nodes unreachable from its root".to_owned());
+    }
+    visit(root, &by_id, &mut BTreeSet::new(), &mut BTreeSet::new())?;
     Ok(())
 }
 
@@ -916,6 +1034,48 @@ mod tests {
         guided.schema_version += 1;
         scenario.guided = Some(guided);
         assert!(scenario.validate().is_err());
+    }
+
+    #[test]
+    fn reply_tree_nodes_pin_exact_positions_and_legal_canonical_actions() {
+        let (mut scenario, mut state) = fixture();
+        state.active_player = Player::North;
+        let candidate = legal_moves(&scenario, &state)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let action = Action::Move {
+            player: Player::North,
+            piece: candidate.piece,
+            to: candidate.to,
+        };
+        let position_key = state.repetition_key().unwrap();
+        let mut guided = content(state.clone());
+        guided.ai = Some(GuidedAiConfig {
+            seat: Player::North,
+            mode: GuidedAiMode::ReplyTree {
+                root_node_id: "root".to_owned(),
+            },
+            max_actions: Some(2),
+        });
+        guided.reply_nodes = vec![GuidedReplyNode {
+            id: "root".to_owned(),
+            state,
+            position_key,
+            action,
+            child_ids: Vec::new(),
+        }];
+        scenario.guided = Some(guided.clone());
+        assert_eq!(scenario.validate(), Ok(()));
+
+        guided.reply_nodes[0].action = Action::Hold {
+            player: Player::South,
+        };
+        scenario.guided = Some(guided);
+        assert!(scenario.validate().unwrap_err().iter().any(|error| {
+            matches!(error, crate::scenario::ScenarioError::InvalidGuidedContent(message) if message.contains("action is illegal"))
+        }));
     }
 
     #[test]

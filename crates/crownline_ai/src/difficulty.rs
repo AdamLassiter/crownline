@@ -14,6 +14,77 @@ pub enum DifficultyProfile {
     Warden,
 }
 
+impl DifficultyProfile {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Apprentice => "apprentice",
+            Self::Steward => "steward",
+            Self::Warden => "warden",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "apprentice" => Some(Self::Apprentice),
+            "steward" => Some(Self::Steward),
+            "warden" => Some(Self::Warden),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisteredOpponentPolicy {
+    Search(DifficultyConfig),
+    FirstLegal,
+}
+
+pub fn registered_opponent_policy(id: &str) -> Option<RegisteredOpponentPolicy> {
+    match id {
+        "teaching_first_legal" => Some(RegisteredOpponentPolicy::FirstLegal),
+        "teaching_material" => Some(RegisteredOpponentPolicy::Search(teaching_material())),
+        "teaching_terrain" => Some(RegisteredOpponentPolicy::Search(teaching_terrain())),
+        "teaching_realm" => Some(RegisteredOpponentPolicy::Search(teaching_realm())),
+        _ => None,
+    }
+}
+
+fn teaching_material() -> DifficultyConfig {
+    let mut config = DifficultyConfig::for_profile(DifficultyProfile::Apprentice);
+    let weights = &mut config.evaluation;
+    weights.mobility = 0;
+    weights.king_check = 0;
+    weights.pawn_advancement = 0;
+    weights.pawn_connection = 0;
+    weights.centre_access = 0;
+    weights.settlement_ownership = 0;
+    config
+}
+
+fn teaching_terrain() -> DifficultyConfig {
+    let mut config = teaching_material();
+    config.evaluation.mobility = 2;
+    config.evaluation.centre_access = 2;
+    config.evaluation.terrain_activity = 5;
+    config
+}
+
+fn teaching_realm() -> DifficultyConfig {
+    let mut config = DifficultyConfig::for_profile(DifficultyProfile::Steward);
+    let weights = &mut config.evaluation;
+    weights.mobility = 0;
+    weights.piece_safety = 0;
+    weights.king_check = 0;
+    weights.pawn_advancement = 0;
+    weights.pawn_connection = 0;
+    weights.promotion_distance = 0;
+    weights.promotion_candidate = 0;
+    weights.promotion_tier = 0;
+    weights.centre_access = 0;
+    weights.terrain_activity = 0;
+    config
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DifficultyConfig {
     pub schema_version: u16,
@@ -180,6 +251,52 @@ mod tests {
             let encoded = ron::to_string(&config).unwrap();
             assert_eq!(ron::from_str::<DifficultyConfig>(&encoded).unwrap(), config);
         }
+    }
+
+    #[test]
+    fn stable_ids_and_registered_teaching_policies_are_closed_and_bounded() {
+        for profile in [
+            DifficultyProfile::Apprentice,
+            DifficultyProfile::Steward,
+            DifficultyProfile::Warden,
+        ] {
+            assert_eq!(DifficultyProfile::from_id(profile.id()), Some(profile));
+        }
+        assert_eq!(DifficultyProfile::from_id("unknown"), None);
+        assert_eq!(
+            registered_opponent_policy("teaching_first_legal"),
+            Some(RegisteredOpponentPolicy::FirstLegal)
+        );
+        for id in ["teaching_material", "teaching_terrain", "teaching_realm"] {
+            let Some(RegisteredOpponentPolicy::Search(config)) = registered_opponent_policy(id)
+            else {
+                panic!("missing registered policy {id}");
+            };
+            assert!(config.max_depth > 0 && config.max_nodes > 0);
+            assert!(config.move_time_millis.is_some());
+        }
+        let RegisteredOpponentPolicy::Search(material) =
+            registered_opponent_policy("teaching_material").unwrap()
+        else {
+            unreachable!();
+        };
+        let RegisteredOpponentPolicy::Search(terrain) =
+            registered_opponent_policy("teaching_terrain").unwrap()
+        else {
+            unreachable!();
+        };
+        let RegisteredOpponentPolicy::Search(realm) =
+            registered_opponent_policy("teaching_realm").unwrap()
+        else {
+            unreachable!();
+        };
+        assert_eq!(material.evaluation.terrain_activity, 0);
+        assert_eq!(material.evaluation.settlement_ownership, 0);
+        assert!(terrain.evaluation.terrain_activity > 0);
+        assert_eq!(terrain.evaluation.settlement_ownership, 0);
+        assert_eq!(realm.evaluation.terrain_activity, 0);
+        assert!(realm.evaluation.settlement_ownership > 0);
+        assert_eq!(registered_opponent_policy("arbitrary_weights"), None);
     }
 
     #[test]

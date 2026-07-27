@@ -8,16 +8,16 @@ use std::{
 
 use bevy::prelude::*;
 use crownline_core::{
-    AtomicSaveStorage, GuidedContent, GuidedEventPredicate, GuidedPredicate,
-    GuidedPredicateContext, MAX_PERSISTED_BYTES, MatchState, ObjectiveResult, SaveEnvelope,
-    SaveReader, write_bytes_atomically,
+    Action, AtomicSaveStorage, GuidedAiConfig, GuidedContent, GuidedEventPredicate,
+    GuidedPredicate, GuidedPredicateContext, MAX_PERSISTED_BYTES, MatchState, ObjectiveResult,
+    SaveEnvelope, SaveReader, write_bytes_atomically,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     lifecycle::{ClientFlow, LocalSetup, ScenarioCatalog, SeatController},
-    local_ai::AiCancellationEpoch,
+    local_ai::{AiCancellationEpoch, validate_guided_ai_content},
     panels::{PanelBody, PanelKind, PanelSurface},
     rendering::{
         DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
@@ -58,6 +58,8 @@ struct GuidedResume {
     total_actions: u16,
     #[serde(default)]
     total_turns: u16,
+    #[serde(default)]
+    ai_actions_taken: u16,
     retries: u16,
     failed: bool,
 }
@@ -90,6 +92,7 @@ struct GuidedSession {
     turns_elapsed: u16,
     total_actions: u16,
     total_turns: u16,
+    ai_actions_taken: u16,
     retries: u16,
     failed: bool,
     complete: bool,
@@ -114,6 +117,20 @@ impl GuidedRuntime {
 
     pub(crate) const fn is_active(&self) -> bool {
         self.session.is_some()
+    }
+
+    pub(crate) fn ai_configuration(&self, game: &DisplayedGame) -> Option<(GuidedAiConfig, u16)> {
+        let session = self.session.as_ref()?;
+        if session.failed || session.complete {
+            return None;
+        }
+        let guided = game.scenario.guided.as_ref()?;
+        (session.guided_id == guided.id).then(|| {
+            guided
+                .ai
+                .clone()
+                .map(|config| (config, session.ai_actions_taken))
+        })?
     }
 }
 
@@ -145,6 +162,9 @@ struct GuidedObjectiveText;
 
 pub struct GuidedPlayPlugin;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
+pub(crate) struct GuidedInputSet;
+
 impl Plugin for GuidedPlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GuidedRuntime>()
@@ -157,7 +177,8 @@ impl Plugin for GuidedPlayPlugin {
                 Update,
                 (handle_guided_controls, sync_guided_ui)
                     .chain()
-                    .after(crate::lifecycle::LifecycleInputSet),
+                    .after(crate::lifecycle::LifecycleInputSet)
+                    .in_set(GuidedInputSet),
             )
             .add_systems(PostUpdate, process_guided_transitions);
     }
@@ -523,6 +544,10 @@ fn start_selected(
         "No guided scenarios are installed.".clone_into(&mut runtime.message);
         return;
     };
+    if let Err(error) = validate_guided_ai_content(guided) {
+        runtime.message = format!("Guided AI configuration is invalid: {error}");
+        return;
+    }
     let Ok(state) = MatchState::from_scenario(scenario) else {
         "This guided scenario no longer validates.".clone_into(&mut runtime.message);
         return;
@@ -542,6 +567,18 @@ fn start_selected(
     setup.clock = None;
     setup.north_controller = SeatController::Human;
     setup.south_controller = SeatController::Human;
+    if let Some(ai) = &guided.ai {
+        match ai.seat {
+            crownline_core::scenario::Player::North => {
+                setup.north_controller =
+                    SeatController::Ai(crownline_ai::DifficultyProfile::Apprentice);
+            }
+            crownline_core::scenario::Player::South => {
+                setup.south_controller =
+                    SeatController::Ai(crownline_ai::DifficultyProfile::Apprentice);
+            }
+        }
+    }
     selection.piece = None;
     history.entries.clear();
     transitions.mark_local_discontinuity();
@@ -555,6 +592,7 @@ fn start_selected(
         turns_elapsed: 0,
         total_actions: 0,
         total_turns: 0,
+        ai_actions_taken: 0,
         retries: 0,
         failed: false,
         complete: false,
@@ -583,6 +621,10 @@ fn resume_selected(
         "No guided scenario is selected.".clone_into(&mut runtime.message);
         return;
     };
+    if let Err(error) = validate_guided_ai_content(guided) {
+        runtime.message = format!("Guided AI configuration is invalid: {error}");
+        return;
+    }
     let Some(resume) = runtime.progress.resume.clone() else {
         "No guided attempt is available to resume.".clone_into(&mut runtime.message);
         return;
@@ -625,6 +667,7 @@ fn resume_selected(
         turns_elapsed: resume.turns_elapsed,
         total_actions: resume.total_actions,
         total_turns: resume.total_turns,
+        ai_actions_taken: resume.ai_actions_taken,
         retries: resume.retries,
         failed: resume.failed,
         complete: false,
@@ -793,6 +836,11 @@ fn process_guided_transitions(
         if record.action.is_some() {
             session.actions_taken = session.actions_taken.saturating_add(1);
             session.total_actions = session.total_actions.saturating_add(1);
+            if record.action.as_ref().is_some_and(|action| {
+                Some(action_player(action)) == guided.ai.as_ref().map(|ai| ai.seat)
+            }) {
+                session.ai_actions_taken = session.ai_actions_taken.saturating_add(1);
+            }
         }
         let elapsed_turns = u16::try_from(
             record
@@ -848,6 +896,18 @@ fn process_guided_transitions(
     runtime.session = Some(session);
     if changed {
         persist_runtime(&mut runtime, &game);
+    }
+}
+
+fn action_player(action: &Action) -> crownline_core::scenario::Player {
+    match action {
+        Action::Move { player, .. }
+        | Action::Hold { player }
+        | Action::ChoosePromotion { player, .. }
+        | Action::PlacePawn { player, .. }
+        | Action::Resign { player }
+        | Action::OfferDraw { player }
+        | Action::RespondToDraw { player, .. } => *player,
     }
 }
 
@@ -1167,6 +1227,7 @@ fn persist_runtime(runtime: &mut GuidedRuntime, game: &DisplayedGame) {
             turns_elapsed: session.turns_elapsed,
             total_actions: session.total_actions,
             total_turns: session.total_turns,
+            ai_actions_taken: session.ai_actions_taken,
             retries: session.retries,
             failed: session.failed,
         });
@@ -1453,6 +1514,7 @@ mod tests {
             turns_elapsed: 0,
             total_actions: 1,
             total_turns: 0,
+            ai_actions_taken: 0,
             retries: 0,
             failed: false,
         };

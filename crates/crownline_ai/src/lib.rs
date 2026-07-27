@@ -19,7 +19,8 @@ use thiserror::Error;
 mod difficulty;
 mod evaluation;
 pub use difficulty::{
-    DIFFICULTY_SCHEMA_VERSION, DifficultyConfig, DifficultyProfile, ScenarioDifficultyOverride,
+    DIFFICULTY_SCHEMA_VERSION, DifficultyConfig, DifficultyProfile, RegisteredOpponentPolicy,
+    ScenarioDifficultyOverride, registered_opponent_policy,
 };
 mod search;
 pub use evaluation::{BaselineEvaluator, EVALUATION_SCHEMA_VERSION, EvaluationWeights};
