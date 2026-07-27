@@ -11,7 +11,9 @@
 
 ## Linked tasks and introducing commits
 
-- [Task 07.04.02](../07-local-client/07.04-persistence/07.04.02-save-load.md), commit `7c6fb1f`, introduced a save-wrapper check fixed to the original three-scenario catalog.
+- [Task 07.03.03](../07-local-client/07.03-match-lifecycle/07.03.03-save-load.md),
+  commit `7c6fb1f`, introduced a save-wrapper check fixed to the original
+  three-scenario catalog.
 - [Task 12.01.06](../12-fog-of-war/12.01-visibility/12.01.06-validation.md), commit `47bfc2f`, added the fourth fog scenario and exposed the stale bound.
 
 ## Reproduction
@@ -34,7 +36,7 @@ The authored fog scenario can be played but its local saves cannot be loaded.
 
 ## Dependencies
 
-- 07.04.02, 12.01.06.
+- 07.03.03, 12.01.06.
 
 ## Acceptance criteria
 

@@ -35,7 +35,7 @@ The loaded game currently remains playable, but expected scenario replacement pr
 
 ## Dependencies
 
-- 07.03.01, 06.01.01, 06.01.02, 06.01.03, 07.04.02.
+- 07.03.01, 06.01.01, 06.01.02, 06.01.03, 07.03.03.
 
 ## Acceptance criteria
 

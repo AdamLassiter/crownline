@@ -1,10 +1,11 @@
 # Epic 07: Interaction and local play
 
-Deliver a complete desktop hot-seat game with previews, information panels, setup, clocks, and save/load.
+Deliver a complete desktop game client with previews, information panels, setup,
+clocks, save/load, and a unified pointer-and-keyboard menu system.
 
 ## Status
 
-- [x] Done
+- [ ] In progress
 
 ## Implementation notes
 
@@ -16,12 +17,16 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 - Keyboard-driven local setup, scenario switching, pause/settings, match controls, outcomes, and fresh rematches are complete in Task 07.03.01.
 - Optional monotonic local clocks with bounded setup, pause semantics, exact expiration, and Move/Hold increment handling are complete in Task 07.03.02.
 - Atomic platform-local save slots, validated canonical restoration, pending-choice recovery, and user-facing failure guidance are complete in Task 07.03.03.
+- Story 07.04 replaces the remaining text-and-hotkey-driven setup, online,
+  settings, persistence, and lifecycle surfaces with one native Bevy GUI menu
+  system.
 
 ## Stories
 
 - [07.01 Board interaction](07.01-interaction/07.01-story.md)
 - [07.02 Information and help](07.02-information/07.02-story.md)
 - [07.03 Local match lifecycle](07.03-match-lifecycle/07.03-story.md)
+- [07.04 Unified GUI menu system](07.04-menu-system/07.04-story.md)
 
 ## Dependencies
 
@@ -29,7 +34,8 @@ Deliver a complete desktop hot-seat game with previews, information panels, setu
 
 ## Acceptance criteria
 
-- Two players can configure, play, save, load, and finish a complete match without developer tools.
+- Two players can configure, play, save, load, and finish a complete match
+  through visible pointer-and-keyboard controls without developer tools.
 - UI exposes rule consequences without recommending a best move.
 - All mandatory choices and terminal outcomes are recoverable after save/load.
 

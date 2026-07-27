@@ -5,6 +5,7 @@ mod lifecycle;
 mod local_ai;
 mod local_interaction;
 mod local_persistence;
+mod menu;
 mod online_connection;
 mod online_lifecycle;
 mod online_lobby;
@@ -28,6 +29,7 @@ use lifecycle::LocalLifecyclePlugin;
 use local_ai::LocalAiPlugin;
 use local_interaction::LocalInteractionPlugin;
 use local_persistence::LocalPersistencePlugin;
+use menu::MenuPlugin;
 use online_connection::OnlineConnectionPlugin;
 use online_lifecycle::OnlineLifecyclePlugin;
 use online_lobby::OnlineLobbyPlugin;
@@ -85,6 +87,7 @@ fn main() {
         .add_plugins(OnlineStatusPlugin)
         .add_plugins(OnlineLifecyclePlugin)
         .add_plugins(LocalPersistencePlugin)
+        .add_plugins(MenuPlugin)
         .add_plugins(PlaytestPlugin)
         .add_systems(Startup, setup)
         .add_systems(Update, monitor_chess_font)
