@@ -1,0 +1,225 @@
+(
+    schema_version: 2,
+    id: "guided-crossing-tower-rook",
+    metadata: (
+        name: "Crossings II: Gates and Tower Rooks",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {},
+    edges: {
+        (
+            first: (
+                x: 3,
+                y: 4,
+            ),
+            second: (
+                x: 3,
+                y: 5,
+            ),
+        ): wall,
+        (
+            first: (
+                x: 4,
+                y: 4,
+            ),
+            second: (
+                x: 4,
+                y: 5,
+            ),
+        ): gate,
+    },
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 3,
+                y: 5,
+            ),
+        ),
+    ],
+    settlements: [],
+    promotion_sites: [],
+    keeps: [
+        (
+            id: "south-keep",
+            owner: south,
+            tiles: [
+                (
+                    x: 3,
+                    y: 5,
+                ),
+                (
+                    x: 4,
+                    y: 5,
+                ),
+            ],
+            gates: [
+                (
+                    first: (
+                        x: 4,
+                        y: 4,
+                    ),
+                    second: (
+                        x: 4,
+                        y: 5,
+                    ),
+                ),
+            ],
+            fortification_ids: [
+                "south-tower",
+            ],
+        ),
+    ],
+    fortifications: [
+        (
+            id: "south-tower",
+            owner: south,
+            tower: (
+                x: 3,
+                y: 5,
+            ),
+            projected_wall: (
+                first: (
+                    x: 3,
+                    y: 4,
+                ),
+                second: (
+                    x: 3,
+                    y: 5,
+                ),
+            ),
+        ),
+    ],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "guided-crossing-tower-rook",
+        kind: tutorial,
+        category_key: "guided.category.movement_terrain",
+        start: (
+            state: (
+                scenario_id: "guided-crossing-tower-rook",
+                revision: 0,
+                turn_number: 1,
+                active_player: south,
+                phase: command,
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 3,
+                            y: 5,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 7,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {},
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "353124cedef9b4c9c2b92a63dd2accbc65f7fad3c9953c79a0d76bc695558ee5": 1,
+                },
+                outcome: None,
+                next_piece_id: 3,
+            ),
+            human_seat: south,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "tower_rook",
+                title_key: "guided.movement.tower_rook.title",
+                explanation_key: "guided.movement.tower_rook.explanation",
+                hint_keys: [
+                    "guided.movement.tower_rook.hint.1",
+                    "guided.movement.tower_rook.hint.2",
+                ],
+                prerequisites: [],
+                success: [
+                    event(cross_edge(
+                        piece: Some((1)),
+                        kind: wall,
+                    )),
+                ],
+                failure: [],
+                action_limit: Some(8),
+                turn_limit: Some(4),
+            ),
+        ],
+        completion: Some((
+            completion_key: "guided.movement.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)

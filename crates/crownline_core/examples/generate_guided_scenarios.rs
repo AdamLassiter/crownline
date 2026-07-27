@@ -1,0 +1,400 @@
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
+
+use crownline_core::{
+    GUIDED_SCHEMA_VERSION, GuidedAiConfig, GuidedAiMode, GuidedCompletion, GuidedContent,
+    GuidedEventPredicate, GuidedKind, GuidedPredicate, GuidedStage, GuidedStart, MatchState,
+    ScenarioDefinition,
+    scenario::{
+        ArmySetup, BoardSize, Coord, Deployment, Edge, EdgeKind, Fortification, KeepDefinition,
+        PieceKind, Player, SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules, TileTerrain,
+    },
+    state::PieceId,
+};
+
+fn main() {
+    let output = Path::new("assets/scenarios/guided");
+    fs::create_dir_all(output).expect("guided scenario directory must be writable");
+    for scenario in movement_pack() {
+        scenario
+            .validate()
+            .expect("generated guided scenario must validate");
+        let encoded = ron::ser::to_string_pretty(&scenario, ron::ser::PrettyConfig::default())
+            .expect("guided scenario must serialize");
+        let decoded: ScenarioDefinition =
+            ron::from_str(&encoded).expect("generated guided scenario must round-trip");
+        assert_eq!(decoded, scenario);
+        fs::write(
+            output.join(format!("{}.ron", scenario.id)),
+            format!("{encoded}\n"),
+        )
+        .expect("guided scenario must be writable");
+    }
+}
+
+fn movement_pack() -> Vec<ScenarioDefinition> {
+    vec![
+        capture_and_blocking(),
+        knight_jump(),
+        forest_stop(),
+        mountain_jump(),
+        bridge_crossing(),
+        tower_rook_wall(),
+        crossing_open_practice(),
+    ]
+}
+
+fn base(id: &str, name: &str, pieces: &[(Player, PieceKind, Coord)]) -> ScenarioDefinition {
+    ScenarioDefinition {
+        schema_version: SCENARIO_SCHEMA_VERSION,
+        id: id.to_owned(),
+        metadata: ScenarioMetadata {
+            name: name.to_owned(),
+            description: "A compact guided movement and terrain lesson.".to_owned(),
+            expected_minutes: (2, 6),
+            is_default: false,
+        },
+        board: BoardSize {
+            width: 8,
+            height: 8,
+        },
+        terrain: BTreeMap::new(),
+        edges: BTreeMap::new(),
+        deployments: pieces
+            .iter()
+            .map(|(player, kind, at)| Deployment {
+                player: *player,
+                kind: *kind,
+                at: *at,
+            })
+            .collect(),
+        settlements: Vec::new(),
+        promotion_sites: Vec::new(),
+        keeps: Vec::new(),
+        fortifications: Vec::new(),
+        castling_routes: Vec::new(),
+        rules: ScenarioRules {
+            army_setup: ArmySetup::Custom,
+            ..ScenarioRules::default()
+        },
+        guided: None,
+    }
+}
+
+fn start(scenario: &ScenarioDefinition) -> MatchState {
+    MatchState::from_scenario(scenario).expect("unguided lesson base must validate")
+}
+
+fn piece_at(state: &MatchState, at: Coord) -> PieceId {
+    state
+        .pieces
+        .values()
+        .find(|piece| piece.at == at)
+        .expect("lesson piece must exist")
+        .id
+}
+
+fn stage(
+    id: &str,
+    success: Vec<GuidedPredicate>,
+    hints: usize,
+    prerequisite: Option<&str>,
+) -> GuidedStage {
+    GuidedStage {
+        id: id.to_owned(),
+        title_key: format!("guided.movement.{id}.title"),
+        explanation_key: format!("guided.movement.{id}.explanation"),
+        hint_keys: (1..=hints)
+            .map(|index| format!("guided.movement.{id}.hint.{index}"))
+            .collect(),
+        prerequisites: prerequisite.into_iter().map(str::to_owned).collect(),
+        success,
+        failure: Vec::new(),
+        action_limit: Some(8),
+        turn_limit: Some(4),
+    }
+}
+
+fn guide(scenario: &mut ScenarioDefinition, stages: Vec<GuidedStage>, ai: Option<GuidedAiConfig>) {
+    let state = start(scenario);
+    scenario.guided = Some(GuidedContent {
+        schema_version: GUIDED_SCHEMA_VERSION,
+        id: scenario.id.clone(),
+        kind: if ai.is_some() {
+            GuidedKind::OpenPractice
+        } else {
+            GuidedKind::Tutorial
+        },
+        category_key: "guided.category.movement_terrain".to_owned(),
+        start: GuidedStart {
+            state,
+            human_seat: Player::South,
+            allow_clock: false,
+            allow_controller_changes: false,
+        },
+        stages,
+        ai,
+        completion: Some(GuidedCompletion {
+            completion_key: "guided.movement.complete".to_owned(),
+            next_guided_id: None,
+            records_best_actions: true,
+            records_best_turns: true,
+        }),
+        reply_nodes: Vec::new(),
+    });
+}
+
+fn common(extra: &[(Player, PieceKind, Coord)]) -> Vec<(Player, PieceKind, Coord)> {
+    let mut pieces = vec![
+        (Player::North, PieceKind::King, Coord::new(0, 0)),
+        (Player::South, PieceKind::King, Coord::new(7, 7)),
+    ];
+    pieces.extend_from_slice(extra);
+    pieces
+}
+
+fn capture_and_blocking() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-movement-capture",
+        "Movement I: Lines and Captures",
+        &common(&[
+            (Player::North, PieceKind::Pawn, Coord::new(4, 6)),
+            (Player::South, PieceKind::Pawn, Coord::new(1, 5)),
+            (Player::South, PieceKind::Rook, Coord::new(1, 6)),
+        ]),
+    );
+    let state = start(&scenario);
+    let target = piece_at(&state, Coord::new(4, 6));
+    guide(
+        &mut scenario,
+        vec![stage(
+            "capture",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::Capture {
+                piece: Some(target),
+            })],
+            2,
+            None,
+        )],
+        None,
+    );
+    scenario
+}
+
+fn knight_jump() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-movement-knight",
+        "Movement II: Knight Jumps",
+        &common(&[(Player::South, PieceKind::Knight, Coord::new(2, 6))]),
+    );
+    scenario
+        .terrain
+        .insert(Coord::new(2, 5), TileTerrain::Mountain);
+    scenario
+        .terrain
+        .insert(Coord::new(3, 5), TileTerrain::Mountain);
+    guide(
+        &mut scenario,
+        vec![stage(
+            "knight_jump",
+            vec![GuidedPredicate::PieceAt {
+                player: Player::South,
+                kind: PieceKind::Knight,
+                at: Coord::new(3, 4),
+            }],
+            2,
+            None,
+        )],
+        None,
+    );
+    scenario
+}
+
+fn forest_stop() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-terrain-forest",
+        "Terrain I: Forests Stop Rays",
+        &common(&[(Player::South, PieceKind::Rook, Coord::new(1, 6))]),
+    );
+    scenario
+        .terrain
+        .insert(Coord::new(1, 3), TileTerrain::Forest);
+    let rook = piece_at(&start(&scenario), Coord::new(1, 6));
+    guide(
+        &mut scenario,
+        vec![stage(
+            "forest",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::EnterTerrain {
+                piece: Some(rook),
+                terrain: TileTerrain::Forest,
+            })],
+            2,
+            None,
+        )],
+        None,
+    );
+    scenario
+}
+
+fn mountain_jump() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-terrain-mountain",
+        "Terrain II: Mountains Block",
+        &common(&[(Player::South, PieceKind::Knight, Coord::new(1, 6))]),
+    );
+    scenario
+        .terrain
+        .insert(Coord::new(1, 5), TileTerrain::Mountain);
+    scenario
+        .terrain
+        .insert(Coord::new(2, 5), TileTerrain::Mountain);
+    guide(
+        &mut scenario,
+        vec![stage(
+            "mountain",
+            vec![GuidedPredicate::PieceAt {
+                player: Player::South,
+                kind: PieceKind::Knight,
+                at: Coord::new(2, 4),
+            }],
+            2,
+            None,
+        )],
+        None,
+    );
+    scenario
+}
+
+fn bridge_crossing() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-crossing-bridge",
+        "Crossings I: Bridge the River",
+        &common(&[
+            (Player::South, PieceKind::Rook, Coord::new(2, 5)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 5)),
+        ]),
+    );
+    for x in 0..scenario.board.width {
+        scenario.edges.insert(
+            Edge::new(Coord::new(x, 3), Coord::new(x, 4)),
+            if x == 3 {
+                EdgeKind::Bridge
+            } else {
+                EdgeKind::River
+            },
+        );
+    }
+    let rook = piece_at(&start(&scenario), Coord::new(3, 5));
+    guide(
+        &mut scenario,
+        vec![stage(
+            "bridge",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::CrossEdge {
+                piece: Some(rook),
+                kind: EdgeKind::Bridge,
+            })],
+            2,
+            None,
+        )],
+        None,
+    );
+    scenario
+}
+
+fn tower_rook_wall() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-crossing-tower-rook",
+        "Crossings II: Gates and Tower Rooks",
+        &common(&[(Player::South, PieceKind::Rook, Coord::new(3, 5))]),
+    );
+    let wall = Edge::new(Coord::new(3, 5), Coord::new(3, 4));
+    scenario.edges.insert(wall, EdgeKind::Wall);
+    scenario.edges.insert(
+        Edge::new(Coord::new(4, 5), Coord::new(4, 4)),
+        EdgeKind::Gate,
+    );
+    scenario.fortifications.push(Fortification {
+        id: "south-tower".to_owned(),
+        owner: Player::South,
+        tower: Coord::new(3, 5),
+        projected_wall: wall,
+    });
+    scenario.keeps.push(KeepDefinition {
+        id: "south-keep".to_owned(),
+        owner: Player::South,
+        tiles: BTreeSet::from([Coord::new(3, 5), Coord::new(4, 5)]),
+        gates: BTreeSet::from([Edge::new(Coord::new(4, 5), Coord::new(4, 4))]),
+        fortification_ids: BTreeSet::from(["south-tower".to_owned()]),
+    });
+    let rook = piece_at(&start(&scenario), Coord::new(3, 5));
+    guide(
+        &mut scenario,
+        vec![stage(
+            "tower_rook",
+            vec![GuidedPredicate::Event(GuidedEventPredicate::CrossEdge {
+                piece: Some(rook),
+                kind: EdgeKind::Wall,
+            })],
+            2,
+            None,
+        )],
+        None,
+    );
+    scenario
+}
+
+fn crossing_open_practice() -> ScenarioDefinition {
+    let mut scenario = base(
+        "guided-movement-open-practice",
+        "Movement Assessment: Crossing Contact",
+        &common(&[
+            (Player::North, PieceKind::Pawn, Coord::new(3, 2)),
+            (Player::South, PieceKind::Rook, Coord::new(3, 5)),
+        ]),
+    );
+    for x in 0..scenario.board.width {
+        scenario.edges.insert(
+            Edge::new(Coord::new(x, 3), Coord::new(x, 4)),
+            if x == 3 {
+                EdgeKind::Bridge
+            } else {
+                EdgeKind::River
+            },
+        );
+    }
+    let state = start(&scenario);
+    let rook = piece_at(&state, Coord::new(3, 5));
+    let pawn = piece_at(&state, Coord::new(3, 2));
+    guide(
+        &mut scenario,
+        vec![
+            stage(
+                "assessment_cross",
+                vec![GuidedPredicate::Event(GuidedEventPredicate::CrossEdge {
+                    piece: Some(rook),
+                    kind: EdgeKind::Bridge,
+                })],
+                0,
+                None,
+            ),
+            stage(
+                "assessment_capture",
+                vec![GuidedPredicate::Event(GuidedEventPredicate::Capture {
+                    piece: Some(pawn),
+                })],
+                0,
+                Some("assessment_cross"),
+            ),
+        ],
+        Some(GuidedAiConfig {
+            seat: Player::North,
+            mode: GuidedAiMode::GeneralProfile {
+                profile_id: "apprentice".to_owned(),
+            },
+            max_actions: Some(8),
+        }),
+    );
+    scenario
+}

@@ -16,7 +16,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    lifecycle::{ClientFlow, LocalSetup, ScenarioCatalog, SeatController},
+    lifecycle::{ClientFlow, LocalSetup, SeatController},
     local_ai::{AiCancellationEpoch, validate_guided_ai_content},
     panels::{PanelBody, PanelKind, PanelSurface},
     rendering::{
@@ -32,6 +32,34 @@ static GUIDED_TEXT: LazyLock<BTreeMap<String, String>> = LazyLock::new(|| {
     ron::from_str(include_str!("../assets/guidance/en-US.ron"))
         .expect("bundled guided text catalog is valid RON")
 });
+
+#[derive(Resource)]
+struct GuidedScenarioCatalog(Vec<crownline_core::ScenarioDefinition>);
+
+impl Default for GuidedScenarioCatalog {
+    fn default() -> Self {
+        let scenarios = [
+            include_str!("../assets/scenarios/guided/guided-movement-capture.ron"),
+            include_str!("../assets/scenarios/guided/guided-movement-knight.ron"),
+            include_str!("../assets/scenarios/guided/guided-terrain-forest.ron"),
+            include_str!("../assets/scenarios/guided/guided-terrain-mountain.ron"),
+            include_str!("../assets/scenarios/guided/guided-crossing-bridge.ron"),
+            include_str!("../assets/scenarios/guided/guided-crossing-tower-rook.ron"),
+            include_str!("../assets/scenarios/guided/guided-movement-open-practice.ron"),
+        ]
+        .into_iter()
+        .map(|source| {
+            let scenario: crownline_core::ScenarioDefinition =
+                ron::from_str(source).expect("bundled guided scenario must parse");
+            scenario
+                .validate()
+                .expect("bundled guided scenario must validate");
+            scenario
+        })
+        .collect();
+        Self(scenarios)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 struct GuidedMetrics {
@@ -168,6 +196,7 @@ pub(crate) struct GuidedInputSet;
 impl Plugin for GuidedPlayPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GuidedRuntime>()
+            .init_resource::<GuidedScenarioCatalog>()
             .add_systems(
                 Startup,
                 (load_guided_progress, spawn_guided_browser).chain(),
@@ -351,7 +380,7 @@ fn load_guided_progress(mut runtime: ResMut<GuidedRuntime>) {
 fn handle_guided_controls(
     keys: Res<ButtonInput<KeyCode>>,
     pressed: Query<(&Interaction, &GuidedControl), Changed<Interaction>>,
-    catalog: Res<ScenarioCatalog>,
+    catalog: Res<GuidedScenarioCatalog>,
     mut runtime: ResMut<GuidedRuntime>,
     mut flow: ResMut<ClientFlow>,
     mut setup: ResMut<LocalSetup>,
@@ -492,31 +521,21 @@ fn handle_guided_controls(
     }
 }
 
-fn guided_indices(catalog: &ScenarioCatalog) -> Vec<usize> {
-    catalog
-        .0
-        .iter()
-        .enumerate()
-        .filter_map(|(index, scenario)| scenario.guided.as_ref().map(|_| index))
-        .collect()
-}
-
 fn selected_scenario<'a>(
-    catalog: &'a ScenarioCatalog,
+    catalog: &'a GuidedScenarioCatalog,
     runtime: &GuidedRuntime,
 ) -> Option<(
     usize,
     &'a crownline_core::ScenarioDefinition,
     &'a GuidedContent,
 )> {
-    let indices = guided_indices(catalog);
-    let index = *indices.get(runtime.selected.min(indices.len().saturating_sub(1)))?;
+    let index = runtime.selected.min(catalog.0.len().saturating_sub(1));
     let scenario = &catalog.0[index];
     Some((index, scenario, scenario.guided.as_ref()?))
 }
 
-fn select_relative(catalog: &ScenarioCatalog, runtime: &mut GuidedRuntime, delta: isize) {
-    let count = guided_indices(catalog).len();
+fn select_relative(catalog: &GuidedScenarioCatalog, runtime: &mut GuidedRuntime, delta: isize) {
+    let count = catalog.0.len();
     if count == 0 {
         runtime.selected = 0;
         return;
@@ -531,7 +550,7 @@ fn select_relative(catalog: &ScenarioCatalog, runtime: &mut GuidedRuntime, delta
 
 #[allow(clippy::too_many_arguments)]
 fn start_selected(
-    catalog: &ScenarioCatalog,
+    catalog: &GuidedScenarioCatalog,
     runtime: &mut GuidedRuntime,
     flow: &mut ClientFlow,
     setup: &mut LocalSetup,
@@ -562,7 +581,6 @@ fn start_selected(
     attempts.attempts = attempts.attempts.saturating_add(1);
     game.scenario.clone_from(scenario);
     game.state = state.clone();
-    setup.selected_scenario = scenario_index;
     setup.session_id = setup.session_id.saturating_add(1);
     setup.clock = None;
     setup.north_controller = SeatController::Human;
@@ -608,7 +626,7 @@ fn start_selected(
 
 #[allow(clippy::too_many_arguments)]
 fn resume_selected(
-    catalog: &ScenarioCatalog,
+    catalog: &GuidedScenarioCatalog,
     runtime: &mut GuidedRuntime,
     flow: &mut ClientFlow,
     setup: &mut LocalSetup,
@@ -649,7 +667,6 @@ fn resume_selected(
     };
     game.scenario.clone_from(scenario);
     game.state = state.clone();
-    setup.selected_scenario = scenario_index;
     setup.session_id = setup.session_id.saturating_add(1);
     setup.clock = None;
     setup.north_controller = SeatController::Human;
@@ -679,7 +696,7 @@ fn resume_selected(
     *flow = ClientFlow::Playing;
 }
 
-fn reset_selected(catalog: &ScenarioCatalog, runtime: &mut GuidedRuntime) {
+fn reset_selected(catalog: &GuidedScenarioCatalog, runtime: &mut GuidedRuntime) {
     let Some((_, _, guided)) = selected_scenario(catalog, runtime) else {
         "No guided scenario is selected.".clone_into(&mut runtime.message);
         return;
@@ -714,7 +731,7 @@ fn request_progress_reset(
     true
 }
 
-fn reveal_hint(catalog: &ScenarioCatalog, runtime: &mut GuidedRuntime) {
+fn reveal_hint(catalog: &GuidedScenarioCatalog, runtime: &mut GuidedRuntime) {
     let Some(mut session) = runtime.session.take() else {
         return;
     };
@@ -776,7 +793,7 @@ fn retry_stage(
 
 #[allow(clippy::too_many_arguments)]
 fn replay_session(
-    catalog: &ScenarioCatalog,
+    catalog: &GuidedScenarioCatalog,
     runtime: &mut GuidedRuntime,
     flow: &mut ClientFlow,
     setup: &mut LocalSetup,
@@ -788,10 +805,7 @@ fn replay_session(
     let Some(session) = runtime.session.as_ref() else {
         return;
     };
-    runtime.selected = guided_indices(catalog)
-        .iter()
-        .position(|index| *index == session.scenario_index)
-        .unwrap_or(0);
+    runtime.selected = session.scenario_index;
     start_selected(
         catalog,
         runtime,
@@ -816,7 +830,7 @@ fn leave_guided(runtime: &mut GuidedRuntime, flow: &mut ClientFlow, game: &Displ
 #[allow(clippy::needless_pass_by_value)]
 fn process_guided_transitions(
     mut transitions: ResMut<LocalTransitionEventQueue>,
-    catalog: Res<ScenarioCatalog>,
+    catalog: Res<GuidedScenarioCatalog>,
     mut runtime: ResMut<GuidedRuntime>,
     game: Res<DisplayedGame>,
 ) {
@@ -961,7 +975,7 @@ fn update_completion_metrics(
 )]
 fn sync_guided_ui(
     flow: Res<ClientFlow>,
-    catalog: Res<ScenarioCatalog>,
+    catalog: Res<GuidedScenarioCatalog>,
     runtime: Res<GuidedRuntime>,
     mut browser_roots: Query<&mut Visibility, With<GuidedBrowserRoot>>,
     mut browser_texts: Query<&mut Text, (With<GuidedBrowserText>, Without<GuidedObjectiveText>)>,
@@ -1005,7 +1019,7 @@ fn sync_guided_ui(
     }
 }
 
-fn browser_summary(catalog: &ScenarioCatalog, runtime: &GuidedRuntime) -> String {
+fn browser_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -> String {
     let Some((_, scenario, guided)) = selected_scenario(catalog, runtime) else {
         return format!(
             "GUIDED SCENARIOS\nNo guided content is installed.\n{}",
@@ -1020,7 +1034,7 @@ fn browser_summary(catalog: &ScenarioCatalog, runtime: &GuidedRuntime) -> String
         .is_some_and(|resume| resume.guided_id == guided.id);
     format!(
         "GUIDED SCENARIOS - {}\n{}\nCategory: {} - {:?} - {} stages\nProgress: {} - attempts {} - retries {} - hints {}\nResume available: {}\n{}",
-        guided_indices(catalog).len(),
+        catalog.0.len(),
         scenario.metadata.name,
         resolve_key(&guided.category_key),
         guided.kind,
@@ -1038,7 +1052,7 @@ fn browser_summary(catalog: &ScenarioCatalog, runtime: &GuidedRuntime) -> String
     )
 }
 
-fn objective_summary(catalog: &ScenarioCatalog, runtime: &GuidedRuntime) -> String {
+fn objective_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -> String {
     let Some(session) = runtime.session.as_ref() else {
         return String::new();
     };
@@ -1574,7 +1588,7 @@ mod tests {
 
     #[test]
     fn competitive_match_has_no_guided_objective_copy() {
-        let catalog = ScenarioCatalog::default();
+        let catalog = GuidedScenarioCatalog::default();
         assert_eq!(objective_summary(&catalog, &GuidedRuntime::default()), "");
     }
 }

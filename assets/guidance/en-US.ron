@@ -1,1 +1,39 @@
-{}
+{
+    "guided.category.movement_terrain": "Movement, terrain, and crossings",
+    "guided.movement.complete": "Lesson complete. Replay it or return to the guided browser.",
+
+    "guided.movement.capture.title": "Read lines, blockers, and captures",
+    "guided.movement.capture.explanation": "Sliding pieces stop at the first piece on a line. A friendly piece blocks the line; an enemy on the first reachable square can be captured.",
+    "guided.movement.capture.hint.1": "The South Rook has one blocked file but an open rank toward the enemy Pawn.",
+    "guided.movement.capture.hint.2": "Move the Rook from (1, 6) to the enemy Pawn on (4, 6).",
+
+    "guided.movement.knight_jump.title": "Jump with the Knight",
+    "guided.movement.knight_jump.explanation": "Knights use their L-shaped move and ignore intervening pieces, mountains, and edges; only their landing square must be legal.",
+    "guided.movement.knight_jump.hint.1": "Look beyond the mountain markers for an L-shaped landing square.",
+    "guided.movement.knight_jump.hint.2": "Move the Knight from (2, 6) to (3, 4).",
+
+    "guided.movement.forest.title": "Enter a forest deliberately",
+    "guided.movement.forest.explanation": "A sliding piece may enter a forest, but its ray stops on that forest square. Forests use both tint and a tree marker.",
+    "guided.movement.forest.hint.1": "The Rook can approach the marked forest along its open file.",
+    "guided.movement.forest.hint.2": "Move the Rook from (1, 6) onto the forest at (1, 3).",
+
+    "guided.movement.mountain.title": "Jump a mountain blocker",
+    "guided.movement.mountain.explanation": "Mountains are impassable landing squares and block sliding rays. Knights may still jump over them to a clear destination.",
+    "guided.movement.mountain.hint.1": "Use the piece whose movement does not trace the intervening squares.",
+    "guided.movement.mountain.hint.2": "Move the Knight from (1, 6) to (2, 4).",
+
+    "guided.movement.bridge.title": "Cross where the river opens",
+    "guided.movement.bridge.explanation": "River edges block movement. Bridge and ford symbols mark traversable edges without changing the movement shape of the piece.",
+    "guided.movement.bridge.hint.1": "Find the bridge marker in the otherwise continuous river boundary.",
+    "guided.movement.bridge.hint.2": "Cross the bridge with the Rook on file 3.",
+
+    "guided.movement.tower_rook.title": "Use gates and a linked tower Rook",
+    "guided.movement.tower_rook.explanation": "Gates are open crossings. Walls block pieces, except a friendly Rook standing on the tower linked to that exact projected wall.",
+    "guided.movement.tower_rook.hint.1": "The tower emblem identifies the Rook that can project through its linked wall.",
+    "guided.movement.tower_rook.hint.2": "Move the tower Rook from (3, 5) through the wall toward (3, 3).",
+
+    "guided.movement.assessment_cross.title": "Assessment: establish contact",
+    "guided.movement.assessment_cross.explanation": "Apply the crossing rules without a move hint. Put the Rook across the river while keeping the South King safe.",
+    "guided.movement.assessment_capture.title": "Assessment: make a safe capture",
+    "guided.movement.assessment_capture.explanation": "The Apprentice may change the position. Find a legal continuation that captures the marked enemy Pawn; no exact move is prescribed.",
+}

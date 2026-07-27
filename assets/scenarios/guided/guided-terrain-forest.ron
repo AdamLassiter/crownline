@@ -1,0 +1,160 @@
+(
+    schema_version: 2,
+    id: "guided-terrain-forest",
+    metadata: (
+        name: "Terrain I: Forests Stop Rays",
+        description: "A compact guided movement and terrain lesson.",
+        expected_minutes: (2, 6),
+        is_default: false,
+    ),
+    board: (
+        width: 8,
+        height: 8,
+    ),
+    terrain: {
+        (
+            x: 1,
+            y: 3,
+        ): forest,
+    },
+    edges: {},
+    deployments: [
+        (
+            player: north,
+            kind: king,
+            at: (
+                x: 0,
+                y: 0,
+            ),
+        ),
+        (
+            player: south,
+            kind: king,
+            at: (
+                x: 7,
+                y: 7,
+            ),
+        ),
+        (
+            player: south,
+            kind: rook,
+            at: (
+                x: 1,
+                y: 6,
+            ),
+        ),
+    ],
+    settlements: [],
+    promotion_sites: [],
+    keeps: [],
+    fortifications: [],
+    castling_routes: [],
+    rules: (
+        pawn_forward_y: {
+            north: 1,
+            south: -1,
+        },
+        army_setup: custom,
+        allow_pawn_double_step: true,
+        allow_en_passant: true,
+        establishment_cycles: 3,
+        production_cycles: 3,
+        promotion_cycles: 1,
+        promotion_unlocks: (
+            bishop: 2,
+            rook: 4,
+            queen: 8,
+        ),
+        development_resets_when_interrupted: false,
+    ),
+    guided: Some((
+        schema_version: 1,
+        id: "guided-terrain-forest",
+        kind: tutorial,
+        category_key: "guided.category.movement_terrain",
+        start: (
+            state: (
+                scenario_id: "guided-terrain-forest",
+                revision: 0,
+                turn_number: 1,
+                active_player: south,
+                phase: command,
+                pieces: {
+                    (0): (
+                        id: (0),
+                        owner: north,
+                        kind: king,
+                        at: (
+                            x: 0,
+                            y: 0,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (1): (
+                        id: (1),
+                        owner: south,
+                        kind: rook,
+                        at: (
+                            x: 1,
+                            y: 6,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                    (2): (
+                        id: (2),
+                        owner: south,
+                        kind: king,
+                        at: (
+                            x: 7,
+                            y: 7,
+                        ),
+                        origin: deployed,
+                        has_moved: false,
+                    ),
+                },
+                settlements: [],
+                en_passant: None,
+                available_castling_routes: [],
+                promotion_candidates: {},
+                outstanding_draw_offer: None,
+                clocks: None,
+                repetition_counts: {
+                    "ad8bda12d445f8310f1b104686af35193dec846c064fe5c21f00c5c0aa2bb944": 1,
+                },
+                outcome: None,
+                next_piece_id: 3,
+            ),
+            human_seat: south,
+            allow_clock: false,
+            allow_controller_changes: false,
+        ),
+        stages: [
+            (
+                id: "forest",
+                title_key: "guided.movement.forest.title",
+                explanation_key: "guided.movement.forest.explanation",
+                hint_keys: [
+                    "guided.movement.forest.hint.1",
+                    "guided.movement.forest.hint.2",
+                ],
+                prerequisites: [],
+                success: [
+                    event(enter_terrain(
+                        piece: Some((1)),
+                        terrain: forest,
+                    )),
+                ],
+                failure: [],
+                action_limit: Some(8),
+                turn_limit: Some(4),
+            ),
+        ],
+        completion: Some((
+            completion_key: "guided.movement.complete",
+            records_best_actions: true,
+            records_best_turns: true,
+        )),
+    )),
+)
