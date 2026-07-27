@@ -17,7 +17,7 @@ use crownline_core::{
 use thiserror::Error;
 
 mod search;
-pub use search::{AlphaBetaSearch, StableMoveOrderer};
+pub use search::{AlphaBetaSearch, StableMoveOrderer, is_noisy_action};
 
 pub const MATE_SCORE: i32 = 1_000_000;
 pub const MAX_HEURISTIC_SCORE: i32 = MATE_SCORE / 2;
