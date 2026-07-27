@@ -9,7 +9,7 @@ use crownline_core::{
     state::{Action, MatchState, PieceId, TurnPhase},
 };
 
-use super::{DisplayedGame, HoveredBoardSquare, tile_position};
+use super::{DisplayedGame, FogPresentation, HoveredBoardSquare, tile_position};
 
 const OVERLAY_Z: f32 = 4.5;
 
@@ -74,11 +74,12 @@ impl Default for OverlayLegend {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct OverlayCacheKey {
     revision: u64,
     selected: Option<PieceId>,
     hovered: Option<Coord>,
+    projection: Option<String>,
 }
 
 #[derive(Resource, Default)]
@@ -101,17 +102,30 @@ pub(super) fn sync_overlays(
     mut text: ResMut<OverlayText>,
     legend: Res<OverlayLegend>,
     existing: Query<Entity, With<OverlayVisual>>,
+    fog: Res<FogPresentation>,
 ) {
     let key = OverlayCacheKey {
         revision: game.state.revision,
         selected: selection.piece,
         hovered: hovered.0,
+        projection: fog.view().map(|view| view.projection_hash.clone()),
     };
-    if cache.key == Some(key) {
+    if cache.key.as_ref() == Some(&key) {
         return;
     }
-    let (overlays, mut lines) =
-        build_overlay_model(&game.scenario, &game.state, selection.piece, hovered.0);
+    let (overlays, mut lines) = if game.scenario.rules.fog.is_some() {
+        fog.view().map_or_else(
+            || {
+                (
+                    BTreeMap::new(),
+                    vec!["Private handoff in progress.".to_owned()],
+                )
+            },
+            |view| build_fog_overlay_model(view, selection.piece, hovered.0),
+        )
+    } else {
+        build_overlay_model(&game.scenario, &game.state, selection.piece, hovered.0)
+    };
     lines.push("Overlay legend:".to_owned());
     lines.extend(
         legend
@@ -143,6 +157,38 @@ pub(super) fn sync_overlays(
     cache.overlays = overlays;
     cache.recomputations = cache.recomputations.saturating_add(1);
     text.lines = lines;
+}
+
+fn build_fog_overlay_model(
+    view: &crownline_core::PlayerView,
+    selected: Option<PieceId>,
+    hovered: Option<Coord>,
+) -> (BTreeMap<Coord, BTreeSet<OverlayKind>>, Vec<String>) {
+    let mut overlays = BTreeMap::new();
+    let mut lines = Vec::new();
+    if view.checked_players.contains(&view.seat)
+        && let Some(king) = view
+            .pieces
+            .values()
+            .find(|piece| piece.owner == view.seat && piece.kind == PieceKind::King)
+    {
+        insert(&mut overlays, king.at, OverlayKind::Check);
+        lines.push("Your King is in check.".to_owned());
+    }
+    if let Some(piece_id) = selected
+        && let Some(piece) = view.pieces.get(&piece_id)
+        && piece.owner == view.seat
+    {
+        insert(&mut overlays, piece.at, OverlayKind::Selected);
+        for at in view.intent_candidates(piece_id) {
+            insert(&mut overlays, at, OverlayKind::LegalMove);
+        }
+        lines.push(format!("Selected {:?} at {:?}.", piece.kind, piece.at));
+    }
+    if let Some(at) = hovered {
+        lines.push(view.square_explanation(at));
+    }
+    (overlays, lines)
 }
 
 fn build_overlay_model(

@@ -126,3 +126,23 @@ permitted pieces and settlement facts, own private choices without canonical
 placement-square lists, and declared public facts. Projection-derived move and
 placement candidates are submission affordances, not legal-move claims. Every
 authority rejection crossing this boundary is the same `illegal_intent` result.
+
+## Local hot-seat fair-play policy
+
+A fog-enabled local match never constructs both seat views at once. At match
+start, after a turn changes player, and after loading a save, the client removes
+the current projection and displays an opaque full-window handoff curtain. It
+constructs the active player's next projection only after that player explicitly
+presses Enter. Board commands, mandatory-choice input, hover previews, and both
+local clocks are paused while the curtain is present; no player gains clock time
+by being the player asked to look away. Terminal outcomes are public and may
+replace the curtain immediately.
+
+The client renders undiscovered tiles as one identical opaque neutral surface
+with a `?` cue and no terrain value in the tile presentation component. Explored
+tiles retain their revealed terrain/site data but use a dim treatment and a dot
+when the terrain has no letter; visible tiles use the normal terrain treatment.
+Pieces, dynamic features, overlays, panel text, and interaction candidates are
+created from the confirmed `PlayerView`. Hidden entities are despawned without
+movement or capture ghosts, and fog transition history uses only generic
+seat-safe notices.

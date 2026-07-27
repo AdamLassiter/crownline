@@ -11,12 +11,16 @@ use crate::{BoardCamera, ChessFontText};
 mod camera;
 pub(crate) mod coordinates;
 mod features;
+mod fog;
 mod overlays;
 mod transitions;
 
 use bevy::window::PrimaryWindow;
 use coordinates::{BoardGeometry, BoardOrientation};
-use features::{spawn_scenario_features, sync_settlement_visuals};
+use features::{
+    FogFeatureCache, spawn_scenario_features, sync_fog_features, sync_settlement_visuals,
+};
+pub(crate) use fog::FogPresentation;
 use overlays::{OverlayCache, sync_overlays};
 pub(crate) use overlays::{OverlayLegend, OverlaySelection, OverlayText, overlay_legend_symbol};
 pub(crate) use transitions::LocalTransitionRecord;
@@ -45,11 +49,18 @@ pub enum TileParity {
 pub struct BoardTile {
     pub at: Coord,
     pub parity: TileParity,
-    pub terrain: TileTerrain,
+    pub terrain: Option<TileTerrain>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
-struct TerrainMark(TileTerrain);
+struct TerrainMark(Coord);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Component)]
+pub enum FogTileVisibility {
+    Undiscovered,
+    Explored,
+    Visible,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PaletteColor([f32; 3]);
@@ -146,6 +157,8 @@ pub struct BoardRenderingPlugin;
 impl Plugin for BoardRenderingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BoardPalette>()
+            .init_resource::<FogPresentation>()
+            .init_resource::<FogFeatureCache>()
             .init_resource::<HoveredBoardSquare>()
             .init_resource::<PointerCapture>()
             .init_resource::<OverlaySelection>()
@@ -156,21 +169,29 @@ impl Plugin for BoardRenderingPlugin {
             .init_resource::<PresentationPlayback>()
             .init_resource::<TransitionEventQueue>()
             .init_resource::<LocalTransitionNoticeLog>()
-            .add_systems(Startup, spawn_default_board)
+            .add_systems(Startup, (spawn_default_board, fog::spawn_handoff_curtain))
+            .add_systems(PreUpdate, fog::prepare_fog_presentation)
             .add_systems(
                 Update,
                 (
                     rebuild_changed_scenario,
                     ApplyDeferred,
+                    sync_fog_tiles,
                     sync_piece_visuals,
+                    sync_fog_features,
                     sync_settlement_visuals,
                     update_hovered_square,
                     sync_overlays,
                     process_piece_motion_requests,
                     animate_piece_presentations,
                     process_transition_events,
+                    fog::sync_handoff_curtain,
                 )
                     .chain(),
+            )
+            .add_systems(
+                PostUpdate,
+                (fog::secure_fog_after_update, fog::sync_handoff_curtain).chain(),
             );
     }
 }
@@ -243,9 +264,11 @@ fn rebuild_changed_scenario(
     *geometry = BoardGeometry::new(game.scenario.board, TILE_SIZE, orientation);
     spawn_board(&mut commands, &palette, &game.scenario);
     spawn_coordinate_labels(&mut commands, &geometry);
-    spawn_scenario_features(&mut commands, &game.scenario, &game.state);
-    for piece in game.state.pieces.values() {
-        spawn_piece(&mut commands, &font.0, &game.scenario, piece);
+    if game.scenario.rules.fog.is_none() {
+        spawn_scenario_features(&mut commands, &game.scenario, &game.state);
+        for piece in game.state.pieces.values() {
+            spawn_piece(&mut commands, &font.0, &game.scenario, piece);
+        }
     }
     rendered.0.clone_from(&game.scenario.id);
 }
@@ -326,23 +349,41 @@ fn sync_piece_visuals(
     font: Res<ChessPieceFont>,
     mut visuals: Query<(Entity, &mut PieceVisual, &mut Transform)>,
     mut motion: ResMut<PresentationMotionQueue>,
+    fog: Res<FogPresentation>,
 ) {
+    let fogged = game.scenario.rules.fog.is_some();
+    let presented: BTreeSet<_> = if fogged {
+        fog.view()
+            .map(|view| view.pieces.keys().copied().collect())
+            .unwrap_or_default()
+    } else {
+        game.state.pieces.keys().copied().collect()
+    };
     let mut existing = BTreeSet::new();
     for (entity, visual, mut transform) in &mut visuals {
-        let Some(piece) = game.state.pieces.get(&visual.id) else {
-            motion.retire(visual.id, visual.kind, visual.owner, transform.translation);
+        let Some(piece) = game
+            .state
+            .pieces
+            .get(&visual.id)
+            .filter(|_| presented.contains(&visual.id))
+        else {
+            if !fogged {
+                motion.retire(visual.id, visual.kind, visual.owner, transform.translation);
+            }
             commands.entity(entity).despawn();
             continue;
         };
         if piece.kind != visual.kind || piece.owner != visual.owner {
-            motion.retire(visual.id, visual.kind, visual.owner, transform.translation);
+            if !fogged {
+                motion.retire(visual.id, visual.kind, visual.owner, transform.translation);
+            }
             commands.entity(entity).despawn();
             continue;
         }
         let [x, y] = tile_position(piece.at, &game.scenario);
         let target = Vec2::new(x, y);
         let previous = transform.translation.truncate();
-        if (previous - target).length_squared() > f32::EPSILON {
+        if !fogged && (previous - target).length_squared() > f32::EPSILON {
             motion.move_piece(piece.id, previous - target);
         }
         transform.translation = Vec3::new(x, y, PIECE_Z);
@@ -352,7 +393,7 @@ fn sync_piece_visuals(
         .state
         .pieces
         .values()
-        .filter(|piece| !existing.contains(&piece.id))
+        .filter(|piece| presented.contains(&piece.id) && !existing.contains(&piece.id))
     {
         spawn_piece(&mut commands, &font.0, &game.scenario, piece);
     }
@@ -476,30 +517,96 @@ fn spawn_board(commands: &mut Commands, palette: &BoardPalette, scenario: &Scena
                             BoardTile {
                                 at,
                                 parity,
-                                terrain,
+                                terrain: Some(terrain),
                             },
+                            FogTileVisibility::Visible,
                         ))
                         .with_children(|tile| {
-                            if let Some(symbol) = terrain_symbol(terrain) {
-                                tile.spawn((
-                                    Text2d::new(symbol),
-                                    TextFont {
-                                        font_size: FontSize::Px(8.0),
-                                        ..default()
-                                    },
-                                    TextColor(match parity {
-                                        TileParity::Light => Color::srgba(0.05, 0.06, 0.08, 0.72),
-                                        TileParity::Dark => Color::srgba(0.96, 0.96, 0.92, 0.78),
-                                    }),
-                                    TextLayout::justify(Justify::Center),
-                                    Transform::from_xyz(-10.0, 10.0, 0.02),
-                                    TerrainMark(terrain),
-                                ));
-                            }
+                            tile.spawn((
+                                Text2d::new(terrain_symbol(terrain).unwrap_or("")),
+                                TextFont {
+                                    font_size: FontSize::Px(8.0),
+                                    ..default()
+                                },
+                                TextColor(match parity {
+                                    TileParity::Light => Color::srgba(0.05, 0.06, 0.08, 0.72),
+                                    TileParity::Dark => Color::srgba(0.96, 0.96, 0.92, 0.78),
+                                }),
+                                TextLayout::justify(Justify::Center),
+                                Transform::from_xyz(-10.0, 10.0, 0.02),
+                                TerrainMark(at),
+                            ));
                         });
                 }
             }
         });
+}
+
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+fn sync_fog_tiles(
+    game: Res<DisplayedGame>,
+    fog: Res<FogPresentation>,
+    palette: Res<BoardPalette>,
+    mut tiles: Query<(
+        &mut BoardTile,
+        &mut Sprite,
+        &mut FogTileVisibility,
+        Option<&Children>,
+    )>,
+    mut marks: Query<(&TerrainMark, &mut Text2d, &mut TextColor)>,
+) {
+    if game.scenario.rules.fog.is_none() {
+        return;
+    }
+    let view = fog.view();
+    for (mut tile, mut sprite, mut tile_visibility, children) in &mut tiles {
+        let known = view.and_then(|view| view.squares.iter().find(|square| square.at == tile.at));
+        let visibility = if view.is_some_and(|view| view.visible.contains(&tile.at)) {
+            FogTileVisibility::Visible
+        } else if known.is_some() {
+            FogTileVisibility::Explored
+        } else {
+            FogTileVisibility::Undiscovered
+        };
+        *tile_visibility = visibility;
+        tile.terrain = known.map(|square| square.terrain);
+        sprite.color = match visibility {
+            FogTileVisibility::Undiscovered => Color::srgb(0.075, 0.08, 0.09),
+            FogTileVisibility::Explored => {
+                dimmed_terrain_color(palette.color(tile.parity, tile.terrain))
+            }
+            FogTileVisibility::Visible => palette.color(tile.parity, tile.terrain),
+        };
+        if let Some(children) = children {
+            for child in children.iter() {
+                if let Ok((mark, mut text, mut color)) = marks.get_mut(child)
+                    && mark.0 == tile.at
+                {
+                    text.0 = match visibility {
+                        FogTileVisibility::Undiscovered => "?".to_owned(),
+                        FogTileVisibility::Explored => terrain_symbol(tile.terrain.unwrap())
+                            .unwrap_or("·")
+                            .to_owned(),
+                        FogTileVisibility::Visible => terrain_symbol(tile.terrain.unwrap())
+                            .unwrap_or("")
+                            .to_owned(),
+                    };
+                    *color = TextColor(match visibility {
+                        FogTileVisibility::Undiscovered => Color::srgb(0.52, 0.54, 0.58),
+                        FogTileVisibility::Explored => Color::srgb(0.7, 0.7, 0.72),
+                        FogTileVisibility::Visible => Color::srgb(0.08, 0.09, 0.1),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn dimmed_terrain_color(color: Color) -> Color {
+    let Srgba {
+        red, green, blue, ..
+    } = color.to_srgba();
+    Color::srgb(red * 0.48, green * 0.48, blue * 0.48)
 }
 
 const fn terrain_symbol(terrain: TileTerrain) -> Option<&'static str> {
@@ -538,6 +645,19 @@ const fn terrain_index(terrain: TileTerrain) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crownline_core::{FOG_RULES_SCHEMA_VERSION, FogRules, project_player_view};
+
+    fn install_fog_game(app: &mut App) {
+        let mut scenario: ScenarioDefinition =
+            ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap();
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 2,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        *app.world_mut().resource_mut::<DisplayedGame>() = DisplayedGame { scenario, state };
+        app.update();
+    }
 
     #[test]
     fn parity_depends_only_on_canonical_coordinate() {
@@ -545,6 +665,119 @@ mod tests {
         assert_eq!(tile_parity(Coord::new(1, 0)), TileParity::Dark);
         assert_eq!(tile_parity(Coord::new(0, 1)), TileParity::Dark);
         assert_eq!(tile_parity(Coord::new(23, 23)), TileParity::Light);
+    }
+
+    #[test]
+    fn fog_handoff_has_only_identical_opaque_unknown_tiles_and_no_hidden_entities() {
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        install_fog_game(&mut app);
+
+        let world = app.world_mut();
+        let mut tiles = world.query::<(&BoardTile, &FogTileVisibility, &Sprite)>();
+        let presentations: Vec<_> = tiles
+            .iter(world)
+            .map(|(tile, visibility, sprite)| {
+                assert_eq!(*visibility, FogTileVisibility::Undiscovered);
+                assert_eq!(tile.terrain, None);
+                sprite.color.to_srgba()
+            })
+            .collect();
+        assert!(!presentations.is_empty());
+        assert!(presentations.windows(2).all(|pair| pair[0] == pair[1]));
+        assert_eq!(world.query::<&PieceVisual>().iter(world).count(), 0);
+        assert_eq!(
+            world
+                .query::<&features::SettlementVisual>()
+                .iter(world)
+                .count(),
+            0
+        );
+        assert_eq!(
+            world
+                .query::<&features::KeepTileVisual>()
+                .iter(world)
+                .count(),
+            0
+        );
+        assert_eq!(
+            world.query::<&features::EdgeVisual>().iter(world).count(),
+            0
+        );
+    }
+
+    #[test]
+    fn confirmed_fog_projection_spawns_exactly_disclosed_pieces_and_three_tile_cues() {
+        let mut app = App::new();
+        app.add_plugins(BoardRenderingPlugin);
+        app.update();
+        install_fog_game(&mut app);
+        app.world_mut()
+            .resource_scope(|world, mut fog: Mut<FogPresentation>| {
+                let game = world.resource::<DisplayedGame>();
+                assert!(fog.confirm(game));
+            });
+        let explored = {
+            let game = app.world().resource::<DisplayedGame>();
+            let view = project_player_view(&game.scenario, &game.state, Player::South).unwrap();
+            (0..game.scenario.board.height)
+                .flat_map(|y| (0..game.scenario.board.width).map(move |x| Coord::new(x, y)))
+                .find(|at| !view.visible.contains(at))
+                .unwrap()
+        };
+        app.world_mut()
+            .resource_mut::<DisplayedGame>()
+            .state
+            .exploration
+            .as_mut()
+            .unwrap()
+            .south
+            .insert(explored);
+        app.world_mut()
+            .resource_scope(|world, mut fog: Mut<FogPresentation>| {
+                let game = world.resource::<DisplayedGame>();
+                fog.require_handoff(game);
+                assert!(fog.confirm(game));
+            });
+        app.update();
+
+        let expected: BTreeSet<_> = app
+            .world()
+            .resource::<FogPresentation>()
+            .view()
+            .unwrap()
+            .pieces
+            .keys()
+            .copied()
+            .collect();
+        let world = app.world_mut();
+        let actual: BTreeSet<_> = world
+            .query::<&PieceVisual>()
+            .iter(world)
+            .map(|piece| piece.id)
+            .collect();
+        assert_eq!(actual, expected);
+        let states: BTreeSet<_> = world
+            .query::<&FogTileVisibility>()
+            .iter(world)
+            .copied()
+            .collect();
+        assert_eq!(
+            states,
+            BTreeSet::from([
+                FogTileVisibility::Undiscovered,
+                FogTileVisibility::Explored,
+                FogTileVisibility::Visible,
+            ])
+        );
+
+        world.resource_mut::<DisplayedGame>().state.active_player = Player::North;
+        world.resource_mut::<DisplayedGame>().state.revision += 1;
+        app.update();
+        let world = app.world_mut();
+        assert!(world.resource::<FogPresentation>().view().is_none());
+        assert_eq!(world.query::<&PieceVisual>().iter(world).count(), 0);
     }
 
     #[test]
@@ -573,20 +806,14 @@ mod tests {
         app.add_plugins(BoardRenderingPlugin);
         app.update();
         let world = app.world_mut();
+        let expected: std::collections::BTreeMap<_, _> =
+            world.resource::<DisplayedGame>().scenario.terrain.clone();
         let mut marks = world.query::<(&TerrainMark, &Text2d)>();
         for (mark, text) in marks.iter(world) {
-            assert_eq!(Some(text.0.as_str()), terrain_symbol(mark.0));
+            let terrain = expected.get(&mark.0).copied().unwrap_or(TileTerrain::Open);
+            assert_eq!(text.0.as_str(), terrain_symbol(terrain).unwrap_or(""));
         }
-        assert_eq!(
-            marks.iter(world).count(),
-            world
-                .resource::<DisplayedGame>()
-                .scenario
-                .terrain
-                .values()
-                .filter(|terrain| **terrain != TileTerrain::Open)
-                .count()
-        );
+        assert_eq!(marks.iter(world).count(), 20 * 20);
     }
 
     #[test]

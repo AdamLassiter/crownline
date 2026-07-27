@@ -9,7 +9,10 @@ use crownline_core::{
 
 use crate::{ChessFontText, config::ClientSettings};
 
-use super::{ChessPieceFont, piece_glyph, piece_glyph_vertical_offset, player_piece_style};
+use super::{
+    ChessPieceFont, DisplayedGame, FogPresentation, piece_glyph, piece_glyph_vertical_offset,
+    player_piece_style,
+};
 
 const MOVE_SECONDS: f32 = 0.18;
 const GHOST_SECONDS: f32 = 0.16;
@@ -142,7 +145,27 @@ pub(super) fn process_piece_motion_requests(
     settings: Option<Res<ClientSettings>>,
     font: Res<ChessPieceFont>,
     presentations: Query<(Entity, &PiecePresentation)>,
+    game: Res<DisplayedGame>,
+    fog: Res<FogPresentation>,
+    ghosts: Query<Entity, With<PresentationGhost>>,
+    tweens: Query<Entity, With<PieceTween>>,
 ) {
+    if game.scenario.rules.fog.is_some() {
+        requests.movements.clear();
+        requests.retirements.clear();
+        for entity in &ghosts {
+            commands.entity(entity).despawn();
+        }
+        for entity in &tweens {
+            commands
+                .entity(entity)
+                .remove::<PieceTween>()
+                .insert(Transform::default());
+        }
+        if fog.blocks_local_input(&game) {
+            return;
+        }
+    }
     let skip = playback.fast_forward
         || settings
             .as_deref()
@@ -204,7 +227,16 @@ pub(super) fn animate_piece_presentations(
 pub(super) fn process_transition_events(
     mut queue: ResMut<TransitionEventQueue>,
     mut log: ResMut<TransitionNoticeLog>,
+    game: Res<DisplayedGame>,
 ) {
+    if game.scenario.rules.fog.is_some() {
+        if !queue.events.is_empty() {
+            queue.events.clear();
+            log.entries
+                .push("Action resolved; private view updated.".to_owned());
+        }
+        return;
+    }
     log.entries
         .extend(queue.events.drain(..).map(|event| event_message(&event)));
 }

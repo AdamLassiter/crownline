@@ -13,7 +13,9 @@ use crate::{
     lifecycle::ClientFlow,
     local_persistence::LocalPersistenceStatus,
     playtest::PlaytestStatus,
-    rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection, PointerCapture},
+    rendering::{
+        DisplayedGame, FogPresentation, LocalTransitionNoticeLog, OverlaySelection, PointerCapture,
+    },
     ui_layout::{BOTTOM_REGION_PERCENT, SIDE_REGION_PERCENT},
 };
 
@@ -41,6 +43,7 @@ struct PanelContentCache {
     online: bool,
     persistence_message: String,
     playtest_message: String,
+    projection: Option<String>,
 }
 
 impl PanelState {
@@ -318,6 +321,7 @@ fn update_panel_text(
         Option<&SettlementPanelText>,
         Option<&HistoryPanelText>,
     )>,
+    fog: Res<FogPresentation>,
 ) {
     let persistence_message = persistence
         .as_deref()
@@ -328,6 +332,7 @@ fn update_panel_text(
     let online = flow
         .as_deref()
         .is_some_and(|flow| *flow == ClientFlow::OnlinePlaying);
+    let projection = fog.view().map(|view| view.projection_hash.clone());
     if cache.revision == Some(game.state.revision)
         && cache.selected == selection.piece
         && cache.history_len == history.entries.len()
@@ -335,11 +340,25 @@ fn update_panel_text(
         && cache.online == online
         && cache.persistence_message == persistence_message
         && cache.playtest_message == playtest_message
+        && cache.projection == projection
     {
         return;
     }
-    let mut match_text =
-        match_panel_text_with_clock_context(&game.scenario, &game.state, selection.piece, online);
+    let mut match_text = fog.view().map_or_else(
+        || {
+            if game.scenario.rules.fog.is_some() {
+                "PRIVATE HANDOFF\nBoard and clocks are hidden and paused.".to_owned()
+            } else {
+                match_panel_text_with_clock_context(
+                    &game.scenario,
+                    &game.state,
+                    selection.piece,
+                    online,
+                )
+            }
+        },
+        fog_match_panel_text,
+    );
     if let Some(status) = persistence.as_deref() {
         let _ = write!(
             match_text,
@@ -350,8 +369,21 @@ fn update_panel_text(
     if let Some(status) = playtest.as_deref() {
         let _ = write!(match_text, "\nPlaytest: {}", status.message);
     }
-    let settlement_text = settlement_panel_text(&game.scenario, &game.state);
-    let history_text = bounded_history(&history.entries);
+    let settlement_text = fog.view().map_or_else(
+        || {
+            if game.scenario.rules.fog.is_some() {
+                "SETTLEMENTS\nHidden during handoff.".to_owned()
+            } else {
+                settlement_panel_text(&game.scenario, &game.state)
+            }
+        },
+        fog_settlement_panel_text,
+    );
+    let history_text = if game.scenario.rules.fog.is_some() {
+        "EVENTS\nPrivate details are omitted in fog-of-war matches.".to_owned()
+    } else {
+        bounded_history(&history.entries)
+    };
     for (mut text, match_marker, settlement_marker, history_marker) in &mut texts {
         if match_marker.is_some() {
             text.0.clone_from(&match_text);
@@ -368,6 +400,52 @@ fn update_panel_text(
     cache.online = online;
     persistence_message.clone_into(&mut cache.persistence_message);
     playtest_message.clone_into(&mut cache.playtest_message);
+    cache.projection = projection;
+}
+
+fn fog_match_panel_text(view: &crownline_core::PlayerView) -> String {
+    let mut lines = vec![format!(
+        "TURN {} - {:?} to act\nViewing: {:?}",
+        view.turn_number, view.active_player, view.seat
+    )];
+    if view.checked_players.contains(&view.seat) {
+        lines.push("!!! CHECK - your King is threatened".to_owned());
+    }
+    lines.push(match &view.phase {
+        crownline_core::ViewTurnPhase::Command => "Phase: Command - Move or Hold".to_owned(),
+        crownline_core::ViewTurnPhase::OwnChoices { queue } => {
+            format!("!!! MANDATORY CHOICE - {} remaining", queue.len())
+        }
+        crownline_core::ViewTurnPhase::PrivateChoice { .. } => {
+            "Another player has a private mandatory choice.".to_owned()
+        }
+    });
+    if let Some(clocks) = view.clocks {
+        lines.push(format!(
+            "Clocks: North {} - South {}",
+            format_clock(clocks.north_millis),
+            format_clock(clocks.south_millis)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn fog_settlement_panel_text(view: &crownline_core::PlayerView) -> String {
+    let mut lines = vec!["SETTLEMENTS - known information".to_owned()];
+    for settlement in view.settlements.values() {
+        if let Some(dynamic) = &settlement.dynamic {
+            lines.push(format!(
+                "{} at {:?}: owner {:?}, production {}",
+                settlement.id, settlement.at, dynamic.owner, dynamic.production_progress
+            ));
+        } else {
+            lines.push(format!(
+                "{} at {:?}: last-known site",
+                settlement.id, settlement.at
+            ));
+        }
+    }
+    lines.join("\n")
 }
 
 #[allow(clippy::needless_pass_by_value)]

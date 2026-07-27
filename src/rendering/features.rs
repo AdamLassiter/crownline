@@ -6,6 +6,7 @@ use crownline_core::{
     state::{MatchState, SettlementState},
 };
 
+use super::FogPresentation;
 use super::{DisplayedGame, ScenarioVisual, TILE_SIZE, tile_position};
 
 pub(super) const KEEP_Z: f32 = 0.1;
@@ -48,6 +49,9 @@ struct SiteLabel;
 
 #[derive(Component)]
 struct KeepOwnerMark;
+
+#[derive(Resource, Default)]
+pub(super) struct FogFeatureCache(Option<String>);
 
 pub(super) fn spawn_scenario_features(
     commands: &mut Commands,
@@ -119,6 +123,9 @@ pub(super) fn sync_settlement_visuals(
     game: Res<DisplayedGame>,
     visuals: Query<(Entity, &SettlementVisual)>,
 ) {
+    if game.scenario.rules.fog.is_some() {
+        return;
+    }
     let mut current = BTreeSet::new();
     for (entity, visual) in &visuals {
         let Some(settlement) = game.state.settlements.get(usize::from(visual.index)) else {
@@ -141,21 +148,128 @@ pub(super) fn sync_settlement_visuals(
     }
 }
 
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+pub(super) fn sync_fog_features(
+    mut commands: Commands,
+    game: Res<DisplayedGame>,
+    fog: Res<FogPresentation>,
+    mut cache: ResMut<FogFeatureCache>,
+    existing: Query<
+        Entity,
+        Or<(
+            With<SettlementVisual>,
+            With<PromotionSiteVisual>,
+            With<KeepTileVisual>,
+            With<FortificationVisual>,
+            With<EdgeVisual>,
+        )>,
+    >,
+) {
+    if game.scenario.rules.fog.is_none() {
+        cache.0 = None;
+        return;
+    }
+    let key = fog
+        .view()
+        .map_or_else(|| "handoff".to_owned(), |view| view.projection_hash.clone());
+    if cache.0.as_deref() == Some(&key) {
+        return;
+    }
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    if let Some(view) = fog.view() {
+        for square in &view.squares {
+            for keep in &square.keeps {
+                spawn_keep(&mut commands, &game.scenario, square.at, keep.owner);
+            }
+            if let Some(site) = &square.settlement
+                && let Some((index, _)) = game
+                    .scenario
+                    .settlements
+                    .iter()
+                    .enumerate()
+                    .find(|(_, candidate)| candidate.id == site.id)
+            {
+                let index = u16::try_from(index).expect("validated settlement index fits");
+                let owner = view
+                    .settlements
+                    .get(&index)
+                    .and_then(|settlement| settlement.dynamic.as_ref())
+                    .and_then(|dynamic| dynamic.owner);
+                spawn_settlement_at(&mut commands, &game.scenario, index, square.at, owner);
+            }
+            if let Some(site) = &square.promotion_site
+                && let Some((index, _)) = game
+                    .scenario
+                    .promotion_sites
+                    .iter()
+                    .enumerate()
+                    .find(|(_, candidate)| candidate.id == site.id)
+            {
+                spawn_promotion_site(
+                    &mut commands,
+                    &game.scenario,
+                    u16::try_from(index).expect("validated promotion index fits"),
+                    square.at,
+                );
+            }
+            for fortification in &square.fortifications {
+                if let Some((index, _)) = game
+                    .scenario
+                    .fortifications
+                    .iter()
+                    .enumerate()
+                    .find(|(_, candidate)| candidate.id == fortification.id)
+                {
+                    spawn_fortification(
+                        &mut commands,
+                        &game.scenario,
+                        u16::try_from(index).expect("validated fortification index fits"),
+                        square.at,
+                        fortification.owner,
+                    );
+                }
+            }
+        }
+        for edge in &view.edges {
+            spawn_edge(&mut commands, &game.scenario, edge.edge, edge.kind);
+        }
+    }
+    cache.0 = Some(key);
+}
+
 fn spawn_settlement(
     commands: &mut Commands,
     scenario: &ScenarioDefinition,
     settlement: &SettlementState,
 ) {
     let at = scenario.settlements[usize::from(settlement.site_index)].at;
+    spawn_settlement_at(
+        commands,
+        scenario,
+        settlement.site_index,
+        at,
+        settlement.owner,
+    );
+}
+
+fn spawn_settlement_at(
+    commands: &mut Commands,
+    scenario: &ScenarioDefinition,
+    site_index: u16,
+    at: Coord,
+    owner: Option<Player>,
+) {
     let [x, y] = tile_position(at, scenario);
-    let (color, emblem, rotation) = settlement_style(settlement.owner);
+    let (color, emblem, rotation) = settlement_style(owner);
     commands
         .spawn((
             Transform::from_xyz(x, y, SITE_Z).with_rotation(rotation),
             Visibility::default(),
             SettlementVisual {
-                index: settlement.site_index,
-                owner: settlement.owner,
+                index: site_index,
+                owner,
             },
             ScenarioVisual,
         ))
@@ -182,6 +296,16 @@ fn spawn_settlement(
                 SiteLabel,
             ));
         });
+}
+
+fn spawn_keep(commands: &mut Commands, scenario: &ScenarioDefinition, at: Coord, owner: Player) {
+    let [x, y] = tile_position(at, scenario);
+    commands.spawn((
+        Sprite::from_color(keep_tint(owner), Vec2::splat(TILE_SIZE - 3.0)),
+        Transform::from_xyz(x, y, KEEP_Z),
+        KeepTileVisual { owner, at },
+        ScenarioVisual,
+    ));
 }
 
 fn spawn_promotion_site(

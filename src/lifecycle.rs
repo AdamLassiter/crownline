@@ -14,7 +14,8 @@ use crownline_core::{
 use crate::{
     config::unmodified_just_pressed,
     rendering::{
-        DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
+        DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
+        OverlaySelection,
     },
 };
 
@@ -176,7 +177,8 @@ fn name_input(value: &str, player: Player, tab: i32) -> impl Bundle {
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
-    clippy::needless_pass_by_value
+    clippy::needless_pass_by_value,
+    clippy::needless_return
 )]
 fn handle_lifecycle_input(
     keys: Res<ButtonInput<KeyCode>>,
@@ -187,6 +189,7 @@ fn handle_lifecycle_input(
     mut selection: ResMut<OverlaySelection>,
     mut events: ResMut<LocalTransitionEventQueue>,
     mut history: ResMut<LocalTransitionNoticeLog>,
+    fog: Res<FogPresentation>,
     mut names: Query<(&mut EditableText, &PlayerNameInput)>,
 ) {
     match *flow {
@@ -246,6 +249,8 @@ fn handle_lifecycle_input(
         ClientFlow::Playing => {
             if game.state.outcome.is_some() {
                 *flow = ClientFlow::Outcome;
+            } else if fog.blocks_local_input(&game) || fog.confirmed_this_frame() {
+                return;
             } else if keys.just_pressed(KeyCode::KeyP) {
                 *flow = ClientFlow::Paused;
             } else if unmodified_just_pressed(&keys, KeyCode::KeyQ) {
@@ -394,8 +399,14 @@ fn tick_local_clock(
     mut flow: ResMut<ClientFlow>,
     mut game: ResMut<DisplayedGame>,
     mut events: ResMut<LocalTransitionEventQueue>,
+    fog: Res<FogPresentation>,
 ) {
-    if *flow != ClientFlow::Playing || game.state.outcome.is_some() || game.state.clocks.is_none() {
+    if *flow != ClientFlow::Playing
+        || game.state.outcome.is_some()
+        || game.state.clocks.is_none()
+        || fog.blocks_local_input(&game)
+        || fog.confirmed_this_frame()
+    {
         return;
     }
     let Some(time) = time else {

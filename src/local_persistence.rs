@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     lifecycle::{ClientFlow, LocalClockRuntime, LocalSetup},
     rendering::{
-        DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
+        DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
+        OverlaySelection,
     },
 };
 
@@ -70,6 +71,7 @@ fn handle_save_load_keys(
     mut history: ResMut<LocalTransitionNoticeLog>,
     mut events: ResMut<LocalTransitionEventQueue>,
     mut selection: ResMut<OverlaySelection>,
+    mut fog: ResMut<FogPresentation>,
 ) {
     if keys.just_pressed(KeyCode::F6) {
         status.slot = status.slot % SLOT_COUNT + 1;
@@ -99,6 +101,7 @@ fn handle_save_load_keys(
                 runtime.sub_millisecond_nanos = 0;
                 selection.piece = None;
                 events.mark_local_discontinuity();
+                fog.require_handoff(&game);
                 *flow = if game.state.outcome.is_some() {
                     ClientFlow::Outcome
                 } else {

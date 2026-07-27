@@ -10,8 +10,8 @@ use crate::{
     online_connection::{OnlineActionIntent, OnlineIntentOutbox},
     panels::PanelSurface,
     rendering::{
-        DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue, LocalTransitionNoticeLog,
-        OverlaySelection, PointerCapture, coordinates::BoardGeometry,
+        DisplayedGame, FogPresentation, HoveredBoardSquare, LocalTransitionEventQueue,
+        LocalTransitionNoticeLog, OverlaySelection, PointerCapture, coordinates::BoardGeometry,
     },
     ui_layout::SIDE_REGION_PERCENT,
 };
@@ -220,6 +220,7 @@ fn handle_board_input(
     mut online_outbox: Option<ResMut<OnlineIntentOutbox>>,
     mut promotion_pointer: ResMut<PromotionPointerIntent>,
     flow: Option<Res<ClientFlow>>,
+    fog: Res<FogPresentation>,
 ) {
     let online = flow
         .as_deref()
@@ -229,6 +230,13 @@ fn handle_board_input(
         .is_some_and(|flow| !matches!(*flow, ClientFlow::Playing | ClientFlow::OnlinePlaying))
     {
         selection.piece = None;
+        return;
+    }
+    if !online && (fog.blocks_local_input(&game) || fog.confirmed_this_frame()) {
+        selection.piece = None;
+        interaction.keyboard_focus = None;
+        promotion_pointer.0 = None;
+        "Private handoff: board input and clocks are paused.".clone_into(&mut interaction.status);
         return;
     }
     if interaction.observed_revision != Some(game.state.revision) {
@@ -245,7 +253,18 @@ fn handle_board_input(
     }
 
     if let TurnPhase::ResolvingChoices { queue } = &game.state.phase {
-        let current_choice = queue.first().cloned();
+        let current_choice = queue.first().cloned().map(|choice| match choice {
+            MandatoryChoice::PlacePawn {
+                settlement_index,
+                legal_squares,
+            } => MandatoryChoice::PlacePawn {
+                settlement_index,
+                legal_squares: fog.view().map_or(legal_squares, |view| {
+                    view.placement_intent_candidates(settlement_index)
+                }),
+            },
+            promotion @ MandatoryChoice::Promote { .. } => promotion,
+        });
         if let Some(choice) = current_choice {
             handle_mandatory_choice(
                 &keys,
@@ -307,7 +326,7 @@ fn handle_board_input(
     };
     interaction.keyboard_focus = Some(at);
 
-    match activation_for(&game, selection.piece, at) {
+    match presented_activation_for(&game, &fog, selection.piece, at) {
         Activation::Select(piece) => {
             selection.piece = Some(piece);
             "Piece selected. Choose a highlighted destination.".clone_into(&mut interaction.status);
@@ -543,6 +562,30 @@ fn activation_for(game: &DisplayedGame, selected: Option<PieceId>, at: Coord) ->
     Activation::Clear
 }
 
+fn presented_activation_for(
+    game: &DisplayedGame,
+    fog: &FogPresentation,
+    selected: Option<PieceId>,
+    at: Coord,
+) -> Activation {
+    let Some(view) = fog.view() else {
+        return activation_for(game, selected, at);
+    };
+    if let Some(piece) = view
+        .pieces
+        .values()
+        .find(|piece| piece.at == at && piece.owner == view.seat)
+    {
+        return Activation::Select(piece.id);
+    }
+    if let Some(piece) = selected
+        && view.intent_candidates(piece).contains(&at)
+    {
+        return Activation::Move { piece, to: at };
+    }
+    Activation::Clear
+}
+
 fn submit_hold(
     game: &mut DisplayedGame,
     selection: &mut OverlaySelection,
@@ -598,7 +641,13 @@ fn submit_action(
             selection.piece = None;
             "Command accepted.".clone_into(&mut interaction.status);
         }
-        Err(error) => interaction.status = format!("Command rejected: {error}"),
+        Err(error) => {
+            interaction.status = if game.scenario.rules.fog.is_some() {
+                "Command rejected: illegal intent.".to_owned()
+            } else {
+                format!("Command rejected: {error}")
+            };
+        }
     }
     interaction.submitting = false;
 }
@@ -653,6 +702,7 @@ fn sync_choice_affordances(
     geometry: Res<BoardGeometry>,
     mut presentation: ResMut<ChoicePresentation>,
     existing: Query<Entity, With<ChoiceVisual>>,
+    fog: Res<FogPresentation>,
 ) {
     let key = ChoicePresentationKey {
         scenario_id: game.state.scenario_id.clone(),
@@ -670,9 +720,16 @@ fn sync_choice_affordances(
     {
         match choice {
             MandatoryChoice::Promote { .. } => {}
-            MandatoryChoice::PlacePawn { legal_squares, .. } => {
-                for at in legal_squares {
-                    if let Some(world) = geometry.board_to_world(*at) {
+            MandatoryChoice::PlacePawn {
+                settlement_index,
+                legal_squares,
+            } => {
+                let safe_squares = fog.view().map_or_else(
+                    || legal_squares.clone(),
+                    |view| view.placement_intent_candidates(*settlement_index),
+                );
+                for at in safe_squares {
+                    if let Some(world) = geometry.board_to_world(at) {
                         commands.spawn((
                             Text2d::new("◎"),
                             TextFont {
@@ -860,6 +917,7 @@ fn sync_interaction_affordances(
     history: Res<LocalTransitionNoticeLog>,
     mut focus: FocusAffordanceQuery,
     mut help: HelpAffordanceQuery,
+    fog: Res<FogPresentation>,
 ) {
     if let Ok((mut transform, mut visibility)) = focus.single_mut() {
         if let Some(at) = interaction.keyboard_focus
@@ -872,7 +930,26 @@ fn sync_interaction_affordances(
         }
     }
     if let Ok(mut text) = help.single_mut() {
-        text.0 = interaction_affordance_text(&game, &interaction, &history);
+        text.0 = if fog.blocks_local_input(&game) || fog.confirmed_this_frame() {
+            "Private handoff: press Enter when the next player is ready. Board input and clocks are paused."
+                .to_owned()
+        } else if let Some(view) = fog.view() {
+            let controls = "Arrow keys: focus - Enter: select/move - Esc: leave board - H: Hold";
+            let mut lines = vec![controls.to_owned()];
+            if !interaction.status.is_empty() {
+                lines.push(interaction.status.clone());
+            }
+            if let Some(clocks) = view.clocks {
+                lines.push(format!(
+                    "Clocks - North {} - South {}",
+                    format_clock(clocks.north_millis),
+                    format_clock(clocks.south_millis)
+                ));
+            }
+            lines.join("\n")
+        } else {
+            interaction_affordance_text(&game, &interaction, &history)
+        };
     }
 }
 
