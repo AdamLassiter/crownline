@@ -6,11 +6,11 @@ use std::{
 };
 
 use axum::extract::ws::{Message, WebSocket};
-use crownline_core::{Action, scenario::Player};
+use crownline_core::{Action, ScenarioDefinition, project_player_view, scenario::Player};
 use crownline_protocol::{
     ClientMessage, ConnectionState, DrawCommand, ErrorCode, MatchSnapshot, PROTOCOL_VERSION,
-    ProtocolError, RematchCommand, RematchState, ServerMessage, decode_client_message,
-    stale_revision_message,
+    ProtocolError, RematchCommand, RematchState, SeatMatchSnapshot, SeatMutationResult,
+    ServerMessage, decode_client_message, stale_revision_message, stale_seat_revision_message,
 };
 use futures_util::StreamExt;
 use tokio::sync::{Mutex as AsyncMutex, broadcast, watch};
@@ -344,6 +344,16 @@ pub async fn serve_socket(
         close_connection(&connections, peer_ip).await;
         return;
     };
+    let Some(scenario) = rooms
+        .lock()
+        .await
+        .installed_scenario_for_room(&room_code)
+        .map(|installed| installed.definition)
+    else {
+        let _ = send_error(&mut socket, "The room scenario is unavailable.").await;
+        close_connection(&connections, peer_ip).await;
+        return;
+    };
     hub.register_room(match_id);
     let Some(mut subscription) = hub.subscribe(match_id) else {
         close_connection(&connections, peer_ip).await;
@@ -352,7 +362,9 @@ pub async fn serve_socket(
     hub.set_seat_connected(match_id, seat, true);
     let initial_snapshot = { subscription.snapshots.borrow().clone() };
     if let Some(initial_snapshot) = initial_snapshot
-        && send_snapshot(&mut socket, initial_snapshot).await.is_err()
+        && send_snapshot(&mut socket, initial_snapshot, &scenario, seat)
+            .await
+            .is_err()
     {
         close_connection(&connections, peer_ip).await;
         return;
@@ -383,7 +395,7 @@ pub async fn serve_socket(
                 }
                 let snapshot = { subscription.snapshots.borrow_and_update().clone() };
                 if let Some(snapshot) = snapshot
-                    && send_snapshot(&mut socket, snapshot).await.is_err()
+                    && send_snapshot(&mut socket, snapshot, &scenario, seat).await.is_err()
                 { break; }
             }
             event = subscription.events.recv() => {
@@ -392,7 +404,7 @@ pub async fn serve_socket(
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         let snapshot = { subscription.snapshots.borrow().clone() };
                         if let Some(snapshot) = snapshot
-                            && send_snapshot(&mut socket, snapshot).await.is_err() {
+                            && send_snapshot(&mut socket, snapshot, &scenario, seat).await.is_err() {
                             break;
                         }
                     }
@@ -417,6 +429,7 @@ pub async fn serve_socket(
                             &repository,
                             &authorities,
                             &actors,
+                            &scenario,
                         ).await {
                             break;
                         }
@@ -442,6 +455,7 @@ async fn handle_authenticated_message(
     repository: &Arc<Mutex<MatchRepository>>,
     authorities: &Arc<Mutex<BTreeMap<Uuid, AuthoritativeMatch>>>,
     actors: &Arc<MatchActorRegistry>,
+    scenario: &ScenarioDefinition,
 ) -> bool {
     let message = match decode_client_message(bytes) {
         Ok(message) => message,
@@ -533,6 +547,8 @@ async fn handle_authenticated_message(
                         action: request.action,
                     })
                     .await,
+                scenario,
+                seat,
             )
             .await
             {
@@ -572,6 +588,8 @@ async fn handle_authenticated_message(
                         action,
                     })
                     .await,
+                scenario,
+                seat,
             )
             .await
             {
@@ -718,17 +736,39 @@ async fn start_authority(
 async fn send_actor_result(
     socket: &mut WebSocket,
     result: Result<MatchCommandResult, ActorSubmitError>,
+    scenario: &ScenarioDefinition,
+    seat: Player,
 ) -> Option<MatchSnapshot> {
     let committed = match &result {
         Ok(MatchCommandResult::Accepted(result)) => Some(result.snapshot.clone()),
         Ok(MatchCommandResult::Rejected { snapshot, .. }) => Some(snapshot.clone()),
         Ok(MatchCommandResult::Stale(_)) | Err(_) => None,
     };
+    let fogged = scenario.rules.fog.is_some();
     let message = match result {
+        Ok(MatchCommandResult::Accepted(result)) if fogged => {
+            match seat_snapshot(&result.snapshot, scenario, seat) {
+                Ok(snapshot) => ServerMessage::SeatAcknowledgement {
+                    protocol_version: PROTOCOL_VERSION,
+                    result: Box::new(SeatMutationResult {
+                        match_id: result.match_id,
+                        idempotency_key: result.idempotency_key,
+                        snapshot,
+                    }),
+                },
+                Err(()) => internal_projection_error(),
+            }
+        }
         Ok(MatchCommandResult::Accepted(result)) => ServerMessage::Acknowledgement {
             protocol_version: PROTOCOL_VERSION,
             result: Box::new(result),
         },
+        Ok(MatchCommandResult::Stale(snapshot)) if fogged => {
+            seat_snapshot(&snapshot, scenario, seat).map_or_else(
+                |()| internal_projection_error(),
+                stale_seat_revision_message,
+            )
+        }
         Ok(MatchCommandResult::Stale(snapshot)) => stale_revision_message(snapshot),
         Ok(MatchCommandResult::Rejected { reason, snapshot }) => {
             let (code, text) = match reason {
@@ -741,12 +781,38 @@ async fn send_actor_result(
                     (ErrorCode::InvalidAction, "Action is illegal.")
                 }
             };
-            ServerMessage::Error {
-                protocol_version: PROTOCOL_VERSION,
-                code,
-                message: text.to_owned(),
-                retryable: false,
-                snapshot: Some(Box::new(snapshot)),
+            if matches!(reason, CommandRejection::WrongSeat) {
+                ServerMessage::Error {
+                    protocol_version: PROTOCOL_VERSION,
+                    code,
+                    message: text.to_owned(),
+                    retryable: false,
+                    snapshot: None,
+                }
+            } else if fogged {
+                match seat_snapshot(&snapshot, scenario, seat) {
+                    Ok(snapshot) => ServerMessage::SeatError {
+                        protocol_version: PROTOCOL_VERSION,
+                        code,
+                        message: if matches!(reason, CommandRejection::IllegalAction(_)) {
+                            "Illegal intent."
+                        } else {
+                            text
+                        }
+                        .to_owned(),
+                        retryable: false,
+                        snapshot: Some(Box::new(snapshot)),
+                    },
+                    Err(()) => internal_projection_error(),
+                }
+            } else {
+                ServerMessage::Error {
+                    protocol_version: PROTOCOL_VERSION,
+                    code,
+                    message: text.to_owned(),
+                    retryable: false,
+                    snapshot: Some(Box::new(snapshot)),
+                }
             }
         }
         Err(error) => ServerMessage::Error {
@@ -773,15 +839,51 @@ fn message_bytes(message: Message) -> Option<Vec<u8>> {
     }
 }
 
-async fn send_snapshot(socket: &mut WebSocket, snapshot: MatchSnapshot) -> Result<(), ()> {
-    send_server_message(
-        socket,
-        &ServerMessage::Snapshot {
+async fn send_snapshot(
+    socket: &mut WebSocket,
+    snapshot: MatchSnapshot,
+    scenario: &ScenarioDefinition,
+    seat: Player,
+) -> Result<(), ()> {
+    let message = if scenario.rules.fog.is_some() {
+        ServerMessage::SeatSnapshot {
+            protocol_version: PROTOCOL_VERSION,
+            snapshot: Box::new(seat_snapshot(&snapshot, scenario, seat)?),
+        }
+    } else {
+        ServerMessage::Snapshot {
             protocol_version: PROTOCOL_VERSION,
             snapshot: Box::new(snapshot),
-        },
-    )
-    .await
+        }
+    };
+    send_server_message(socket, &message).await
+}
+
+fn seat_snapshot(
+    snapshot: &MatchSnapshot,
+    scenario: &ScenarioDefinition,
+    seat: Player,
+) -> Result<SeatMatchSnapshot, ()> {
+    let projection = project_player_view(scenario, &snapshot.state, seat).map_err(|_| ())?;
+    Ok(SeatMatchSnapshot {
+        match_id: snapshot.match_id,
+        revision: snapshot.revision,
+        scenario_id: snapshot.scenario_id.clone(),
+        scenario_hash: snapshot.scenario_hash.clone(),
+        projection,
+        room_state: snapshot.room_state,
+        rematch_state: snapshot.rematch_state,
+    })
+}
+
+fn internal_projection_error() -> ServerMessage {
+    ServerMessage::Error {
+        protocol_version: PROTOCOL_VERSION,
+        code: ErrorCode::Internal,
+        message: "The private match view could not be constructed.".to_owned(),
+        retryable: true,
+        snapshot: None,
+    }
 }
 
 async fn send_error(socket: &mut WebSocket, message: &str) -> Result<(), ()> {
@@ -843,7 +945,7 @@ async fn close_connection(connections: &Arc<AsyncMutex<ConnectionRegistry>>, pee
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crownline_core::{Action, ClockSettings};
+    use crownline_core::{Action, ClockSettings, FOG_RULES_SCHEMA_VERSION, FogRules, MatchState};
 
     use crate::{
         actors::{CommandTiming, MatchExecutor},
@@ -1082,5 +1184,63 @@ mod tests {
         assert_eq!(latest.state.outstanding_draw_offer, Some(Player::South));
         assert_eq!(latest.rematch_state, Some(RematchState::Requested));
         assert_eq!(latest.room_state, ConnectionState::OpponentDisconnected);
+    }
+
+    #[test]
+    fn fog_wire_views_are_seat_distinct_and_omit_canonical_truth() {
+        let catalog = ScenarioCatalog::installed();
+        let mut scenario = catalog
+            .get("crownlines-standard")
+            .unwrap()
+            .definition
+            .clone();
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 3,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let canonical = MatchSnapshot {
+            match_id: Uuid::new_v4(),
+            revision: state.revision,
+            scenario_id: scenario.id.clone(),
+            scenario_hash: scenario.canonical_hash().unwrap(),
+            state_hash: state.canonical_hash().unwrap(),
+            state,
+            room_state: ConnectionState::Connected,
+            rematch_state: None,
+        };
+        let north = seat_snapshot(&canonical, &scenario, Player::North).unwrap();
+        let south = seat_snapshot(&canonical, &scenario, Player::South).unwrap();
+        assert_ne!(
+            north.projection.projection_hash,
+            south.projection.projection_hash
+        );
+        assert!(
+            north
+                .projection
+                .pieces
+                .values()
+                .filter(|piece| piece.owner == Player::South)
+                .all(|piece| north.projection.visible.contains(&piece.at))
+        );
+        assert!(
+            south
+                .projection
+                .pieces
+                .values()
+                .filter(|piece| piece.owner == Player::North)
+                .all(|piece| south.projection.visible.contains(&piece.at))
+        );
+        for view in [north, south] {
+            crownline_protocol::validate_seat_snapshot(&view).unwrap();
+            let wire = serde_json::to_string(&ServerMessage::SeatSnapshot {
+                protocol_version: PROTOCOL_VERSION,
+                snapshot: Box::new(view),
+            })
+            .unwrap();
+            assert!(!wire.contains("state_hash"));
+            assert!(!wire.contains("exploration"));
+            assert!(!wire.contains(&canonical.state_hash));
+        }
     }
 }

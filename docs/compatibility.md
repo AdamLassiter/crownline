@@ -8,7 +8,7 @@ scenario, journal, snapshot, or database is compatible.
 
 | Boundary | Current | Accepted by this build | Failure behavior |
 | --- | ---: | --- | --- |
-| Client/server protocol | 2 | Exactly 2 | HTTP 426 or WebSocket `incompatible_protocol` before seat creation/authentication. |
+| Client/server protocol | 3 | Exactly 3 | HTTP 426 or WebSocket `incompatible_protocol` before seat creation/authentication. |
 | Local save wrapper | 2 | 1 and 2 | Format 1 is migrated in memory; failures preserve the existing slot. |
 | Core save envelope | 2 | 1 and 2 through a scenario-aware reader | Format 1 is migrated in memory; unsupported versions return a recoverable error. |
 | Authoritative snapshot envelope | 2 | 1 and 2 through a scenario-aware reader | Format 1 is migrated in memory; unsupported versions return a recoverable error. |
@@ -17,8 +17,13 @@ scenario, journal, snapshot, or database is compatible.
 | Fog rules block | 1 | Exactly 1 when present | Omission or explicit `None` disables fog; unsupported nested versions fail scenario validation. |
 | Server database schema | 2 | Fresh/0, 1, or 2 | Forward migration to 2; any version above 2 aborts startup without migration. |
 
-“Exactly” on the wire is intentional: protocol 1 peers cannot interpret frozen
-promotion eligibility and are rejected rather than downgraded. Persisted format
+“Exactly” on the wire is intentional: protocol 2 peers cannot distinguish a
+canonical perfect-information snapshot from a private fog seat projection and
+are rejected rather than downgraded. Protocol 3 retains the protocol-2 canonical
+snapshot variants for perfect-information scenarios and adds separate
+`seat_snapshot`, `seat_acknowledgement`, and `seat_error` variants for fog
+matches. Those variants carry a validated projection hash and never a canonical
+state or state hash. Persisted format
 1 is now a supported product input because its migration paths have permanent
 tests.
 

@@ -16,6 +16,11 @@ pub(crate) enum FogPresentationPhase {
         scenario_id: String,
         revision: u64,
     },
+    OnlinePresenting {
+        seat: Player,
+        scenario_id: String,
+        revision: u64,
+    },
 }
 
 #[derive(Resource)]
@@ -48,13 +53,28 @@ impl FogPresentation {
         self.confirmed_this_frame
     }
 
+    pub(crate) fn install_online_view(&mut self, view: PlayerView) {
+        self.phase = FogPresentationPhase::OnlinePresenting {
+            seat: view.seat,
+            scenario_id: view.scenario_id.clone(),
+            revision: view.revision,
+        };
+        self.view = Some(view);
+        self.confirmed_this_frame = false;
+    }
+
     pub(crate) fn blocks_local_input(&self, game: &DisplayedGame) -> bool {
-        game.scenario.rules.fog.is_some()
-            && !matches!(
-                self.phase,
-                FogPresentationPhase::Presenting { player, revision, .. }
-                    if player == game.state.active_player && revision == game.state.revision
-            )
+        let local = matches!(
+            self.phase,
+            FogPresentationPhase::Presenting { player, revision, .. }
+                if player == game.state.active_player && revision == game.state.revision
+        );
+        let online = matches!(
+            self.phase,
+            FogPresentationPhase::OnlinePresenting { revision, .. }
+                if revision == game.state.revision
+        );
+        game.scenario.rules.fog.is_some() && !(local || online)
     }
 
     pub(crate) fn require_handoff(&mut self, game: &DisplayedGame) {
@@ -117,6 +137,16 @@ impl FogPresentation {
             revision,
         } = &self.phase
         else {
+            if let FogPresentationPhase::OnlinePresenting {
+                scenario_id,
+                revision,
+                ..
+            } = &self.phase
+                && *scenario_id == game.scenario.id
+                && *revision == game.state.revision
+            {
+                return;
+            }
             if matches!(self.phase, FogPresentationPhase::Disabled) {
                 self.require_handoff(game);
             }
@@ -220,7 +250,9 @@ pub(super) fn sync_handoff_curtain(
 ) {
     let awaiting = match fog.phase() {
         FogPresentationPhase::AwaitingHandoff { player } => Some(*player),
-        FogPresentationPhase::Disabled | FogPresentationPhase::Presenting { .. } => None,
+        FogPresentationPhase::Disabled
+        | FogPresentationPhase::Presenting { .. }
+        | FogPresentationPhase::OnlinePresenting { .. } => None,
     };
     for mut visibility in &mut curtain {
         *visibility = if awaiting.is_some() {

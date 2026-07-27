@@ -7,11 +7,15 @@ use std::{
 };
 
 use bevy::{ecs::system::SystemParam, prelude::*};
-use crownline_core::Action;
+use crownline_core::{
+    Action, ExplorationState, PlayerView, ViewMandatoryChoice, ViewTurnPhase,
+    scenario::Player,
+    state::{MandatoryChoice, Piece, TurnPhase},
+};
 use crownline_protocol::{
     ActionRequest, ClientMessage, ConnectionState, ErrorCode, MatchSnapshot, MutationContext,
-    MutationResult, PROTOCOL_VERSION, ReconnectToken, RematchState, ServerMessage,
-    validate_snapshot,
+    MutationResult, PROTOCOL_VERSION, ReconnectToken, RematchState, SeatMatchSnapshot,
+    SeatMutationResult, ServerMessage, validate_seat_snapshot, validate_snapshot,
 };
 use directories::ProjectDirs;
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -27,8 +31,8 @@ use crate::{
     online_lobby::{LobbyScreen, OnlineLobby, OnlineSeat},
     online_status::{AuthoritativePresentationSnapshot, OnlineRoomStateChanged},
     rendering::{
-        DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue, LocalTransitionNoticeLog,
-        OverlaySelection,
+        DisplayedGame, FogPresentation, HoveredBoardSquare, LocalTransitionEventQueue,
+        LocalTransitionNoticeLog, OverlaySelection,
     },
     ui_layout::SIDE_REGION_PERCENT,
 };
@@ -164,6 +168,8 @@ enum ConnectionEvent {
     Phase(ConnectionPhase),
     Snapshot(Box<MatchSnapshot>),
     Acknowledgement(Box<MutationResult>),
+    SeatSnapshot(Box<SeatMatchSnapshot>),
+    SeatAcknowledgement(Box<SeatMutationResult>),
     CommandRejected {
         failure: CommandFailure,
         retryable: bool,
@@ -548,6 +554,7 @@ struct ConnectionEventParams<'w> {
     room_states: MessageWriter<'w, OnlineRoomStateChanged>,
     control_resolutions: MessageWriter<'w, OnlineControlResolved>,
     rematch_states: MessageWriter<'w, OnlineRematchStateChanged>,
+    fog: ResMut<'w, FogPresentation>,
 }
 
 #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -573,6 +580,7 @@ fn poll_connection_events(
         mut room_states,
         mut control_resolutions,
         mut rematch_states,
+        mut fog,
     } = params;
     let Ok(events) = transport.events.lock() else {
         return;
@@ -667,6 +675,27 @@ fn poll_connection_events(
                 } else {
                     "Received an acknowledgement for a non-pending command."
                         .clone_into(&mut connection.status);
+                }
+            }
+            ConnectionEvent::SeatAcknowledgement(result) => {
+                let matches_pending = connection.pending_action.as_ref().is_some_and(|pending| {
+                    pending.request.context.match_id == result.match_id
+                        && pending.request.context.idempotency_key == result.idempotency_key
+                });
+                if matches_pending {
+                    connection.pending_action = None;
+                    outbox.locked = false;
+                    interaction.resolve_online("Command accepted by the server.");
+                } else if let Some(pending) = connection.pending_control.as_ref()
+                    && pending.idempotency_key == result.idempotency_key
+                {
+                    let kind = pending.kind;
+                    connection.pending_control = None;
+                    control_outbox.locked = false;
+                    control_resolutions.write(OnlineControlResolved {
+                        kind,
+                        accepted: true,
+                    });
                 }
             }
             ConnectionEvent::CommandRejected { failure, retryable } => {
@@ -811,8 +840,195 @@ fn poll_connection_events(
                     let _ = transport.commands.try_send(ConnectionCommand::Cancel);
                 }
             },
+            ConnectionEvent::SeatSnapshot(snapshot) => match reconcile_seat_snapshot(
+                &snapshot,
+                connection.active_match,
+                connection.last_snapshot.as_ref(),
+                &catalog,
+                &mut game,
+                &mut fog,
+                &mut selection,
+                &mut hovered,
+                &mut transitions,
+                &mut notices,
+            ) {
+                Ok(SnapshotDisposition::Replace | SnapshotDisposition::Equal) => {
+                    connection.active_match = Some(snapshot.match_id);
+                    connection.last_snapshot = Some(SnapshotIdentity {
+                        match_id: snapshot.match_id,
+                        scenario_id: snapshot.scenario_id.clone(),
+                        revision: snapshot.revision,
+                        state_hash: snapshot.projection.projection_hash.clone(),
+                    });
+                    connection.phase = if snapshot.room_state == ConnectionState::Finished
+                        || snapshot.projection.outcome.is_some()
+                    {
+                        ConnectionPhase::Terminal
+                    } else {
+                        ConnectionPhase::Connected
+                    };
+                    *flow = ClientFlow::OnlinePlaying;
+                    presentation_snapshots.write(AuthoritativePresentationSnapshot {
+                        clocks: snapshot.projection.clocks,
+                        active_player: snapshot.projection.active_player,
+                        phase: game.state.phase.clone(),
+                        terminal: snapshot.projection.outcome.is_some()
+                            || snapshot.room_state == ConnectionState::Finished,
+                        room_state: snapshot.room_state,
+                    });
+                    rematch_states.write(OnlineRematchStateChanged(snapshot.rematch_state));
+                }
+                Ok(SnapshotDisposition::Older) => {}
+                Ok(SnapshotDisposition::Diverged) => {
+                    connection.last_snapshot = None;
+                    connection.force_resync_requested = true;
+                    connection.phase = ConnectionPhase::Connecting;
+                }
+                Err(message) => {
+                    connection.phase = ConnectionPhase::Rejected;
+                    connection.status = message;
+                    let _ = transport.commands.try_send(ConnectionCommand::Cancel);
+                }
+            },
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reconcile_seat_snapshot(
+    snapshot: &SeatMatchSnapshot,
+    active_match: Option<Uuid>,
+    last_snapshot: Option<&SnapshotIdentity>,
+    catalog: &ScenarioCatalog,
+    game: &mut DisplayedGame,
+    fog: &mut FogPresentation,
+    selection: &mut OverlaySelection,
+    hovered: &mut HoveredBoardSquare,
+    transitions: &mut LocalTransitionEventQueue,
+    notices: &mut LocalTransitionNoticeLog,
+) -> Result<SnapshotDisposition, String> {
+    validate_seat_snapshot(snapshot)
+        .map_err(|_| "The server sent an invalid private match view.".to_owned())?;
+    if active_match.is_some_and(|match_id| match_id != snapshot.match_id) {
+        return Err("The server private view belongs to a different match.".to_owned());
+    }
+    let scenario = catalog
+        .0
+        .iter()
+        .find(|scenario| scenario.id == snapshot.scenario_id)
+        .ok_or_else(|| "The match scenario is not installed.".to_owned())?;
+    if scenario.canonical_hash().ok().as_deref() != Some(&snapshot.scenario_hash) {
+        return Err("The installed scenario differs from the server scenario.".to_owned());
+    }
+    let disposition = classify_seat_snapshot(last_snapshot, snapshot, fog.view());
+    if disposition != SnapshotDisposition::Replace {
+        return Ok(disposition);
+    }
+    game.scenario = scenario.clone();
+    apply_view_public_state(&snapshot.projection, &mut game.state);
+    fog.install_online_view(snapshot.projection.clone());
+    selection.piece = selection
+        .piece
+        .filter(|id| snapshot.projection.pieces.contains_key(id));
+    if hovered
+        .0
+        .is_some_and(|at| !at.is_within(snapshot.projection.board))
+    {
+        hovered.0 = None;
+    }
+    transitions.clear();
+    notices.entries.clear();
+    Ok(SnapshotDisposition::Replace)
+}
+
+fn classify_seat_snapshot(
+    last: Option<&SnapshotIdentity>,
+    incoming: &SeatMatchSnapshot,
+    displayed: Option<&PlayerView>,
+) -> SnapshotDisposition {
+    let Some(last) = last else {
+        return SnapshotDisposition::Replace;
+    };
+    if last.match_id != incoming.match_id || last.scenario_id != incoming.scenario_id {
+        return SnapshotDisposition::Replace;
+    }
+    if incoming.revision < last.revision {
+        return SnapshotDisposition::Older;
+    }
+    if incoming.revision > last.revision {
+        return SnapshotDisposition::Replace;
+    }
+    if incoming.projection.projection_hash == last.state_hash
+        && displayed.is_some_and(|view| view.projection_hash == incoming.projection.projection_hash)
+    {
+        SnapshotDisposition::Equal
+    } else {
+        SnapshotDisposition::Diverged
+    }
+}
+
+fn apply_view_public_state(view: &PlayerView, state: &mut crownline_core::MatchState) {
+    state.scenario_id.clone_from(&view.scenario_id);
+    state.revision = view.revision;
+    state.active_player = view.active_player;
+    state.turn_number = view.turn_number;
+    state.clocks = view.clocks;
+    state.outstanding_draw_offer = view.outstanding_draw_offer;
+    state.outcome = view.outcome;
+    state.en_passant = view.en_passant;
+    state.pieces = view
+        .pieces
+        .iter()
+        .map(|(id, piece)| {
+            (
+                *id,
+                Piece {
+                    id: piece.id,
+                    owner: piece.owner,
+                    kind: piece.kind,
+                    at: piece.at,
+                    origin: piece.origin,
+                    has_moved: piece.has_moved,
+                },
+            )
+        })
+        .collect();
+    let explored = view.squares.iter().map(|square| square.at).collect();
+    state.exploration = Some(match view.seat {
+        Player::North => ExplorationState {
+            north: explored,
+            south: std::collections::BTreeSet::new(),
+        },
+        Player::South => ExplorationState {
+            north: std::collections::BTreeSet::new(),
+            south: explored,
+        },
+    });
+    state.phase = match &view.phase {
+        ViewTurnPhase::Command | ViewTurnPhase::PrivateChoice { .. } => TurnPhase::Command,
+        ViewTurnPhase::OwnChoices { queue } => TurnPhase::ResolvingChoices {
+            queue: queue
+                .iter()
+                .map(|choice| match choice {
+                    ViewMandatoryChoice::Promote {
+                        pawn,
+                        site_index,
+                        eligibility,
+                    } => MandatoryChoice::Promote {
+                        pawn: *pawn,
+                        site_index: *site_index,
+                        eligibility: eligibility.clone(),
+                    },
+                    ViewMandatoryChoice::PlacePawn { settlement_index } => {
+                        MandatoryChoice::PlacePawn {
+                            settlement_index: *settlement_index,
+                            legal_squares: view.placement_intent_candidates(*settlement_index),
+                        }
+                    }
+                })
+                .collect(),
+        },
+    };
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1211,6 +1427,28 @@ fn handle_server_message(bytes: &[u8], events: &mpsc::SyncSender<ConnectionEvent
             let _ = events.send(ConnectionEvent::Acknowledgement(result.clone()));
             let _ = events.send(ConnectionEvent::Snapshot(Box::new(result.snapshot.clone())));
         }
+        ServerMessage::SeatSnapshot { snapshot, .. } => {
+            let _ = events.send(ConnectionEvent::SeatSnapshot(snapshot));
+        }
+        ServerMessage::SeatAcknowledgement { result, .. } => {
+            let _ = events.send(ConnectionEvent::SeatAcknowledgement(result.clone()));
+            let _ = events.send(ConnectionEvent::SeatSnapshot(Box::new(
+                result.snapshot.clone(),
+            )));
+        }
+        ServerMessage::SeatError {
+            code,
+            message,
+            retryable,
+            snapshot,
+            ..
+        } => {
+            if let Some(snapshot) = snapshot {
+                let _ = events.send(ConnectionEvent::SeatSnapshot(snapshot));
+            }
+            let failure = classify_command_failure(code, &message);
+            let _ = events.send(ConnectionEvent::CommandRejected { failure, retryable });
+        }
         ServerMessage::Error {
             code,
             message,
@@ -1256,6 +1494,15 @@ const fn server_message_version(message: &ServerMessage) -> u16 {
             protocol_version, ..
         }
         | ServerMessage::Error {
+            protocol_version, ..
+        }
+        | ServerMessage::SeatSnapshot {
+            protocol_version, ..
+        }
+        | ServerMessage::SeatAcknowledgement {
+            protocol_version, ..
+        }
+        | ServerMessage::SeatError {
             protocol_version, ..
         }
         | ServerMessage::ConnectionState {
@@ -1458,7 +1705,7 @@ fn write_secret(path: &Path, bytes: &[u8]) -> Result<(), ()> {
 mod tests {
     use super::*;
     use crownline_core::{
-        MatchState,
+        FOG_RULES_SCHEMA_VERSION, FogRules, MatchState, project_player_view,
         scenario::{Coord, Player, ScenarioDefinition},
         state::{MandatoryChoice, MatchOutcome, OutcomeReason, TurnPhase},
     };
@@ -1486,6 +1733,50 @@ mod tests {
         assert_eq!(retry_delay(2, -0.2), Duration::from_millis(800));
         assert_eq!(retry_delay(2, 0.2), Duration::from_millis(1200));
         assert_eq!(retry_delay(99, 0.2), RETRY_CAP);
+    }
+
+    #[test]
+    fn private_snapshot_ordering_uses_projection_hash_and_applies_only_disclosed_state() {
+        let (mut scenario, canonical) = fixture_snapshot();
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 3,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let projection = project_player_view(&scenario, &state, Player::South).unwrap();
+        let snapshot = SeatMatchSnapshot {
+            match_id: canonical.match_id,
+            revision: projection.revision,
+            scenario_id: scenario.id.clone(),
+            scenario_hash: scenario.canonical_hash().unwrap(),
+            projection: projection.clone(),
+            room_state: ConnectionState::Connected,
+            rematch_state: None,
+        };
+        let identity = SnapshotIdentity {
+            match_id: snapshot.match_id,
+            scenario_id: snapshot.scenario_id.clone(),
+            revision: snapshot.revision,
+            state_hash: snapshot.projection.projection_hash.clone(),
+        };
+        assert_eq!(
+            classify_seat_snapshot(Some(&identity), &snapshot, Some(&projection)),
+            SnapshotDisposition::Equal
+        );
+        let mut displayed = canonical.state;
+        apply_view_public_state(&projection, &mut displayed);
+        assert_eq!(displayed.revision, projection.revision);
+        assert_eq!(
+            displayed
+                .pieces
+                .keys()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            projection.pieces.keys().copied().collect()
+        );
+        assert!(displayed.pieces.values().all(|piece| {
+            piece.owner == Player::South || projection.visible.contains(&piece.at)
+        }));
     }
 
     #[test]

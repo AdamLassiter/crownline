@@ -4,14 +4,14 @@ use std::collections::{BTreeMap, VecDeque};
 
 use crownline_core::{
     Action, ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES, MatchState,
-    scenario::Player,
+    PlayerView, scenario::Player,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use uuid::Uuid;
 
 /// Protocol version supported by this build.
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_HTTP_REQUEST_BYTES: usize = 8 * 1024;
 pub const MAX_CLIENT_MESSAGE_BYTES: usize = 16 * 1024;
 pub const MAX_PLAYER_NAME_CHARS: usize = 24;
@@ -193,6 +193,21 @@ pub enum ServerMessage {
         protocol_version: u16,
         result: Box<MutationResult>,
     },
+    SeatSnapshot {
+        protocol_version: u16,
+        snapshot: Box<SeatMatchSnapshot>,
+    },
+    SeatAcknowledgement {
+        protocol_version: u16,
+        result: Box<SeatMutationResult>,
+    },
+    SeatError {
+        protocol_version: u16,
+        code: ErrorCode,
+        message: String,
+        retryable: bool,
+        snapshot: Option<Box<SeatMatchSnapshot>>,
+    },
     Error {
         protocol_version: u16,
         code: ErrorCode,
@@ -210,6 +225,25 @@ pub enum ServerMessage {
         match_id: Uuid,
         state: RematchState,
     },
+}
+
+/// An authenticated fog-of-war snapshot containing no canonical state or hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatMatchSnapshot {
+    pub match_id: Uuid,
+    pub revision: u64,
+    pub scenario_id: String,
+    pub scenario_hash: String,
+    pub projection: PlayerView,
+    pub room_state: ConnectionState,
+    pub rematch_state: Option<RematchState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SeatMutationResult {
+    pub match_id: Uuid,
+    pub idempotency_key: Uuid,
+    pub snapshot: SeatMatchSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -502,12 +536,56 @@ pub fn validate_snapshot(snapshot: &MatchSnapshot) -> Result<(), ProtocolError> 
     Ok(())
 }
 
+/// Validates public synchronization metadata and projection-hash integrity.
+///
+/// # Errors
+///
+/// Returns [`ProtocolError::InvalidSnapshot`] for revision, scenario, hash, or
+/// required-metadata drift.
+pub fn validate_seat_snapshot(snapshot: &SeatMatchSnapshot) -> Result<(), ProtocolError> {
+    if snapshot.revision != snapshot.projection.revision {
+        return Err(ProtocolError::InvalidSnapshot(
+            "revision does not match projection".to_owned(),
+        ));
+    }
+    if snapshot.scenario_id != snapshot.projection.scenario_id {
+        return Err(ProtocolError::InvalidSnapshot(
+            "scenario ID does not match projection".to_owned(),
+        ));
+    }
+    let hash = snapshot
+        .projection
+        .calculate_hash()
+        .map_err(|error| ProtocolError::InvalidSnapshot(error.to_string()))?;
+    if snapshot.projection.projection_hash != hash {
+        return Err(ProtocolError::InvalidSnapshot(
+            "projection hash does not match projection".to_owned(),
+        ));
+    }
+    if snapshot.scenario_hash.is_empty() {
+        return Err(ProtocolError::InvalidSnapshot(
+            "scenario hash is missing".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// Builds the stable stale-revision response with the current authoritative snapshot.
 pub fn stale_revision_message(snapshot: MatchSnapshot) -> ServerMessage {
     ServerMessage::Error {
         protocol_version: PROTOCOL_VERSION,
         code: ErrorCode::StaleRevision,
         message: "The match changed; the current state has been restored.".to_owned(),
+        retryable: true,
+        snapshot: Some(Box::new(snapshot)),
+    }
+}
+
+pub fn stale_seat_revision_message(snapshot: SeatMatchSnapshot) -> ServerMessage {
+    ServerMessage::SeatError {
+        protocol_version: PROTOCOL_VERSION,
+        code: ErrorCode::StaleRevision,
+        message: "The match changed; the current private view has been restored.".to_owned(),
         retryable: true,
         snapshot: Some(Box::new(snapshot)),
     }
