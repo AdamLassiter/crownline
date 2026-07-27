@@ -4,12 +4,13 @@ Layer settlements, governance, promotion, Hold, clocks, and terminal outcomes on
 
 ## Status
 
-- [x] Done
+- [ ] In progress
 
 ## Implementation notes
 
 - Canonical actions now resolve governance, settlement claim/transfer/development/production, promotion, stable turn-start choices, and Move/Hold through one deterministic reducer.
 - Optional host-driven clocks, timed journals, full-state repetition, draw/resignation controls, and immutable typed outcomes complete the match-flow layer without adding wall-clock or Bevy dependencies to core rules.
+- Stories 04.01-04.04 are complete. Story 04.05 reopens this epic to make stronger promotion recruits depend on current realm control.
 
 ## Stories
 
@@ -17,6 +18,7 @@ Layer settlements, governance, promotion, Hold, clocks, and terminal outcomes on
 - [04.02 Settlement lifecycle](04.02-settlements/04.02-story.md)
 - [04.03 Promotion and turn phases](04.03-turn-phases/04.03-story.md)
 - [04.04 Clocks and outcomes](04.04-outcomes/04.04-story.md)
+- [04.05 Promotion recruitment progression](04.05-promotion-recruitment-progression/04.05-story.md)
 
 ## Dependencies
 
@@ -27,7 +29,8 @@ Layer settlements, governance, promotion, Hold, clocks, and terminal outcomes on
 - Realm effects are automatic consequences of canonical actions.
 - Timing is deterministic across local play, server execution, save/load, and replay.
 - Match outcomes cover checkmate, timeout, resignation, accepted draw, and threefold repetition.
+- Promotion recruitment progresses from Knights through Bishops and Rooks to Queens as current settlement control grows.
 
 ## Cross-cutting concerns
 
-- Explainable transitions, lineage cleanup, clock authority, and complete-state repetition.
+- Explainable transitions, lineage cleanup, clock authority, complete-state repetition, and scenario-authored promotion balance.
