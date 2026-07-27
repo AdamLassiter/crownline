@@ -324,8 +324,8 @@ fn spawn_guided_browser(mut commands: Commands) {
                     ..default()
                 },
                 children![
-                    guided_button("Previous [←]", GuidedControl::Previous),
-                    guided_button("Next [→]", GuidedControl::Next),
+                    guided_button("Previous [<-]", GuidedControl::Previous),
+                    guided_button("Next [->]", GuidedControl::Next),
                     guided_button("Start [Enter]", GuidedControl::Start),
                     guided_button("Resume [R]", GuidedControl::Resume),
                     guided_button("Reset [Delete]", GuidedControl::Reset),
@@ -1025,7 +1025,7 @@ fn sync_guided_ui(
     mut browser_texts: Query<&mut Text, (With<GuidedBrowserText>, Without<GuidedObjectiveText>)>,
     mut objective_roots: Query<&mut Node, With<GuidedObjectiveRoot>>,
     mut objective_texts: Query<&mut Text, (With<GuidedObjectiveText>, Without<GuidedBrowserText>)>,
-    mut open_buttons: Query<&mut Visibility, With<GuidedOpenButton>>,
+    mut open_buttons: Query<&mut Visibility, (With<GuidedOpenButton>, Without<GuidedBrowserRoot>)>,
 ) {
     for mut visibility in &mut browser_roots {
         *visibility = if runtime.browser_open {

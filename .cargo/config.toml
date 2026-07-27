@@ -1,0 +1,2 @@
+[alias]
+bevy-check = ['exec', 'bevy-check', 'src']
