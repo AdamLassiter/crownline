@@ -197,6 +197,7 @@ fn warden_challenge_reply_is_legal_deterministic_and_bounded() {
     };
     let first = search();
     let second = search();
+    println!("warden guided evidence: {first:?}");
     assert_eq!(first, second);
     assert!(first.nodes <= config.max_nodes);
     assert!(first.quiescence_nodes <= config.max_quiescence_nodes);

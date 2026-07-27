@@ -49,6 +49,20 @@ MIT OR Apache-2.0; release archives include the applicable license and notices.
 Click selection is also available. A click captured by a menu or information
 panel never falls through to the board.
 
+## Guided lessons and AI challenges
+
+From local setup, press `G` to open the guided browser. Choose with
+PageUp/PageDown, start or resume with Enter, and return with Escape. Guided play
+uses normal movement, realm, promotion, check, and outcome rules; its scenarios
+do not appear in competitive local or online setup.
+
+The objective panel explains the current stage. Press `J` to reveal the next
+progressive hint and `T` to retry the stage. Reset requires two explicit
+requests. Progress, retries, hint counts, and best action/turn counts are stored
+locally in a separate atomic `guided-progress.json`; ordinary save slots are not
+used or deleted. Apprentice, Steward, and Warden are deterministic local AI
+effort profiles, not validated human skill ratings.
+
 ## Quick start: private online room
 
 An operator must first provide the `wss://` server address. Hosting instructions
@@ -91,6 +105,7 @@ the same room setup.
 | Context | Keyboard controls |
 | --- | --- |
 | Local setup | Tab edit names; `X` swap assignments; PageUp/PageDown scenario; `C`, `-`/`+`, `,`/`.` clock; `F2` start; `F3` online. |
+| Guided browser/play | `G` open from setup; PageUp/PageDown choose; Enter start/resume; `J` hint; `T` retry; Escape leave/back. |
 | Board | Arrows focus; Enter select/move; Escape release; `H` Hold; Shift + configured camera key (defaults: W/A/S/D pan, Q/E zoom, `F` reset); mouse wheel/drag also work. |
 | Mandatory promotion | `1` Queen, `2` Rook, `3` Bishop, `4` Knight. The same four buttons are clickable; locked choices report their required score without submitting. |
 | Mandatory Pawn placement | Arrows cycle only legal adjacent squares; Enter confirms; Escape returns focus to the required choice. |
@@ -213,9 +228,10 @@ The reproducible evidence matrix is in
 
 ## Known exclusions
 
-The initial release has no AI opponent, public matchmaking, spectators, player
+The initial release has no online AI, public matchmaking, spectators, player
 accounts, factions/asymmetric rules, scenario editor, campaign, web client, or
-mobile client. It is two-player hot-seat or private-room play only. It also has
+mobile client. Competitive play is two-player hot-seat or private-room play;
+AI is limited to local guided practice and challenges. It also has
 no random combat, unit health, resource inventory, worker units, technology
 tree or separate economic victory. Hidden information exists only in scenarios
 that explicitly enable the fog rules block.

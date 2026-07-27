@@ -1001,8 +1001,20 @@ Each player receives:
 * Kings, Queens, Rooks and Bishops govern settlements through attack lines.
 * Governed settlements develop over three turns.
 * Established settlements produce one additional Pawn.
-* Pawns promote after surviving one turn on a promotion site.
+* Pawns become promotion candidates at authored sites and promote after the
+  scenario's survival-cycle requirement.
+* Promotion recruitment follows current realm control: Knight is always
+  available, then Bishop, Rook, and Queen at the authored 2/4/8 thresholds.
 * Terrain modifies movement lines but never combat strength.
+
+### Guided play and local opponents
+
+The prototype includes data-authored lessons, assessments, and replayable
+challenges that use the normal reducer without tutorial-only legality. Focused
+lessons lead into small-map practice against deterministic Apprentice, Steward,
+or Warden search profiles. Exact challenges archive exhaustive bounded solution
+sets; heuristic AI is used only for open-ended play. Difficulty names describe
+configured effort until representative human sessions validate the progression.
 
 ### Prototype questions
 

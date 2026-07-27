@@ -44,3 +44,12 @@ These are deterministic balance checks, not human reports from the `F8` capture
 workflow. They answer the narrow progression and reachability questions without
 claiming enjoyment, comprehension, match pacing, or first-player balance; those
 remain open in Task 10.03.01.
+
+## Guided scenarios
+
+[`guided-validation.md`](guided-validation.md) inventories the automated
+construction, objective, exhaustive challenge, AI, persistence, accessibility,
+and regression evidence for guided content. It explicitly separates those
+results from the human comprehension and difficulty evidence still required.
+Use [`guided-session-protocol.md`](guided-session-protocol.md) for consented,
+non-identifying new-player and experienced-player sessions.
