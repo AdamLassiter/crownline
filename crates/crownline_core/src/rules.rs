@@ -519,6 +519,7 @@ pub fn apply_action(
             actual: scenario.id.clone(),
         });
     }
+    validate_promotion_eligibility(scenario, state)?;
     if state.outcome.is_some() {
         return Err(TransitionError::MatchFinished);
     }
@@ -1158,6 +1159,69 @@ pub fn legal_mandatory_choice_actions(state: &MatchState) -> Vec<Action> {
             })
             .collect(),
     }
+}
+
+/// Validates every queued promotion snapshot against the scenario and its batch peers.
+///
+/// # Errors
+///
+/// Returns `InvalidPromotionEligibility` for a malformed, inconsistent, or mixed batch.
+pub fn validate_promotion_eligibility(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+) -> Result<(), TransitionError> {
+    let TurnPhase::ResolvingChoices { queue } = &state.phase else {
+        return Ok(());
+    };
+    let mut batch: Option<&PromotionEligibility> = None;
+    for choice in queue {
+        let MandatoryChoice::Promote { eligibility, .. } = choice else {
+            continue;
+        };
+        let expected = PromotionEligibility::from_control(
+            eligibility.control,
+            scenario.rules.promotion_unlocks,
+        );
+        if *eligibility != expected || batch.is_some_and(|first| first != eligibility) {
+            return Err(TransitionError::InvalidPromotionEligibility);
+        }
+        batch = Some(eligibility);
+    }
+    Ok(())
+}
+
+/// Rebuilds one legacy pending promotion batch from current canonical control.
+///
+/// # Errors
+///
+/// Returns scenario, state, identity, settlement, or eligibility validation errors.
+pub fn migrate_promotion_eligibility(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+) -> Result<(), TransitionError> {
+    let has_promotions = matches!(
+        &state.phase,
+        TurnPhase::ResolvingChoices { queue }
+            if queue.iter().any(|choice| matches!(choice, MandatoryChoice::Promote { .. }))
+    );
+    if !has_promotions {
+        return Ok(());
+    }
+    let control = realm_control_score(scenario, state, state.active_player)?;
+    let eligibility = PromotionEligibility::from_control(control, scenario.rules.promotion_unlocks);
+    let TurnPhase::ResolvingChoices { queue } = &mut state.phase else {
+        return Ok(());
+    };
+    for choice in queue {
+        if let MandatoryChoice::Promote {
+            eligibility: pending,
+            ..
+        } = choice
+        {
+            *pending = eligibility.clone();
+        }
+    }
+    validate_promotion_eligibility(scenario, state)
 }
 
 fn append_mandatory_choices(state: &mut MatchState, choices: Vec<MandatoryChoice>) {

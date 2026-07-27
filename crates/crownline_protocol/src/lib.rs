@@ -11,7 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 /// Protocol version supported by this build.
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_HTTP_REQUEST_BYTES: usize = 8 * 1024;
 pub const MAX_CLIENT_MESSAGE_BYTES: usize = 16 * 1024;
 pub const MAX_PLAYER_NAME_CHARS: usize = 24;
@@ -547,7 +547,11 @@ fn decode_bounded<T: DeserializeOwned>(bytes: &[u8], maximum: usize) -> Result<T
 
 #[cfg(test)]
 mod tests {
-    use crownline_core::{ClockSettings, scenario::Player};
+    use crownline_core::{
+        ClockSettings, PromotionEligibility, RealmControlScore,
+        scenario::{Player, PromotionUnlockRules},
+        state::{MandatoryChoice, PromotionKind, TurnPhase},
+    };
 
     use super::*;
 
@@ -743,6 +747,55 @@ mod tests {
             unreachable!();
         };
         assert_eq!(*decoded, result);
+    }
+
+    #[test]
+    fn network_snapshot_preserves_frozen_promotion_eligibility() {
+        let mut snapshot = fixture_snapshot();
+        let pawn = *snapshot.state.pieces.keys().next().unwrap();
+        let control = RealmControlScore {
+            owned_settlements: 2,
+            governed_settlements: 2,
+            established_settlements: 0,
+        };
+        let eligibility =
+            PromotionEligibility::from_control(control, PromotionUnlockRules::default());
+        assert!(eligibility.allows(PromotionKind::Rook));
+        assert!(!eligibility.allows(PromotionKind::Queen));
+        snapshot.state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::Promote {
+                pawn,
+                site_index: 0,
+                eligibility: eligibility.clone(),
+            }],
+        };
+        snapshot.state_hash = snapshot.state.canonical_hash().unwrap();
+
+        let message = ServerMessage::Snapshot {
+            protocol_version: PROTOCOL_VERSION,
+            snapshot: Box::new(snapshot.clone()),
+        };
+        let decoded: ServerMessage =
+            serde_json::from_slice(&serde_json::to_vec(&message).unwrap()).unwrap();
+        assert_eq!(decoded, message);
+        let ServerMessage::Snapshot {
+            snapshot: decoded, ..
+        } = decoded
+        else {
+            unreachable!();
+        };
+        assert_eq!(validate_snapshot(&decoded), Ok(()));
+        let TurnPhase::ResolvingChoices { queue } = &decoded.state.phase else {
+            panic!("promotion phase must survive network decoding");
+        };
+        let MandatoryChoice::Promote {
+            eligibility: decoded,
+            ..
+        } = &queue[0]
+        else {
+            panic!("promotion choice must survive network decoding");
+        };
+        assert_eq!(decoded, &eligibility);
     }
 
     #[test]

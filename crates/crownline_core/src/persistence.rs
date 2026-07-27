@@ -11,12 +11,13 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    scenario::SCENARIO_SCHEMA_VERSION,
+    rules::{migrate_promotion_eligibility, validate_promotion_eligibility},
+    scenario::{SCENARIO_SCHEMA_VERSION, ScenarioDefinition},
     state::{MatchState, TransitionError},
 };
 
-pub const SAVE_FORMAT_VERSION: u16 = 1;
-pub const SNAPSHOT_FORMAT_VERSION: u16 = 1;
+pub const SAVE_FORMAT_VERSION: u16 = 2;
+pub const SNAPSHOT_FORMAT_VERSION: u16 = 2;
 pub const MAX_PERSISTED_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +132,46 @@ impl SnapshotEnvelope {
         Ok(envelope)
     }
 
+    /// Reads a snapshot and migrates the promotion snapshot added in format 2.
+    ///
+    /// # Errors
+    ///
+    /// Returns recoverable format, scenario, migration, and integrity errors.
+    pub fn from_json_with_scenario(
+        bytes: &[u8],
+        scenario: &ScenarioDefinition,
+    ) -> Result<Self, PersistenceError> {
+        check_size(bytes)?;
+        let mut value: Value = serde_json::from_slice(bytes)
+            .map_err(|error| PersistenceError::MalformedJson(error.to_string()))?;
+        let source_version = declared_version(&value)?;
+        if source_version == SNAPSHOT_FORMAT_VERSION {
+            let envelope = Self::from_json(bytes)?;
+            validate_envelope_scenario(&envelope.scenario_id, scenario)?;
+            validate_promotion_eligibility(scenario, &envelope.state)
+                .map_err(PersistenceError::State)?;
+            return Ok(envelope);
+        }
+        if source_version != 1 {
+            return Err(PersistenceError::UnsupportedSnapshotVersion {
+                found: source_version,
+                current: SNAPSHOT_FORMAT_VERSION,
+            });
+        }
+        set_version_fields(&mut value, SNAPSHOT_FORMAT_VERSION)?;
+        let mut envelope: Self = serde_json::from_value(value)
+            .map_err(|error| PersistenceError::MalformedJson(error.to_string()))?;
+        validate_envelope_scenario(&envelope.scenario_id, scenario)?;
+        migrate_promotion_eligibility(scenario, &mut envelope.state)
+            .map_err(|error| migration_error(source_version, &error))?;
+        envelope.state_hash = envelope
+            .state
+            .canonical_hash()
+            .map_err(PersistenceError::State)?;
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
     fn validate(&self) -> Result<(), PersistenceError> {
         validate_payload(
             self.format_version,
@@ -194,6 +235,44 @@ impl SaveReader {
         }
         let envelope: SaveEnvelope = serde_json::from_value(value)
             .map_err(|error| PersistenceError::MalformedJson(error.to_string()))?;
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    /// Reads a save and migrates the promotion snapshot added in format 2.
+    ///
+    /// # Errors
+    ///
+    /// Returns recoverable format, scenario, migration, and integrity errors.
+    pub fn read_with_scenario(
+        &self,
+        bytes: &[u8],
+        scenario: &ScenarioDefinition,
+    ) -> Result<SaveEnvelope, PersistenceError> {
+        check_size(bytes)?;
+        let mut value: Value = serde_json::from_slice(bytes)
+            .map_err(|error| PersistenceError::MalformedJson(error.to_string()))?;
+        let source_version = declared_version(&value)?;
+        if source_version == SAVE_FORMAT_VERSION {
+            let envelope = self.read(bytes)?;
+            validate_envelope_scenario(&envelope.scenario_id, scenario)?;
+            validate_promotion_eligibility(scenario, &envelope.state)
+                .map_err(PersistenceError::State)?;
+            return Ok(envelope);
+        }
+        if source_version != 1 {
+            return self.read(bytes);
+        }
+        set_version_fields(&mut value, SAVE_FORMAT_VERSION)?;
+        let mut envelope: SaveEnvelope = serde_json::from_value(value)
+            .map_err(|error| PersistenceError::MalformedJson(error.to_string()))?;
+        validate_envelope_scenario(&envelope.scenario_id, scenario)?;
+        migrate_promotion_eligibility(scenario, &mut envelope.state)
+            .map_err(|error| migration_error(source_version, &error))?;
+        envelope.state_hash = envelope
+            .state
+            .canonical_hash()
+            .map_err(PersistenceError::State)?;
         envelope.validate()?;
         Ok(envelope)
     }
@@ -294,6 +373,8 @@ pub enum PersistenceError {
     MissingFormatVersion,
     #[error("save format {found} is unsupported; current format is {current}")]
     UnsupportedSaveVersion { found: u16, current: u16 },
+    #[error("snapshot format {found} is unsupported; current format is {current}")]
+    UnsupportedSnapshotVersion { found: u16, current: u16 },
     #[error("persistence format {found} does not match expected format {expected}")]
     WrongFormatVersion { found: u16, expected: u16 },
     #[error("migration from save format {source_version} failed: {message}")]
@@ -387,6 +468,41 @@ fn declared_version(value: &Value) -> Result<u16, PersistenceError> {
         .ok_or(PersistenceError::MissingFormatVersion)
 }
 
+fn set_version_fields(value: &mut Value, format_version: u16) -> Result<(), PersistenceError> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| PersistenceError::MalformedJson("envelope must be an object".to_owned()))?;
+    object.insert("format_version".to_owned(), Value::from(format_version));
+    object.insert(
+        "scenario_schema_version".to_owned(),
+        Value::from(SCENARIO_SCHEMA_VERSION),
+    );
+    Ok(())
+}
+
+fn validate_envelope_scenario(
+    envelope_scenario: &str,
+    scenario: &ScenarioDefinition,
+) -> Result<(), PersistenceError> {
+    scenario
+        .validate()
+        .map_err(|errors| PersistenceError::State(TransitionError::InvalidScenario(errors)))?;
+    if scenario.schema_version != SCENARIO_SCHEMA_VERSION || envelope_scenario != scenario.id {
+        return Err(PersistenceError::ScenarioMismatch {
+            envelope: envelope_scenario.to_owned(),
+            state: scenario.id.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn migration_error(source_version: u16, error: &TransitionError) -> PersistenceError {
+    PersistenceError::MigrationFailed {
+        source_version,
+        message: error.to_string(),
+    }
+}
+
 fn atomic_error(stage: AtomicWriteStage, message: String) -> PersistenceError {
     PersistenceError::AtomicWrite { stage, message }
 }
@@ -408,8 +524,8 @@ mod tests {
 
     use super::*;
 
-    fn state_with_variants() -> MatchState {
-        let scenario = ScenarioDefinition {
+    fn persistence_scenario() -> ScenarioDefinition {
+        ScenarioDefinition {
             schema_version: SCENARIO_SCHEMA_VERSION,
             id: "persistence-test".to_owned(),
             metadata: ScenarioMetadata {
@@ -455,7 +571,11 @@ mod tests {
                 army_setup: ArmySetup::Custom,
                 ..ScenarioRules::default()
             },
-        };
+        }
+    }
+
+    fn state_with_variants() -> MatchState {
+        let scenario = persistence_scenario();
         let mut state = MatchState::from_scenario(&scenario).unwrap();
         let pawn = state
             .pieces
@@ -497,6 +617,68 @@ mod tests {
         let snapshot = SnapshotEnvelope::new("0.1.0-test", state).unwrap();
         let decoded = SnapshotEnvelope::from_json(&snapshot.to_json().unwrap()).unwrap();
         assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn format_one_save_and_snapshot_migrate_one_shared_promotion_batch() {
+        let scenario = persistence_scenario();
+        let state = state_with_variants();
+
+        let legacy_value = |mut value: Value| {
+            value["format_version"] = Value::from(1);
+            value["scenario_schema_version"] = Value::from(1);
+            value["state_hash"] = Value::from("legacy-state-hash");
+            let queue = value
+                .pointer_mut("/state/phase/resolving_choices/queue")
+                .and_then(Value::as_array_mut)
+                .expect("fixture has a choice queue");
+            let second_promotion = queue[0].clone();
+            queue.push(second_promotion);
+            for choice in queue {
+                if let Some(promote) = choice.get_mut("promote").and_then(Value::as_object_mut) {
+                    promote.remove("eligibility");
+                }
+            }
+            value
+        };
+
+        let save = SaveEnvelope::new("0.1.0-test", state.clone()).unwrap();
+        let legacy_save = legacy_value(serde_json::to_value(save).unwrap());
+        let migrated = SaveReader::new()
+            .read_with_scenario(&serde_json::to_vec(&legacy_save).unwrap(), &scenario)
+            .unwrap();
+        assert_eq!(migrated.format_version, SAVE_FORMAT_VERSION);
+        assert_eq!(migrated.scenario_schema_version, SCENARIO_SCHEMA_VERSION);
+        let TurnPhase::ResolvingChoices { queue } = &migrated.state.phase else {
+            panic!("migration preserves choices");
+        };
+        let snapshots = queue
+            .iter()
+            .filter_map(|choice| match choice {
+                MandatoryChoice::Promote { eligibility, .. } => Some(eligibility),
+                MandatoryChoice::PlacePawn { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0], snapshots[1]);
+        assert_eq!(snapshots[0], &PromotionEligibility::default());
+        assert_eq!(
+            migrated.state_hash,
+            migrated.state.canonical_hash().unwrap()
+        );
+
+        let snapshot = SnapshotEnvelope::new("0.1.0-test", state).unwrap();
+        let legacy_snapshot = legacy_value(serde_json::to_value(snapshot).unwrap());
+        let migrated = SnapshotEnvelope::from_json_with_scenario(
+            &serde_json::to_vec(&legacy_snapshot).unwrap(),
+            &scenario,
+        )
+        .unwrap();
+        assert_eq!(migrated.format_version, SNAPSHOT_FORMAT_VERSION);
+        assert_eq!(
+            migrated.state_hash,
+            migrated.state.canonical_hash().unwrap()
+        );
     }
 
     #[test]

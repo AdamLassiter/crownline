@@ -18,14 +18,16 @@ pub use journal::{
     ActionJournal, AppendOutcome, IdempotencyKey, JournalError, JournalRecord, ReplayDivergence,
 };
 pub use persistence::{
-    AtomicSaveStorage, AtomicWriteStage, MAX_PERSISTED_BYTES, PersistenceError, SaveEnvelope,
-    SaveReader, SnapshotEnvelope, write_bytes_atomically, write_save_atomically,
+    AtomicSaveStorage, AtomicWriteStage, MAX_PERSISTED_BYTES, PersistenceError,
+    SAVE_FORMAT_VERSION, SNAPSHOT_FORMAT_VERSION, SaveEnvelope, SaveReader, SnapshotEnvelope,
+    write_bytes_atomically, write_save_atomically,
 };
 pub use rules::{
     AttackLine, BlockedGovernanceLine, GovernanceBlocker, GovernanceReport, LegalMove,
     MoveInspection, MoveKind, MoveUnavailability, Transition, TransitionEvent, apply_action,
     attack_lines_on, governance_report, inspect_move, is_in_check, legal_mandatory_choice_actions,
-    legal_moves, pawn_placement_squares, realm_control_score,
+    legal_moves, migrate_promotion_eligibility, pawn_placement_squares, realm_control_score,
+    validate_promotion_eligibility,
 };
 pub use scenario::{PromotionUnlockRules, ScenarioDefinition, ScenarioError, ScenarioHashError};
 pub use state::{Action, MatchState, PromotionEligibility, RealmControlScore, TransitionError};

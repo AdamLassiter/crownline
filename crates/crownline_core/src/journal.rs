@@ -12,7 +12,7 @@ use crate::{
     state::{Action, ClockState, MatchState, TransitionError},
 };
 
-pub const JOURNAL_FORMAT_VERSION: u16 = 1;
+pub const JOURNAL_FORMAT_VERSION: u16 = 2;
 pub const MAX_JOURNAL_RECORDS: usize = 100_000;
 pub const MAX_JOURNAL_BYTES: usize = 16 * 1024 * 1024;
 
@@ -255,6 +255,86 @@ impl ActionJournal {
         Ok(journal)
     }
 
+    /// Parses a journal and rebuilds format-1 records under current scenario rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed corruption, compatibility, migration, replay, or capacity errors.
+    pub fn from_json_with_scenario(
+        bytes: &[u8],
+        scenario: &ScenarioDefinition,
+    ) -> Result<Self, JournalError> {
+        check_size(bytes)?;
+        let legacy: Self = serde_json::from_slice(bytes)
+            .map_err(|error| JournalError::MalformedJson(error.to_string()))?;
+        if legacy.format_version == JOURNAL_FORMAT_VERSION {
+            legacy.validate_header(scenario)?;
+            return Ok(legacy);
+        }
+        if legacy.format_version != 1 {
+            return Err(JournalError::UnsupportedVersion {
+                found: legacy.format_version,
+                current: JOURNAL_FORMAT_VERSION,
+            });
+        }
+        legacy.migrate_format_one(scenario)
+    }
+
+    fn migrate_format_one(self, scenario: &ScenarioDefinition) -> Result<Self, JournalError> {
+        let source_version = self.format_version;
+        if self.application_version.trim().is_empty()
+            || self.scenario_schema_version != 1
+            || self.scenario_id != scenario.id
+            || scenario.schema_version != SCENARIO_SCHEMA_VERSION
+            || self.records.len() > MAX_JOURNAL_RECORDS
+        {
+            return Err(JournalError::MigrationFailed {
+                source_version,
+                message: "legacy journal metadata is incompatible".to_owned(),
+            });
+        }
+        let mut state = MatchState::from_scenario(scenario).map_err(JournalError::Transition)?;
+        state.clocks = self.initial_clocks;
+        let mut migrated = Self {
+            format_version: JOURNAL_FORMAT_VERSION,
+            application_version: self.application_version,
+            scenario_schema_version: SCENARIO_SCHEMA_VERSION,
+            scenario_id: self.scenario_id,
+            initial_state_hash: hash(&state)?,
+            initial_clocks: self.initial_clocks,
+            records: Vec::with_capacity(self.records.len()),
+        };
+        for record in self.records {
+            if record.revision_before != state.revision {
+                return Err(JournalError::MigrationFailed {
+                    source_version,
+                    message: "legacy journal revisions are not contiguous".to_owned(),
+                });
+            }
+            let outcome = migrated
+                .append_timed(
+                    scenario,
+                    &state,
+                    record.idempotency_key,
+                    &record.action,
+                    record.elapsed_millis,
+                )
+                .map_err(|error| JournalError::MigrationFailed {
+                    source_version,
+                    message: error.to_string(),
+                })?;
+            let AppendOutcome::Accepted(transition) = outcome else {
+                return Err(JournalError::MigrationFailed {
+                    source_version,
+                    message: "legacy journal repeats an idempotency key".to_owned(),
+                });
+            };
+            state = transition.state;
+        }
+        migrated.validate_header(scenario)?;
+        Ok(migrated)
+    }
+
     fn ensure_tail_matches(&self, state: &MatchState) -> Result<(), JournalError> {
         let (expected_revision, expected_hash) = self
             .records
@@ -354,6 +434,11 @@ pub enum JournalError {
     TooLarge { size: usize, maximum: usize },
     #[error("journal format {found} is unsupported; current format is {current}")]
     UnsupportedVersion { found: u16, current: u16 },
+    #[error("migration from journal format {source_version} failed: {message}")]
+    MigrationFailed {
+        source_version: u16,
+        message: String,
+    },
     #[error("application_version must not be empty")]
     MissingApplicationVersion,
     #[error("scenario schema {found} is unsupported; current schema is {current}")]
@@ -511,6 +596,47 @@ mod tests {
         assert_eq!(
             decoded.records.last().unwrap().state_hash,
             replayed.canonical_hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn format_one_journal_rebuilds_current_events_and_hashes() {
+        let scenario = scenario();
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let mut journal = ActionJournal::new("0.1.0-test", &scenario).unwrap();
+        for (key, player) in [
+            (IdempotencyKey([1; 16]), Player::South),
+            (IdempotencyKey([2; 16]), Player::North),
+        ] {
+            let AppendOutcome::Accepted(transition) = journal
+                .append(&scenario, &state, key, &Action::Hold { player })
+                .unwrap()
+            else {
+                panic!("unique action must be accepted");
+            };
+            state = transition.state;
+        }
+        let mut legacy = serde_json::to_value(&journal).unwrap();
+        legacy["format_version"] = serde_json::Value::from(1);
+        legacy["scenario_schema_version"] = serde_json::Value::from(1);
+        legacy["initial_state_hash"] = serde_json::Value::from("legacy-initial-hash");
+        for record in legacy["records"].as_array_mut().unwrap() {
+            record["events"] = serde_json::json!([]);
+            record["state_hash"] = serde_json::Value::from("legacy-state-hash");
+        }
+
+        let migrated = ActionJournal::from_json_with_scenario(
+            &serde_json::to_vec(&legacy).unwrap(),
+            &scenario,
+        )
+        .unwrap();
+        assert_eq!(migrated.format_version, JOURNAL_FORMAT_VERSION);
+        assert_eq!(migrated.scenario_schema_version, SCENARIO_SCHEMA_VERSION);
+        assert_eq!(migrated.replay(&scenario).unwrap(), state);
+        assert_ne!(migrated.records[0].events, Vec::new());
+        assert_eq!(
+            migrated.records.last().unwrap().state_hash,
+            state.canonical_hash().unwrap()
         );
     }
 

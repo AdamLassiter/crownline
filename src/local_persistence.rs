@@ -16,7 +16,8 @@ use crate::{
     },
 };
 
-const LOCAL_SAVE_FORMAT_VERSION: u16 = 1;
+const LOCAL_SAVE_FORMAT_VERSION: u16 = 2;
+const LEGACY_LOCAL_SAVE_FORMAT_VERSION: u16 = 1;
 const SLOT_COUNT: u8 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,9 +168,12 @@ fn decode_document(bytes: &[u8]) -> Result<LocalSaveDocument, String> {
             "save exceeds the {MAX_PERSISTED_BYTES} byte safety limit"
         ));
     }
-    let document: LocalSaveDocument =
+    let mut document: LocalSaveDocument =
         serde_json::from_slice(bytes).map_err(|error| format!("save JSON is invalid: {error}"))?;
-    if document.format_version != LOCAL_SAVE_FORMAT_VERSION {
+    if !matches!(
+        document.format_version,
+        LEGACY_LOCAL_SAVE_FORMAT_VERSION | LOCAL_SAVE_FORMAT_VERSION
+    ) {
         return Err(format!(
             "local save format {} is unsupported (current {})",
             document.format_version, LOCAL_SAVE_FORMAT_VERSION
@@ -178,8 +182,26 @@ fn decode_document(bytes: &[u8]) -> Result<LocalSaveDocument, String> {
     if document.application_version.trim().is_empty() {
         return Err("application version is missing".to_owned());
     }
-    let scenario: ScenarioDefinition = ron::from_str(&document.scenario_ron)
+    let mut scenario: ScenarioDefinition = ron::from_str(&document.scenario_ron)
         .map_err(|error| format!("authored scenario RON is invalid: {error}"))?;
+    if document.format_version == LEGACY_LOCAL_SAVE_FORMAT_VERSION {
+        if document.scenario_schema_version != 1
+            || scenario.schema_version != 1
+            || document.core.format_version != 1
+        {
+            return Err("legacy save versions are inconsistent".to_owned());
+        }
+        scenario.schema_version = SCENARIO_SCHEMA_VERSION;
+        let core_bytes = serde_json::to_vec(&document.core)
+            .map_err(|error| format!("legacy canonical save is invalid: {error}"))?;
+        document.core = SaveReader::new()
+            .read_with_scenario(&core_bytes, &scenario)
+            .map_err(|error| error.to_string())?;
+        document.format_version = LOCAL_SAVE_FORMAT_VERSION;
+        document.scenario_schema_version = SCENARIO_SCHEMA_VERSION;
+        document.scenario_ron = ron::ser::to_string(&scenario)
+            .map_err(|error| format!("migrated scenario RON is invalid: {error}"))?;
+    }
     if document.scenario_schema_version != SCENARIO_SCHEMA_VERSION
         || scenario.schema_version != SCENARIO_SCHEMA_VERSION
     {
@@ -191,9 +213,10 @@ fn decode_document(bytes: &[u8]) -> Result<LocalSaveDocument, String> {
     if scenario.id != document.core.scenario_id {
         return Err("authored scenario does not match the canonical save".to_owned());
     }
-    let core_bytes = document.core.to_json().map_err(|error| error.to_string())?;
+    let core_bytes = serde_json::to_vec(&document.core)
+        .map_err(|error| format!("canonical save is invalid: {error}"))?;
     SaveReader::new()
-        .read(&core_bytes)
+        .read_with_scenario(&core_bytes, &scenario)
         .map_err(|error| error.to_string())?;
     if document.north_name.trim().is_empty()
         || document.south_name.trim().is_empty()
@@ -311,6 +334,59 @@ mod tests {
         assert_eq!(decoded.history, document.history);
         assert_eq!(decoded.application_version, "test");
         assert_eq!(decoded.scenario_schema_version, SCENARIO_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn legacy_wrapper_migrates_embedded_scenario_and_pending_promotion() {
+        let mut document = fixture_document();
+        let pawn = document
+            .core
+            .state
+            .pieces
+            .values()
+            .find(|piece| piece.kind == PieceKind::Pawn)
+            .unwrap()
+            .id;
+        document.core.state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![pending_promotion(pawn)],
+        };
+        document.core = SaveEnvelope::new("test", document.core.state.clone()).unwrap();
+        let mut value = serde_json::to_value(document).unwrap();
+        value["format_version"] = serde_json::Value::from(1);
+        value["scenario_schema_version"] = serde_json::Value::from(1);
+        value["core"]["format_version"] = serde_json::Value::from(1);
+        value["core"]["scenario_schema_version"] = serde_json::Value::from(1);
+        value["core"]["state_hash"] = serde_json::Value::from("legacy-state-hash");
+        let authored = value["scenario_ron"].as_str().unwrap();
+        let legacy_authored = authored
+            .replace("schema_version:2", "schema_version:1")
+            .replace("promotion_unlocks:(bishop:2,rook:4,queen:8),", "");
+        assert_ne!(legacy_authored, authored);
+        value["scenario_ron"] = serde_json::Value::from(legacy_authored);
+        value
+            .pointer_mut("/core/state/phase/resolving_choices/queue/0/promote")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .remove("eligibility");
+
+        let migrated = decode_document(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(migrated.format_version, LOCAL_SAVE_FORMAT_VERSION);
+        assert_eq!(migrated.scenario_schema_version, SCENARIO_SCHEMA_VERSION);
+        assert_eq!(
+            migrated.core.format_version,
+            crownline_core::SAVE_FORMAT_VERSION
+        );
+        assert_eq!(
+            migrated.core.state_hash,
+            migrated.core.state.canonical_hash().unwrap()
+        );
+        let TurnPhase::ResolvingChoices { queue } = migrated.core.state.phase else {
+            panic!("promotion remains pending");
+        };
+        let MandatoryChoice::Promote { eligibility, .. } = &queue[0] else {
+            panic!("promotion remains first");
+        };
+        assert_eq!(eligibility, &PromotionEligibility::default());
     }
 
     #[test]

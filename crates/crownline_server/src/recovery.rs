@@ -535,7 +535,10 @@ fn now_unix_millis() -> Result<u64, RecoveryError> {
 mod tests {
     use std::time::Duration;
 
-    use crownline_core::Action;
+    use crownline_core::{
+        Action, ActionJournal, AppendOutcome, MatchState, ScenarioDefinition,
+        state::{MandatoryChoice, TurnPhase},
+    };
 
     use crate::{
         actors::{CommandTiming, MatchExecutor},
@@ -572,7 +575,7 @@ mod tests {
         PersistedRoomRecord {
             code: code.to_owned(),
             match_id,
-            scenario_id: "crownlines-standard".to_owned(),
+            scenario_id: authority.snapshot().scenario_id,
             scenario_hash: scenario_hash.to_owned(),
             clock,
             phase: RoomPhase::Playing,
@@ -591,6 +594,66 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn pending_promotion_fixture(
+        started: SystemTime,
+    ) -> (ScenarioCatalog, AuthoritativeMatch, String) {
+        let scenario: ScenarioDefinition = ron::from_str(include_str!(
+            "../../crownline_core/tests/fixtures/scenarios/combined-realms.ron"
+        ))
+        .unwrap();
+        let source = ActionJournal::from_json(include_bytes!(
+            "../../crownline_core/tests/fixtures/replays/combined-realms.json"
+        ))
+        .unwrap();
+        let mut journal = ActionJournal::new(env!("CARGO_PKG_VERSION"), &scenario).unwrap();
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        for record in source.records {
+            let AppendOutcome::Accepted(transition) = journal
+                .append_timed(
+                    &scenario,
+                    &state,
+                    record.idempotency_key,
+                    &record.action,
+                    record.elapsed_millis,
+                )
+                .unwrap()
+            else {
+                panic!("golden fixture keys must be unique");
+            };
+            state = transition.state;
+            if matches!(
+                state.phase,
+                TurnPhase::ResolvingChoices { ref queue }
+                    if matches!(queue.first(), Some(MandatoryChoice::Promote { .. }))
+            ) {
+                break;
+            }
+        }
+        assert!(matches!(
+            state.phase,
+            TurnPhase::ResolvingChoices { ref queue }
+                if matches!(queue.first(), Some(MandatoryChoice::Promote { .. }))
+        ));
+        let match_id = Uuid::new_v4();
+        let recorded_millis = started
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .try_into()
+            .unwrap();
+        let persisted = PreparedAuthorityTransition {
+            match_id,
+            state,
+            journal,
+            clock: None,
+            received_unix_millis: recorded_millis,
+            decided_unix_millis: recorded_millis,
+        };
+        let authority = AuthoritativeMatch::restore(scenario.clone(), persisted).unwrap();
+        let hash = scenario.canonical_hash().unwrap();
+        (ScenarioCatalog::from_scenarios([scenario]), authority, hash)
     }
 
     #[test]
@@ -744,6 +807,39 @@ mod tests {
         assert_eq!(recovered.revision, uninterrupted.revision);
         assert_eq!(recovered.state_hash, uninterrupted.state_hash);
         assert_eq!(recovered.state.clocks, uninterrupted.state.clocks);
+    }
+
+    #[test]
+    fn restart_preserves_frozen_pending_promotion_eligibility() {
+        let started = UNIX_EPOCH.checked_add(Duration::from_mins(750)).unwrap();
+        let (catalog, authority, scenario_hash) = pending_promotion_fixture(started);
+        let expected = authority.snapshot();
+        let TurnPhase::ResolvingChoices { queue } = &expected.state.phase else {
+            panic!("fixture must be paused for promotion");
+        };
+        let MandatoryChoice::Promote { eligibility, .. } = &queue[0] else {
+            panic!("fixture must contain a promotion choice");
+        };
+        let expected_eligibility = eligibility.clone();
+
+        let mut repository = MatchRepository::new(Database::open_in_memory().unwrap());
+        repository
+            .register_match(
+                &room_record("EFG678", &authority, &scenario_hash, None),
+                &authority.persistence_image(started).unwrap(),
+            )
+            .unwrap();
+        let report = repository.restore_active(&catalog).unwrap();
+        assert!(report.quarantined.is_empty());
+        let restored = report.matches.into_iter().next().unwrap().authority;
+        assert_eq!(restored.snapshot(), expected);
+        let TurnPhase::ResolvingChoices { queue } = &restored.snapshot().state.phase else {
+            panic!("restored match must remain paused for promotion");
+        };
+        let MandatoryChoice::Promote { eligibility, .. } = &queue[0] else {
+            panic!("restored choice must remain a promotion");
+        };
+        assert_eq!(eligibility, &expected_eligibility);
     }
 
     #[test]

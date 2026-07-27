@@ -8,19 +8,18 @@ scenario, journal, snapshot, or database is compatible.
 
 | Boundary | Current | Accepted by this build | Failure behavior |
 | --- | ---: | --- | --- |
-| Client/server protocol | 1 | Exactly 1 | HTTP 426 or WebSocket `incompatible_protocol` before seat creation/authentication. |
-| Local save wrapper | 1 | Exactly 1 | Recoverable load error; the existing slot is not changed. |
-| Core save envelope | 1 | Exactly 1 | Recoverable unsupported-version error unless an explicit source migration is registered. |
-| Authoritative snapshot envelope | 1 | Exactly 1 | Recoverable unsupported-version error. |
-| Replay journal | 1 | Exactly 1 | Replay stops before applying incompatible records. |
-| Scenario schema | 1 | Exactly 1 | Validation rejects the scenario before state construction. |
+| Client/server protocol | 2 | Exactly 2 | HTTP 426 or WebSocket `incompatible_protocol` before seat creation/authentication. |
+| Local save wrapper | 2 | 1 and 2 | Format 1 is migrated in memory; failures preserve the existing slot. |
+| Core save envelope | 2 | 1 and 2 through a scenario-aware reader | Format 1 is migrated in memory; unsupported versions return a recoverable error. |
+| Authoritative snapshot envelope | 2 | 1 and 2 through a scenario-aware reader | Format 1 is migrated in memory; unsupported versions return a recoverable error. |
+| Replay journal | 2 | 1 and 2 through a scenario-aware reader | Format 1 is rebuilt deterministically; incompatible actions stop migration. |
+| Scenario schema | 2 | 1 and 2 | Schema 1 receives the implicit 2/4/8 promotion ladder; newer schemas are rejected. |
 | Server database schema | 2 | Fresh/0, 1, or 2 | Forward migration to 2; any version above 2 aborts startup without migration. |
 
-“Exactly” is intentional: no older released file or protocol version is
-currently promised because there is no prior public release history. Readers
-may contain migration infrastructure or tests without making that source format
-a supported product input. A version becomes supported only when it appears in
-this matrix and has a permanent fixture test.
+“Exactly” on the wire is intentional: protocol 1 peers cannot interpret frozen
+promotion eligibility and are rejected rather than downgraded. Persisted format
+1 is now a supported product input because its migration paths have permanent
+tests.
 
 The `application_version` stored in files is provenance. It must be present, but
 readers decide compatibility from the relevant independent format/schema field.
@@ -56,6 +55,15 @@ authored scenarios and golden journals to validate under the new schema.
 
 Unsupported files remain user data. Loading reports a recoverable error and
 must not overwrite, partially migrate, or silently discard them.
+
+Format 1 saves and snapshots did not store promotion eligibility. If restored
+while a promotion batch is pending, migration calculates realm control once
+from the restored canonical state and assigns that same frozen snapshot to
+every queued promotion. Format 1 scenarios use Bishop/Rook/Queen thresholds
+2/4/8. Format 1 journals are rebuilt by replaying their actions under the
+current scenario and regenerating events and hashes; if a formerly accepted
+action is no longer legal, migration fails with its source version and reason
+instead of partially replaying it.
 
 ## Database upgrades and rollback
 

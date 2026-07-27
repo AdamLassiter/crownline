@@ -61,6 +61,27 @@ impl ScenarioCatalog {
     pub fn get(&self, id: &str) -> Option<&InstalledScenario> {
         self.0.get(id)
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_scenarios(
+        definitions: impl IntoIterator<Item = ScenarioDefinition>,
+    ) -> Self {
+        Self(
+            definitions
+                .into_iter()
+                .map(|definition| {
+                    definition.validate().expect("test scenario must validate");
+                    let hash = definition
+                        .canonical_hash()
+                        .expect("test scenario must hash");
+                    (
+                        definition.id.clone(),
+                        InstalledScenario { definition, hash },
+                    )
+                })
+                .collect(),
+        )
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

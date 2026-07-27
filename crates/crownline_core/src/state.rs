@@ -163,6 +163,7 @@ pub enum MandatoryChoice {
     Promote {
         pawn: PieceId,
         site_index: u16,
+        #[serde(default)]
         eligibility: PromotionEligibility,
     },
     PlacePawn {
