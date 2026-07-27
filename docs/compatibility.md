@@ -14,6 +14,7 @@ scenario, journal, snapshot, or database is compatible.
 | Authoritative snapshot envelope | 2 | 1 and 2 through a scenario-aware reader | Format 1 is migrated in memory; unsupported versions return a recoverable error. |
 | Replay journal | 2 | 1 and 2 through a scenario-aware reader | Format 1 is rebuilt deterministically; incompatible actions stop migration. |
 | Scenario schema | 2 | 1 and 2 | Schema 1 receives the implicit 2/4/8 promotion ladder; newer schemas are rejected. |
+| Fog rules block | 1 | Exactly 1 when present | Omission or explicit `None` disables fog; unsupported nested versions fail scenario validation. |
 | Server database schema | 2 | Fresh/0, 1, or 2 | Forward migration to 2; any version above 2 aborts startup without migration. |
 
 “Exactly” on the wire is intentional: protocol 1 peers cannot interpret frozen
@@ -64,6 +65,12 @@ every queued promotion. Format 1 scenarios use Bishop/Rook/Queen thresholds
 current scenario and regenerating events and hashes; if a formerly accepted
 action is no longer legal, migration fails with its source version and reason
 instead of partially replaying it.
+
+Fog configuration is an optional nested scenario boundary. Disabled fog is
+omitted from canonical serialization, so the three shipped perfect-information
+scenario hashes remain unchanged. Enabled fog currently requires nested schema
+1 and a board-compatible radius; later line-of-sight semantics must increment or
+replace that nested version rather than reinterpret existing scenario bytes.
 
 ## Database upgrades and rollback
 

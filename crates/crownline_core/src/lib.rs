@@ -29,5 +29,8 @@ pub use rules::{
     legal_moves, migrate_promotion_eligibility, pawn_placement_squares, realm_control_score,
     validate_promotion_eligibility,
 };
-pub use scenario::{PromotionUnlockRules, ScenarioDefinition, ScenarioError, ScenarioHashError};
+pub use scenario::{
+    FOG_RULES_SCHEMA_VERSION, FogRules, PromotionUnlockRules, ScenarioDefinition, ScenarioError,
+    ScenarioHashError,
+};
 pub use state::{Action, MatchState, PromotionEligibility, RealmControlScore, TransitionError};

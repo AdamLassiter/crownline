@@ -9,6 +9,8 @@ use thiserror::Error;
 
 pub const SCENARIO_SCHEMA_VERSION: u16 = 2;
 pub const MIN_SUPPORTED_SCENARIO_SCHEMA_VERSION: u16 = 1;
+pub const FOG_RULES_SCHEMA_VERSION: u16 = 1;
+pub const MIN_SUPPORTED_FOG_RULES_SCHEMA_VERSION: u16 = 1;
 const MIN_BOARD_DIMENSION: u16 = 8;
 const MAX_BOARD_DIMENSION: u16 = 64;
 const MAX_EXPECTED_MATCH_MINUTES: u16 = 24 * 60;
@@ -187,6 +189,8 @@ pub struct ScenarioRules {
     pub promotion_cycles: u8,
     #[serde(default)]
     pub promotion_unlocks: PromotionUnlockRules,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fog: Option<FogRules>,
     pub development_resets_when_interrupted: bool,
 }
 
@@ -201,9 +205,16 @@ impl Default for ScenarioRules {
             production_cycles: 3,
             promotion_cycles: 1,
             promotion_unlocks: PromotionUnlockRules::default(),
+            fog: None,
             development_resets_when_interrupted: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FogRules {
+    pub schema_version: u16,
+    pub vision_radius: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -443,6 +454,30 @@ fn validate_rule_configuration(scenario: &ScenarioDefinition, errors: &mut Vec<S
             rook: unlocks.rook,
             queen: unlocks.queen,
         });
+    }
+    if let Some(fog) = scenario.rules.fog {
+        if !(MIN_SUPPORTED_FOG_RULES_SCHEMA_VERSION..=FOG_RULES_SCHEMA_VERSION)
+            .contains(&fog.schema_version)
+        {
+            errors.push(ScenarioError::UnsupportedFogRulesSchema {
+                found: fog.schema_version,
+                minimum: MIN_SUPPORTED_FOG_RULES_SCHEMA_VERSION,
+                maximum: FOG_RULES_SCHEMA_VERSION,
+            });
+        }
+        let maximum = u32::from(
+            scenario
+                .board
+                .width
+                .max(scenario.board.height)
+                .saturating_sub(1),
+        );
+        if fog.vision_radius == 0 || fog.vision_radius > maximum {
+            errors.push(ScenarioError::FogVisionRadiusOutOfRange {
+                found: fog.vision_radius,
+                maximum,
+            });
+        }
     }
 }
 
@@ -937,6 +972,14 @@ pub enum ScenarioError {
         "promotion unlocks must satisfy 0 < bishop ({bishop}) <= rook ({rook}) <= queen ({queen})"
     )]
     InvalidPromotionUnlocks { bishop: u32, rook: u32, queen: u32 },
+    #[error("fog rules schema {found} is unsupported; this build supports {minimum}..={maximum}")]
+    UnsupportedFogRulesSchema {
+        found: u16,
+        minimum: u16,
+        maximum: u16,
+    },
+    #[error("fog vision radius {found} is outside the board-compatible 1..={maximum} range")]
+    FogVisionRadiusOutOfRange { found: u32, maximum: u32 },
     #[error("North and South Pawn directions must be opposed")]
     PawnDirectionsNotOpposed,
 }
@@ -1122,6 +1165,82 @@ mod tests {
             PromotionUnlockRules::default()
         );
         assert_eq!(legacy.validate(), Ok(()));
+    }
+
+    #[test]
+    fn omitted_or_explicitly_disabled_fog_preserves_existing_scenario_hashes() {
+        for (source, expected_hash) in [
+            (
+                include_str!("../../../assets/scenarios/introductory.ron"),
+                "466adb9039df9156f6be834587f5954a3ffc1d83979afbe199d1b1c8a3f3b6c2",
+            ),
+            (
+                include_str!("../../../assets/scenarios/standard.ron"),
+                "874c4ac1b7b0ad90698c961ff8c830f745fe30eebdaca480b2695cc88fd7a568",
+            ),
+            (
+                include_str!("../../../assets/scenarios/large.ron"),
+                "d0ea7d230a309a9da6d87051e9c087eae0328e8fc8f9d9b61c855da1470015cd",
+            ),
+        ] {
+            let scenario: ScenarioDefinition = ron::from_str(source).unwrap();
+            assert_eq!(scenario.rules.fog, None);
+            assert_eq!(scenario.canonical_hash().unwrap(), expected_hash);
+            assert!(!ron::to_string(&scenario).unwrap().contains("fog:"));
+        }
+
+        let mut scenario = minimal_scenario();
+        scenario.rules.army_setup = ArmySetup::Custom;
+        let encoded = ron::to_string(&scenario).unwrap();
+        let explicit_disabled: ScenarioDefinition =
+            ron::from_str(&encoded.replace("rules:(", "rules:(fog:None,")).unwrap();
+        assert_eq!(explicit_disabled.rules.fog, None);
+        assert_eq!(
+            explicit_disabled.canonical_hash().unwrap(),
+            scenario.canonical_hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn fog_rules_are_versioned_and_bounded_to_the_authored_board() {
+        let mut scenario = minimal_scenario();
+        scenario.rules.army_setup = ArmySetup::Custom;
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 3,
+        });
+        assert_eq!(scenario.validate(), Ok(()));
+        let decoded: ScenarioDefinition =
+            ron::from_str(&ron::to_string(&scenario).unwrap()).unwrap();
+        assert_eq!(decoded.rules.fog, scenario.rules.fog);
+
+        for radius in [0, 16, u32::MAX] {
+            scenario.rules.fog.as_mut().unwrap().vision_radius = radius;
+            assert!(scenario.validate().unwrap_err().iter().any(|error| {
+                matches!(
+                    error,
+                    ScenarioError::FogVisionRadiusOutOfRange {
+                        found,
+                        maximum: 15
+                    } if *found == radius
+                )
+            }));
+        }
+
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION + 1,
+            vision_radius: 3,
+        });
+        assert!(scenario.validate().unwrap_err().iter().any(|error| {
+            matches!(
+                error,
+                ScenarioError::UnsupportedFogRulesSchema {
+                    found,
+                    minimum: MIN_SUPPORTED_FOG_RULES_SCHEMA_VERSION,
+                    maximum: FOG_RULES_SCHEMA_VERSION,
+                } if *found == FOG_RULES_SCHEMA_VERSION + 1
+            )
+        }));
     }
 
     #[test]

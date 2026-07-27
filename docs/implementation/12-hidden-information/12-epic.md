@@ -4,7 +4,7 @@ Add optional incomplete-information rules without exposing authoritative state o
 
 ## Status
 
-- [ ] Not started
+- [ ] In progress
 
 ## Stories
 
