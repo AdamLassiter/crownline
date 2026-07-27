@@ -481,17 +481,17 @@ fn active_controls(
     status: &str,
 ) -> String {
     let draw = match state.outstanding_draw_offer {
-        None if state.active_player == seat => "D offer draw",
+        None if state.active_player == seat => "Offer draw [D]",
         None => "Draw offer unavailable until your turn",
         Some(offering) if offering == seat => "Draw offered - awaiting opponent",
-        Some(_) => "Opponent offered draw - Y accept - N decline",
+        Some(_) => "Opponent offered draw - Accept [Y] or Decline [N]",
     };
     let resign = if state.outcome.is_some() {
         "Resign disabled: match finished"
     } else if confirm_resign {
-        "CONFIRM RESIGNATION - Enter confirm - Esc cancel"
+        "CONFIRM RESIGNATION - Confirm [Enter] or Cancel [Esc]"
     } else if state.active_player == seat {
-        "Q resign (confirmation required)"
+        "Resign [Q] (confirmation required)"
     } else {
         "Resign unavailable until your turn"
     };
@@ -512,15 +512,15 @@ fn terminal_controls(
         .winner
         .map_or_else(|| "Draw".to_owned(), |winner| format!("{winner:?} wins"));
     let rematch = match rematch {
-        None | Some(RematchState::Declined) => "R request rematch",
+        None | Some(RematchState::Declined) => "Request rematch [R]",
         Some(RematchState::Requested) if requested_by_self => {
-            "Rematch requested - waiting for opponent - N decline"
+            "Rematch requested - waiting for opponent - Decline [N]"
         }
-        Some(RematchState::Requested) => "Opponent requests rematch - R accept - N decline",
+        Some(RematchState::Requested) => "Opponent requests rematch - Accept [R] or Decline [N]",
         Some(RematchState::Accepted) => "Rematch accepted - reconnecting to fresh match",
     };
     format!(
-        "MATCH ENDED - {:?} - {winner}{}\n{rematch}\nL leave finished room\n{status}",
+        "MATCH ENDED - {:?} - {winner}{}\n{rematch}\nLeave finished room [L]\n{status}",
         outcome.reason,
         if locked { " - CONTROL PENDING" } else { "" },
     )
@@ -557,7 +557,7 @@ mod tests {
         let seat = state.active_player.opponent();
         state.outstanding_draw_offer = Some(state.active_player);
         let text = active_controls(&state, seat, false, false, "");
-        assert!(text.contains("Opponent offered draw - Y accept - N decline"));
+        assert!(text.contains("Opponent offered draw - Accept [Y] or Decline [N]"));
         assert_eq!(text.matches("offered draw").count(), 1);
     }
 
@@ -574,8 +574,8 @@ mod tests {
             "",
         );
         assert!(text.contains("Timeout - South wins"));
-        assert!(text.contains("R accept - N decline"));
-        assert!(text.contains("L leave finished room"));
+        assert!(text.contains("Accept [R] or Decline [N]"));
+        assert!(text.contains("Leave finished room [L]"));
     }
 
     #[test]

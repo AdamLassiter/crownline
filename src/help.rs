@@ -84,7 +84,7 @@ fn spawn_help(mut commands: Commands) {
         HelpLink(HelpSection::Overview),
         PanelSurface,
         children![(
-            Text::new("F1 - Rules & legend"),
+            Text::new("Rules & legend [F1]"),
             TextFont {
                 font_size: FontSize::Px(12.0),
                 ..default()

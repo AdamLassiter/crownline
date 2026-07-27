@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Routes and controls are populated incrementally by Tasks 07.04.02-07.
-
 use bevy::{
     input_focus::{
         InputFocus,
@@ -63,7 +61,6 @@ pub(crate) enum MenuRoute {
 pub(crate) enum MenuAction {
     Open(MenuRoute),
     Back,
-    Close,
     Confirm,
     Cancel,
     OpenHelp,
@@ -221,6 +218,9 @@ pub(crate) struct MenuButton {
     pub(crate) emphasis: MenuEmphasis,
 }
 
+#[derive(Debug, Clone, Copy, Component)]
+struct MenuTabOrder(i32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuAvailability {
     Enabled,
@@ -254,6 +254,7 @@ impl MenuButton {
         self
     }
 
+    #[allow(dead_code)]
     pub(crate) const fn pending(mut self) -> Self {
         self.availability = MenuAvailability::Pending;
         self
@@ -287,7 +288,9 @@ pub(crate) fn menu_button(
         },
         BackgroundColor(CONTROL_IDLE),
         BorderColor::all(BORDER_IDLE),
+        Outline::new(px(2), px(2), Color::NONE),
         TabIndex(tab_index),
+        MenuTabOrder(tab_index),
         MenuButton::new(action),
         PanelSurface,
         children![(
@@ -668,7 +671,6 @@ fn handle_navigation_action(
         MenuAction::Open(MenuRoute::Settings) => {}
         MenuAction::Open(route) => state.open(route),
         MenuAction::Back if state.route != Some(MenuRoute::Home) => state.back(),
-        MenuAction::Close => state.close(),
         MenuAction::Quit => state.modal = Some(MenuModal::Quit),
         MenuAction::Confirm if state.modal == Some(MenuModal::Quit) => {
             app_exit.write(AppExit::Success);
@@ -1978,21 +1980,37 @@ type MenuControlStyleQuery<'w, 's> = Query<
         Entity,
         &'static Interaction,
         &'static MenuButton,
+        &'static MenuTabOrder,
+        &'static mut TabIndex,
         &'static mut BackgroundColor,
         &'static mut BorderColor,
+        &'static mut Outline,
     ),
-    Or<(Changed<Interaction>, Changed<MenuButton>)>,
 >;
 
 #[allow(clippy::needless_pass_by_value)]
-fn style_menu_controls(
-    focus: Res<InputFocus>,
-    mut commands: Commands,
-    mut buttons: MenuControlStyleQuery,
-) {
-    let focus_changed = focus.is_changed();
-    for (entity, interaction, button, mut background, mut border) in &mut buttons {
-        let focused = focus.get() == Some(entity);
+fn style_menu_controls(mut focus: ResMut<InputFocus>, mut buttons: MenuControlStyleQuery) {
+    for (
+        entity,
+        interaction,
+        button,
+        menu_order,
+        mut tab_index,
+        mut background,
+        mut border,
+        mut outline,
+    ) in &mut buttons
+    {
+        let mut focused = focus.get() == Some(entity);
+        if focused && !button.can_activate() {
+            focus.clear();
+            focused = false;
+        }
+        tab_index.0 = if button.can_activate() {
+            menu_order.0
+        } else {
+            -1
+        };
         background.0 = if !button.can_activate() {
             CONTROL_DISABLED
         } else if *interaction == Interaction::Pressed {
@@ -2007,15 +2025,7 @@ fn style_menu_controls(
             CONTROL_IDLE
         };
         *border = BorderColor::all(if focused { BORDER_FOCUSED } else { BORDER_IDLE });
-        if focused {
-            commands.entity(entity).insert(Outline {
-                color: BORDER_FOCUSED,
-                width: px(2),
-                offset: px(2),
-            });
-        } else if focus_changed {
-            commands.entity(entity).remove::<Outline>();
-        }
+        outline.color = if focused { BORDER_FOCUSED } else { Color::NONE };
     }
 }
 
@@ -2121,6 +2131,76 @@ mod tests {
             app.world_mut().resource_mut::<MenuIntent>().take(),
             Some(MenuAction::Open(MenuRoute::Settings))
         );
+    }
+
+    #[test]
+    fn disabled_controls_leave_tab_order_and_never_show_focus() {
+        let mut app = App::new();
+        app.init_resource::<InputFocus>()
+            .add_systems(Update, style_menu_controls);
+        let control = app
+            .world_mut()
+            .spawn((
+                Interaction::None,
+                MenuButton::new(MenuAction::Quit).disabled(),
+                MenuTabOrder(4),
+                TabIndex(4),
+                BackgroundColor(CONTROL_IDLE),
+                BorderColor::all(BORDER_IDLE),
+                Outline::new(px(2), px(2), BORDER_FOCUSED),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(control, bevy::input_focus::FocusCause::Navigated);
+
+        app.update();
+
+        assert_eq!(app.world().get::<TabIndex>(control).unwrap().0, -1);
+        assert_eq!(
+            app.world().get::<Outline>(control).unwrap().color,
+            Color::NONE
+        );
+        assert_eq!(app.world().resource::<InputFocus>().get(), None);
+    }
+
+    #[test]
+    fn modal_precedence_blocks_route_accelerators() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputFocus>()
+            .init_resource::<MenuIntent>()
+            .insert_resource(MenuState {
+                route: Some(MenuRoute::LocalSetup),
+                modal: Some(MenuModal::Quit),
+                ..default()
+            })
+            .add_systems(Update, dispatch_local_setup_accelerators);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F2);
+
+        app.update();
+
+        assert_eq!(app.world().resource::<MenuIntent>().0, None);
+    }
+
+    #[test]
+    fn presentation_only_navigation_preserves_canonical_match_state() {
+        let scenario = ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap();
+        let game = DisplayedGame {
+            state: crownline_core::MatchState::from_scenario(&scenario).unwrap(),
+            scenario,
+        };
+        let before = game.state.canonical_hash().unwrap();
+        let mut menu = MenuState::default();
+
+        menu.open(MenuRoute::Home);
+        menu.open(MenuRoute::Settings);
+        menu.back();
+        menu.close();
+
+        assert_eq!(game.state.canonical_hash().unwrap(), before);
     }
 
     #[test]

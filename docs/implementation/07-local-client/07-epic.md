@@ -5,7 +5,7 @@ clocks, save/load, and a unified pointer-and-keyboard menu system.
 
 ## Status
 
-- [ ] In progress
+- [x] Done
 
 ## Implementation notes
 
@@ -20,6 +20,10 @@ clocks, save/load, and a unified pointer-and-keyboard menu system.
 - Story 07.04 replaces the remaining text-and-hotkey-driven setup, online,
   settings, persistence, and lifecycle surfaces with one native Bevy GUI menu
   system.
+- Story 07.04 is complete with typed pointer/keyboard action parity,
+  transactional settings, context-aware match and save controls, confirmed
+  destructive actions, modal input ownership, and live minimum/desktop
+  viewport evidence.
 
 ## Stories
 

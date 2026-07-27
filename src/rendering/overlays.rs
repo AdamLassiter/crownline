@@ -604,7 +604,7 @@ fn insert(overlays: &mut BTreeMap<Coord, BTreeSet<OverlayKind>>, at: Coord, kind
 
 fn overlay_style(kind: OverlayKind) -> (&'static str, Color, f32) {
     match kind {
-        OverlayKind::Attack => ("-", Color::srgba(0.7, 0.82, 1.0, 0.9), 18.0),
+        OverlayKind::Attack => ("A-", Color::srgba(0.7, 0.82, 1.0, 0.9), 18.0),
         OverlayKind::LegalMove => ("•", Color::srgb(0.2, 0.92, 0.72), 17.0),
         OverlayKind::Capture => ("x", Color::srgb(1.0, 0.42, 0.24), 24.0),
         OverlayKind::GainedAttack => ("+", Color::srgb(0.2, 1.0, 0.48), 16.0),

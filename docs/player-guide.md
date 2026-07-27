@@ -34,27 +34,33 @@ MIT OR Apache-2.0; release archives include the applicable license and notices.
 
 ## Quick start: local match
 
-1. Start Crownlines. The local setup screen opens first.
-2. Use Tab to focus the North and South name fields and type distinct names.
-3. Use PageUp/PageDown to choose a scenario. The standard 20x20 **Crownlines**
-   map is the default; **The First Crossing** is the shortest learning map.
-4. Matches are untimed by default. Press `C` to enable a clock, `-`/`+` to set
-   1-180 base minutes, and `,`/`.` to set a 0-60 second increment.
-5. Press `F2` to start. Use the arrow keys to place visible board focus, Enter
-   to select a piece and confirm a highlighted destination, Escape to release
-   focus, and `H` to Hold.
-6. Press `F1` at any time for the rules and complete board legend. Keys `1`-`5`
-   select its sections and Escape closes it.
+1. Start Crownlines. Home opens first; choose **New Local Match**.
+2. Select the North and South name fields and type distinct names. Choose each
+   seat's Human or AI controller and use **Swap sides** if needed.
+3. Use **Previous scenario** or **Next scenario** to choose a map. The standard
+   20x20 **Crownlines** map is the default; **The First Crossing** is the
+   shortest learning map.
+4. Matches are untimed by default. Use **Toggle clock**, then the base and
+   increment controls to configure 1-180 base minutes and a 0-60 second
+   increment.
+5. Choose **Start Local Match**. Use the arrow keys to place visible board
+   focus, Enter to select a piece and confirm a highlighted destination,
+   Escape to release focus, and `H` to Hold. Pointer selection is also
+   available.
+6. Open **Rules & Legend** from Home or the Match menu at any time. The optional
+   `F1` accelerator opens the same help.
 
-Click selection is also available. A click captured by a menu or information
-panel never falls through to the board.
+Tab and Shift-Tab traverse visible enabled menu controls, Enter or Space
+activates the focused control, and Escape goes back. A pointer action captured
+by a menu or information panel never falls through to the board.
 
 ## Guided lessons and AI challenges
 
-From local setup, press `G` to open the guided browser. Choose with
-PageUp/PageDown, start or resume with Enter, and return with Escape. Guided play
-uses normal movement, realm, promotion, check, and outcome rules; its scenarios
-do not appear in competitive local or online setup.
+Choose **Guided Play** from Home. The browser provides visible category,
+lesson, resume/start, reset, and navigation controls; Tab/Shift-Tab and
+Enter/Space provide the equivalent keyboard path. Guided play uses normal
+movement, realm, promotion, check, and outcome rules; its scenarios do not
+appear in competitive local or online setup.
 
 The objective panel explains the current stage. Press `J` to reveal the next
 progressive hint and `T` to retry the stage. Reset requires two explicit
@@ -68,14 +74,15 @@ effort profiles, not validated human skill ratings.
 An operator must first provide the `wss://` server address. Hosting instructions
 are in [`server-operations.md`](server-operations.md).
 
-1. From local setup, press `F3`, then `H` to host. Tab through server address and
-   player name, select scenario/clock as above, and press Enter.
-2. Send the six-character room code to the other player. Press `A` before `C`
-   if the copied invitation should also include the server address. Invitations
-   never contain the seat credential.
-3. The other player starts Crownlines, presses `F3`, then `J`, enters the same
-   server address, name, and room code, and presses Enter.
-4. Both players press `R` when ready. The server starts only after both seats are
+1. Choose **Online Play** from Home, edit the server address and player name,
+   then choose **Host private room**. Select the scenario and clock with the
+   visible controls and choose **Create room**.
+2. Send the six-character room code to the other player. Choose whether
+   **Include server address** is enabled, then use **Copy invitation**.
+   Invitations never contain the seat credential.
+3. The other player chooses **Online Play**, then **Join with code**, enters the
+   same server address, name, and room code, and chooses **Join room**.
+4. Both players choose **Ready**. The server starts only after both seats are
    present and ready; it owns legal actions, clocks, revisions, and outcomes.
 
 Online commands lock while awaiting the server. Do not submit a second intent;
@@ -96,29 +103,32 @@ operational information. A room code is safe to invite with, but it does not
 replace the secret seat credential. `F` permanently forgets the local seat; it
 cannot be recovered from the room code.
 
-After a terminal outcome, `R` requests or accepts a rematch, `N` declines, and
-`L` leaves the finished room. A rematch creates a fresh revision-zero match with
-the same room setup.
+After a terminal outcome, visible controls request/accept or decline a rematch
+and leave the finished room. The optional `R`, `N`, and `L` accelerators invoke
+those same actions. A rematch creates a fresh revision-zero match with the same
+room setup.
 
 ## Controls
 
-| Context | Keyboard controls |
+| Context | Pointer and keyboard controls |
 | --- | --- |
-| Local setup | Tab edit names; `X` swap assignments; PageUp/PageDown scenario; `C`, `-`/`+`, `,`/`.` clock; `F2` start; `F3` online. |
-| Guided browser/play | `G` open from setup; PageUp/PageDown choose; Enter start/resume; `J` hint; `T` retry; Escape leave/back. |
+| Menus | Select any visible control; Tab/Shift-Tab navigate enabled controls; Enter/Space activate; Escape back. |
+| Local setup | Visible name, controller, side, scenario, clock, and start controls. Optional accelerators: `X`, PageUp/PageDown, `C`, `-`/`+`, `,`/`.`, F7/F8, and `F2`. Character accelerators pause while editing text. |
+| Guided browser/play | Visible browser and objective controls; PageUp/PageDown choose; Enter start/resume; `J` hint; `T` retry; Escape leave/back. |
 | Board | Arrows focus; Enter select/move; Escape release; `H` Hold; Shift + configured camera key (defaults: W/A/S/D pan, Q/E zoom, `F` reset); mouse wheel/drag also work. |
 | Mandatory promotion | `1` Queen, `2` Rook, `3` Bishop, `4` Knight. The same four buttons are clickable; locked choices report their required score without submitting. |
 | Mandatory Pawn placement | Arrows cycle only legal adjacent squares; Enter confirms; Escape returns focus to the required choice. |
-| Match | `P` pause/resume; `Q` resign then Enter/Escape; `D` offer draw; `Y` accept; `N` decline; `I` panels. |
-| Saves | `F5` save; `F6` cycle slots 1-3; `F9` load. |
+| Match | `P` opens the Match menu; visible controls resume, save/load, open settings/rules, draw, resign, or return Home. `Q`, `D`, `Y`, and `N` remain optional online accelerators; `I` collapses panels. |
+| Saves | The Match menu shows all three slots as Empty, Valid, or Unreadable and confirms overwrite/load where required. |
 | Playtest evidence | `F8` explicitly exports the current local match's name-free structured record; nothing is uploaded. |
 | Help | `F1` open/close; `1`-`5` sections; Escape close. |
-| Online lobby | `H` host; `J` join; Tab fields; Enter submit; Escape back; `R` ready; `A` invitation address; `C` copy. |
+| Online lobby | Visible Host, Join, scenario, clock, invitation, Ready, and Leave controls; Tab/Shift-Tab traverse fields and controls. |
 | Online recovery | `T` retry; `X` cancel retry; `F` forget seat. |
 
-Camera bindings can be changed in `settings.ron` but always require Shift, so
-they remain distinct from lifecycle/gameplay keys. Those keys are fixed in the
-initial release and are always printed in their relevant surface.
+Settings is divided into Display, Accessibility, Controls, and Online tabs.
+Changes preview where useful but persist only after **Apply**; **Cancel**
+restores the prior scale, motion preference, and configuration. Camera bindings
+always require Shift, so they remain distinct from lifecycle/gameplay keys.
 
 ## Rules summary
 
@@ -197,12 +207,14 @@ complete replay truth for joint review.
 
 ## Saves and clocks
 
-Local play has three atomic save slots. `F5` writes the selected slot through a
-validated temporary file before replacement; a failed write preserves the prior
-save. `F9` validates file versions, embedded scenario, canonical state, and hash
-before changing the match. Loading does not charge offline time. Unsupported or
-corrupt saves remain unchanged and produce a recoverable message. Compatibility
-details are in [`compatibility.md`](compatibility.md).
+Local play has three atomic save slots exposed from the Match menu. Saving
+writes the selected slot through a validated temporary file before replacement;
+occupied slots require confirmation and a failed write preserves the prior
+save. Loading validates file versions, embedded scenario, canonical state, and
+hash before changing the match and requires confirmation while a match is
+active. Loading does not charge offline time. Unsupported or corrupt saves
+remain unchanged and produce a recoverable message. Compatibility details are
+in [`compatibility.md`](compatibility.md).
 
 For local clocks, pause/setup/outcome states stop charging. The active clock
 continues during mandatory choices. Time is charged before action validation;
@@ -217,10 +229,11 @@ Move or Hold. Online clocks are server-owned and continue through disconnects.
   overlay meaning has a unique symbol plus legend text.
 - Keyboard-only play covers setup, online rooms, board focus, choices, match
   controls, saves, help, confirmations, and reconnect controls.
-- Set `ui_scale` from 0.75 through 2.5 in `settings.ron`. Window dimensions
-  divided by scale must provide at least 800x480 logical pixels; unsupported
-  combinations are rejected with an actionable message. Scaled panels scroll.
-- Set `reduced_motion: true` to remove piece interpolation and retirement ghosts
+- Set UI scale from 0.75 through 2.5 in **Settings > Accessibility**. Window
+  dimensions divided by scale must provide at least 800x480 logical pixels;
+  unsupported combinations are rejected with an actionable message. Scaled
+  menus and panels scroll.
+- Enable **Reduced motion** to remove piece interpolation and retirement ghosts
   while retaining immediate results and ordered static feedback.
 
 The reproducible evidence matrix is in

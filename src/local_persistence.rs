@@ -107,7 +107,7 @@ impl Default for LocalPersistenceStatus {
     fn default() -> Self {
         Self {
             slot: 1,
-            message: "F5 save - F9 load - F6 change slot".to_owned(),
+            message: "Local saves are available from the Match menu [P].".to_owned(),
         }
     }
 }

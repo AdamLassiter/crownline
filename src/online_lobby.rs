@@ -578,7 +578,7 @@ fn sync_online_lobby_ui(
     }
     let body = match lobby.screen {
         LobbyScreen::Closed => String::new(),
-        LobbyScreen::Menu => "CROWNLINES - ONLINE\nH host a private room - J join with a code\nTab edits server/name fields - Esc local setup".to_owned(),
+        LobbyScreen::Menu => "CROWNLINES - ONLINE\nChoose Host or Join below. Edit the server and player name as needed; Back returns Home.".to_owned(),
         LobbyScreen::Host => {
             let scenario = &catalog.0[lobby.selected_scenario];
             let scenario_label = format!(
@@ -590,7 +590,7 @@ fn sync_online_lobby_ui(
                 |clock| format!("{} min + {} sec", clock.base_minutes, clock.increment_seconds),
             );
             format!(
-                "HOST PRIVATE ROOM\nServer: {}\nName: {}\nScenario: {} - Clock: {clock}\nPageUp/PageDown scenario - C clock - -/+ base - ,/. increment\nEnter create - Esc back\n{}",
+                "HOST PRIVATE ROOM\nServer: {}\nName: {}\nScenario: {} - Clock: {clock}\nUse the scenario and clock controls below, then Create room.\n{}",
                 lobby.server_url,
                 lobby.player_name,
                 scenario_label,
@@ -598,7 +598,7 @@ fn sync_online_lobby_ui(
             )
         }
         LobbyScreen::Join => format!(
-            "JOIN PRIVATE ROOM\nServer: {}\nName: {}\nRoom code: {}\nTab edits fields - Enter join - Esc back\n{}",
+            "JOIN PRIVATE ROOM\nServer: {}\nName: {}\nRoom code: {}\nEdit the connection fields, then select Join room.\n{}",
             lobby.server_url,
             lobby.player_name,
             normalize_room_code(&lobby.room_code),
@@ -607,7 +607,7 @@ fn sync_online_lobby_ui(
         LobbyScreen::Waiting => {
             let seat = lobby.seat.as_ref();
             format!(
-                "PRIVATE ROOM {}\nSeat: {} - Match: {} - Credential stored: {}\nR ready - C copy invitation - A include server address: {} - Esc leave screen\n{}",
+                "PRIVATE ROOM {}\nSeat: {} - Match: {} - Credential stored: {}\nUse the invitation, privacy, readiness, and Leave controls below. Include server address: {}\n{}",
                 seat.map_or("------", |seat| seat.room_code.as_str()),
                 seat.map_or_else(|| "unknown".to_owned(), |seat| format!("{:?}", seat.seat)),
                 seat.map_or_else(|| "unknown".to_owned(), |seat| seat.match_id.to_string()),
