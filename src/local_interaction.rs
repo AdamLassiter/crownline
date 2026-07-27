@@ -1,13 +1,14 @@
 use bevy::prelude::*;
 use crownline_core::{
-    Action, apply_timed_action, is_in_check, legal_moves,
+    Action, apply_timed_action, is_in_check, legal_mandatory_choice_actions, legal_moves,
     scenario::{BoardSize, Coord},
-    state::{MandatoryChoice, MatchState, PieceId, PromotionKind, TurnPhase},
+    state::{MandatoryChoice, MatchState, PieceId, PromotionEligibility, PromotionKind, TurnPhase},
 };
 
 use crate::{
     lifecycle::ClientFlow,
     online_connection::{OnlineActionIntent, OnlineIntentOutbox},
+    panels::PanelSurface,
     rendering::{
         DisplayedGame, HoveredBoardSquare, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection, PointerCapture, coordinates::BoardGeometry,
@@ -38,6 +39,18 @@ struct KeyboardFocusVisual;
 
 #[derive(Component)]
 struct InteractionHelpText;
+
+#[derive(Component)]
+struct PromotionChoiceRow;
+
+#[derive(Component, Clone, Copy)]
+struct PromotionChoiceButton(PromotionKind);
+
+#[derive(Component)]
+struct PromotionChoiceButtonText(PromotionKind);
+
+#[derive(Resource, Default)]
+struct PromotionPointerIntent(Option<PromotionKind>);
 
 type FocusAffordanceQuery<'w, 's> = Query<
     'w,
@@ -83,13 +96,16 @@ impl Plugin for LocalInteractionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BoardInteraction>()
             .init_resource::<ChoicePresentation>()
+            .init_resource::<PromotionPointerIntent>()
             .add_systems(Startup, spawn_interaction_affordances)
             .add_systems(
                 Update,
                 (
+                    collect_promotion_pointer_intent,
                     handle_board_input,
                     sync_choice_affordances,
                     sync_interaction_affordances,
+                    sync_promotion_choice_buttons,
                 )
                     .chain(),
             );
@@ -124,6 +140,67 @@ fn spawn_interaction_affordances(mut commands: Commands) {
         Name::new("local interaction help"),
         InteractionHelpText,
     ));
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(SIDE_REGION_PERCENT),
+                right: percent(SIDE_REGION_PERCENT),
+                bottom: px(7),
+                height: px(34),
+                column_gap: px(4),
+                display: Display::None,
+                ..default()
+            },
+            GlobalZIndex(12),
+            Name::new("promotion choice buttons"),
+            PromotionChoiceRow,
+        ))
+        .with_children(|row| {
+            for (kind, key) in [
+                (PromotionKind::Queen, "1"),
+                (PromotionKind::Rook, "2"),
+                (PromotionKind::Bishop, "3"),
+                (PromotionKind::Knight, "4"),
+            ] {
+                row.spawn((
+                    Button,
+                    Node {
+                        width: percent(25),
+                        height: percent(100),
+                        padding: UiRect::axes(px(3), px(2)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.12, 0.2, 0.24)),
+                    PanelSurface,
+                    PromotionChoiceButton(kind),
+                    Name::new(format!("promotion {kind:?} button")),
+                    children![(
+                        Text::new(format!("[{key}] {kind:?}")),
+                        TextFont {
+                            font_size: FontSize::Px(10.0),
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.9, 0.92, 0.96)),
+                        TextLayout::justify(Justify::Center),
+                        PromotionChoiceButtonText(kind),
+                    )],
+                ));
+            }
+        });
+}
+
+fn collect_promotion_pointer_intent(
+    buttons: Query<(&Interaction, &PromotionChoiceButton), Changed<Interaction>>,
+    mut intent: ResMut<PromotionPointerIntent>,
+) {
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            intent.0 = Some(button.0);
+        }
+    }
 }
 
 #[allow(
@@ -141,6 +218,7 @@ fn handle_board_input(
     mut interaction: ResMut<BoardInteraction>,
     mut transitions: ResMut<LocalTransitionEventQueue>,
     mut online_outbox: Option<ResMut<OnlineIntentOutbox>>,
+    mut promotion_pointer: ResMut<PromotionPointerIntent>,
     flow: Option<Res<ClientFlow>>,
 ) {
     let online = flow
@@ -174,6 +252,7 @@ fn handle_board_input(
                 &mouse,
                 hovered.0,
                 capture.ui_has_pointer,
+                promotion_pointer.0.take(),
                 choice,
                 &mut game,
                 &mut selection,
@@ -268,12 +347,13 @@ fn activated_square(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn handle_mandatory_choice(
     keys: &ButtonInput<KeyCode>,
     mouse: &ButtonInput<MouseButton>,
     hovered: Option<Coord>,
     ui_has_pointer: bool,
+    pointer_promotion: Option<PromotionKind>,
     choice: MandatoryChoice,
     game: &mut DisplayedGame,
     selection: &mut OverlaySelection,
@@ -287,20 +367,34 @@ fn handle_mandatory_choice(
         return;
     }
     match choice {
-        MandatoryChoice::Promote { pawn, .. } => {
+        MandatoryChoice::Promote {
+            pawn, eligibility, ..
+        } => {
             interaction.keyboard_focus = None;
-            let promotion = if keys.just_pressed(KeyCode::Digit1) {
-                Some(PromotionKind::Queen)
-            } else if keys.just_pressed(KeyCode::Digit2) {
-                Some(PromotionKind::Rook)
-            } else if keys.just_pressed(KeyCode::Digit3) {
-                Some(PromotionKind::Bishop)
-            } else if keys.just_pressed(KeyCode::Digit4) {
-                Some(PromotionKind::Knight)
-            } else {
-                None
-            };
+            let promotion = pointer_promotion.or_else(|| {
+                if keys.just_pressed(KeyCode::Digit1) {
+                    Some(PromotionKind::Queen)
+                } else if keys.just_pressed(KeyCode::Digit2) {
+                    Some(PromotionKind::Rook)
+                } else if keys.just_pressed(KeyCode::Digit3) {
+                    Some(PromotionKind::Bishop)
+                } else if keys.just_pressed(KeyCode::Digit4) {
+                    Some(PromotionKind::Knight)
+                } else {
+                    None
+                }
+            });
             if let Some(promote_to) = promotion {
+                if !promotion_is_legal(&game.state, pawn, promote_to) {
+                    let required = promotion_required_score(&game.scenario, promote_to);
+                    format!(
+                        "{:?} is locked for this batch: frozen score {}, requires {required}.",
+                        promote_to,
+                        eligibility.control.total()
+                    )
+                    .clone_into(&mut interaction.status);
+                    return;
+                }
                 submit_action(
                     &Action::ChoosePromotion {
                         player: game.state.active_player,
@@ -377,6 +471,31 @@ fn handle_mandatory_choice(
                 }
             }
         }
+    }
+}
+
+fn promotion_is_legal(state: &MatchState, pawn: PieceId, kind: PromotionKind) -> bool {
+    legal_mandatory_choice_actions(state).iter().any(|action| {
+        matches!(
+            action,
+            Action::ChoosePromotion {
+                pawn: candidate,
+                promote_to,
+                ..
+            } if *candidate == pawn && *promote_to == kind
+        )
+    })
+}
+
+const fn promotion_required_score(
+    scenario: &crownline_core::ScenarioDefinition,
+    kind: PromotionKind,
+) -> u32 {
+    match kind {
+        PromotionKind::Knight => 0,
+        PromotionKind::Bishop => scenario.rules.promotion_unlocks.bishop,
+        PromotionKind::Rook => scenario.rules.promotion_unlocks.rook,
+        PromotionKind::Queen => scenario.rules.promotion_unlocks.queen,
     }
 }
 
@@ -574,16 +693,81 @@ fn sync_choice_affordances(
     presentation.key = Some(key);
 }
 
-fn choice_description(state: &MatchState) -> Option<String> {
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
+fn sync_promotion_choice_buttons(
+    game: Res<DisplayedGame>,
+    mut row: Query<&mut Node, With<PromotionChoiceRow>>,
+    mut buttons: Query<
+        (&PromotionChoiceButton, &mut BackgroundColor),
+        Without<PromotionChoiceButtonText>,
+    >,
+    mut labels: Query<(&PromotionChoiceButtonText, &mut Text)>,
+) {
+    let promotion = match &game.state.phase {
+        TurnPhase::ResolvingChoices { queue } => match queue.first() {
+            Some(MandatoryChoice::Promote {
+                pawn, eligibility, ..
+            }) => Some((*pawn, eligibility)),
+            _ => None,
+        },
+        TurnPhase::Command => None,
+    };
+    let Ok(mut row) = row.single_mut() else {
+        return;
+    };
+    row.display = if promotion.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    let Some((pawn, eligibility)) = promotion else {
+        return;
+    };
+    for (button, mut background) in &mut buttons {
+        *background = if promotion_is_legal(&game.state, pawn, button.0) {
+            BackgroundColor(Color::srgb(0.08, 0.3, 0.2))
+        } else {
+            BackgroundColor(Color::srgb(0.26, 0.12, 0.14))
+        };
+    }
+    for (label, mut text) in &mut labels {
+        let key = promotion_binding(label.0);
+        let required = promotion_required_score(&game.scenario, label.0);
+        let state = if eligibility.allows(label.0) {
+            if label.0 == PromotionKind::Knight {
+                "READY".to_owned()
+            } else {
+                format!("READY >={required}")
+            }
+        } else {
+            format!("LOCK >={required}")
+        };
+        text.0 = format!("[{key}] {:?}\n{state}", label.0);
+    }
+}
+
+const fn promotion_binding(kind: PromotionKind) -> &'static str {
+    match kind {
+        PromotionKind::Queen => "1",
+        PromotionKind::Rook => "2",
+        PromotionKind::Bishop => "3",
+        PromotionKind::Knight => "4",
+    }
+}
+
+fn choice_description(
+    scenario: &crownline_core::ScenarioDefinition,
+    state: &MatchState,
+) -> Option<String> {
     let TurnPhase::ResolvingChoices { queue } = &state.phase else {
         return None;
     };
     let current = queue.first()?;
     let heading = format!("Mandatory choice 1 of {} remaining", queue.len());
     Some(match current {
-        MandatoryChoice::Promote { pawn, .. } => format!(
-            "{heading}: promote Pawn {pawn:?}\n[1] ♕ Queen   [2] ♖ Rook   [3] ♗ Bishop   [4] ♘ Knight"
-        ),
+        MandatoryChoice::Promote {
+            pawn, eligibility, ..
+        } => promotion_choice_description(scenario, state, &heading, *pawn, eligibility),
         MandatoryChoice::PlacePawn {
             settlement_index,
             legal_squares,
@@ -592,6 +776,65 @@ fn choice_description(state: &MatchState) -> Option<String> {
             legal_squares.len()
         ),
     })
+}
+
+fn promotion_choice_description(
+    scenario: &crownline_core::ScenarioDefinition,
+    state: &MatchState,
+    heading: &str,
+    pawn: PieceId,
+    eligibility: &PromotionEligibility,
+) -> String {
+    let control = eligibility.control;
+    let score = control.total();
+    let next = [
+        (PromotionKind::Bishop, "Bishop"),
+        (PromotionKind::Rook, "Rook"),
+        (PromotionKind::Queen, "Queen"),
+    ]
+    .into_iter()
+    .find(|(kind, _)| !eligibility.allows(*kind))
+    .map_or_else(
+        || "all recruits unlocked".to_owned(),
+        |(kind, name)| {
+            let required = promotion_required_score(scenario, kind);
+            format!(
+                "next {name} at {required} ({} needed)",
+                required.saturating_sub(score)
+            )
+        },
+    );
+    let available = legal_mandatory_choice_actions(state)
+        .into_iter()
+        .filter_map(|action| match action {
+            Action::ChoosePromotion { promote_to, .. } => Some(format!("{promote_to:?}")),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let options = [
+        PromotionKind::Queen,
+        PromotionKind::Rook,
+        PromotionKind::Bishop,
+        PromotionKind::Knight,
+    ]
+    .into_iter()
+    .map(|kind| {
+        let key = promotion_binding(kind);
+        let required = promotion_required_score(scenario, kind);
+        let status = if eligibility.allows(kind) {
+            "READY".to_owned()
+        } else {
+            format!("LOCK >={required}")
+        };
+        format!("[{key}] {kind:?} {status}")
+    })
+    .collect::<Vec<_>>()
+    .join(" | ");
+    format!(
+        "{heading}: promote Pawn {pawn:?} - BATCH SNAPSHOT score {score}\nOwned {} + governed {} + established {}x2; {next}. Available: {available}\n{options}",
+        control.owned_settlements, control.governed_settlements, control.established_settlements,
+    )
 }
 
 fn clock_description(state: &MatchState) -> Option<String> {
@@ -638,7 +881,7 @@ fn interaction_affordance_text(
     interaction: &BoardInteraction,
     history: &LocalTransitionNoticeLog,
 ) -> String {
-    let controls = if let Some(choice) = choice_description(&game.state) {
+    let controls = if let Some(choice) = choice_description(&game.scenario, &game.state) {
         choice
     } else {
         let hold = match hold_availability(&game.scenario, &game.state) {
@@ -908,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn promotion_choice_names_all_four_glyph_controls_and_queue_position() {
+    fn promotion_choice_names_all_four_controls_and_queue_position() {
         let mut game = game();
         game.state.phase = TurnPhase::ResolvingChoices {
             queue: vec![
@@ -923,11 +1166,106 @@ mod tests {
                 },
             ],
         };
-        let description = choice_description(&game.state).unwrap();
+        let description = choice_description(&game.scenario, &game.state).unwrap();
         assert!(description.contains("choice 1 of 2"));
-        for label in ["♕ Queen", "♖ Rook", "♗ Bishop", "♘ Knight"] {
+        for label in ["[1] Queen", "[2] Rook", "[3] Bishop", "[4] Knight"] {
             assert!(description.contains(label));
         }
+        assert!(description.contains("BATCH SNAPSHOT score 0"));
+        assert!(description.contains("Owned 0 + governed 0 + established 0x2"));
+        assert!(description.contains("next Bishop at 2 (2 needed)"));
+        assert!(description.contains("Available: Knight"));
+    }
+
+    #[test]
+    fn locked_promotion_key_reports_feedback_without_emitting_action() {
+        let mut game = game();
+        let pawn = *game.state.pieces.keys().next().unwrap();
+        let choice = MandatoryChoice::Promote {
+            pawn,
+            site_index: 0,
+            eligibility: PromotionEligibility::default(),
+        };
+        game.state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![choice.clone()],
+        };
+        let before = game.state.clone();
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::Digit1);
+        let mouse = ButtonInput::default();
+        let mut selection = OverlaySelection::default();
+        let mut interaction = BoardInteraction::default();
+        let mut transitions = LocalTransitionEventQueue::default();
+
+        handle_mandatory_choice(
+            &keys,
+            &mouse,
+            None,
+            false,
+            None,
+            choice,
+            &mut game,
+            &mut selection,
+            &mut interaction,
+            &mut transitions,
+            None,
+        );
+
+        assert_eq!(game.state, before);
+        assert!(interaction.status.contains("Queen is locked"));
+        assert!(interaction.status.contains("frozen score 0, requires 8"));
+        assert_eq!(transitions.drain_local_records().count(), 0);
+    }
+
+    #[test]
+    fn promotion_buttons_share_bindings_thresholds_and_reserved_layout() {
+        let mut game = game();
+        game.scenario.rules.promotion_unlocks = crownline_core::PromotionUnlockRules {
+            bishop: 3,
+            rook: 6,
+            queen: 9,
+        };
+        let pawn = *game.state.pieces.keys().next().unwrap();
+        game.state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::Promote {
+                pawn,
+                site_index: 0,
+                eligibility: PromotionEligibility::from_control(
+                    crownline_core::RealmControlScore {
+                        owned_settlements: 2,
+                        governed_settlements: 2,
+                        established_settlements: 0,
+                    },
+                    game.scenario.rules.promotion_unlocks,
+                ),
+            }],
+        };
+        let mut app = App::new();
+        app.insert_resource(game)
+            .add_systems(Startup, spawn_interaction_affordances)
+            .add_systems(Update, sync_promotion_choice_buttons);
+        app.update();
+
+        let world = app.world_mut();
+        let row = world
+            .query_filtered::<(&Node, &Name), With<PromotionChoiceRow>>()
+            .single(world)
+            .unwrap();
+        assert_eq!(row.0.left, percent(SIDE_REGION_PERCENT));
+        assert_eq!(row.0.right, percent(SIDE_REGION_PERCENT));
+        assert_eq!(row.0.bottom, px(7));
+        assert_eq!(row.0.height, px(34));
+        assert_eq!(row.0.display, Display::Flex);
+
+        let labels = world
+            .query::<(&PromotionChoiceButtonText, &Text)>()
+            .iter(world)
+            .map(|(_, text)| text.0.clone())
+            .collect::<Vec<_>>();
+        assert!(labels.iter().any(|text| text == "[1] Queen\nLOCK >=9"));
+        assert!(labels.iter().any(|text| text == "[2] Rook\nLOCK >=6"));
+        assert!(labels.iter().any(|text| text == "[3] Bishop\nREADY >=3"));
+        assert!(labels.iter().any(|text| text == "[4] Knight\nREADY"));
     }
 
     #[test]

@@ -303,7 +303,7 @@ fn movement_help(scenario: &ScenarioDefinition) -> String {
 
 fn realm_help(scenario: &ScenarioDefinition) -> String {
     format!(
-        "GOVERNANCE, DEVELOPMENT, PRODUCTION & PROMOTION\nKings, Queens, Rooks, and Bishops geometrically govern a settlement along an unblocked attack line; Knights and Pawns do not. A friendly founder on the endpoint does not block governance.\nAn owned settlement develops after {} continuous owner-turn cycles with its founder present, no enemy occupant, and at least one governor. Interruption {} progress in this scenario.\nAn established settlement produces after {} eligible cycles. Production queues a mandatory adjacent Pawn placement; Move and Hold remain disabled until every queued choice is resolved.\nA Pawn on a promotion site becomes eligible after {} surviving cycles. Promotion is mandatory when queued and offers Queen, Rook, Bishop, or Knight.",
+        "GOVERNANCE, DEVELOPMENT, PRODUCTION & PROMOTION\nKings, Queens, Rooks, and Bishops geometrically govern a settlement along an unblocked attack line; Knights and Pawns do not. A friendly founder on the endpoint does not block governance.\nAn owned settlement develops after {} continuous owner-turn cycles with its founder present, no enemy occupant, and at least one governor. Interruption {} progress in this scenario.\nAn established settlement produces after {} eligible cycles. Production queues a mandatory adjacent Pawn placement; Move and Hold remain disabled until every queued choice is resolved.\nA Pawn on a promotion site becomes eligible after {} surviving cycles. Promotion freezes a batch control score: owned settlements + governed owned settlements + 2 per established owned settlement. Knight is always ready; Bishop unlocks at {}, Rook at {}, and Queen at {}. Use [1] Queen, [2] Rook, [3] Bishop, or [4] Knight; locked keys do not submit an action.",
         scenario.rules.establishment_cycles,
         if scenario.rules.development_resets_when_interrupted {
             "resets"
@@ -312,6 +312,9 @@ fn realm_help(scenario: &ScenarioDefinition) -> String {
         },
         scenario.rules.production_cycles,
         scenario.rules.promotion_cycles,
+        scenario.rules.promotion_unlocks.bishop,
+        scenario.rules.promotion_unlocks.rook,
+        scenario.rules.promotion_unlocks.queen,
     )
 }
 
