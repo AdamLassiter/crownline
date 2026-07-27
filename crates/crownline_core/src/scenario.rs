@@ -7,6 +7,8 @@ use serde::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::guided::GuidedContent;
+
 pub const SCENARIO_SCHEMA_VERSION: u16 = 2;
 pub const MIN_SUPPORTED_SCENARIO_SCHEMA_VERSION: u16 = 1;
 pub const FOG_RULES_SCHEMA_VERSION: u16 = 1;
@@ -273,6 +275,8 @@ pub struct ScenarioDefinition {
     #[serde(default)]
     pub castling_routes: Vec<CastlingRoute>,
     pub rules: ScenarioRules,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guided: Option<GuidedContent>,
 }
 
 /// A small authored overlay for shipping a fog variant without duplicating the
@@ -393,6 +397,11 @@ impl ScenarioDefinition {
         validate_keeps_and_fortifications(self, &mut ids, &mut errors);
         validate_castling(self, &mut ids, &mut errors);
         validate_rule_configuration(self, &mut errors);
+        if let Some(guided) = &self.guided
+            && let Err(error) = guided.validate(self)
+        {
+            errors.push(ScenarioError::InvalidGuidedContent(error));
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -1029,6 +1038,8 @@ pub enum ScenarioError {
     FogVisionRadiusOutOfRange { found: u32, maximum: u32 },
     #[error("North and South Pawn directions must be opposed")]
     PawnDirectionsNotOpposed,
+    #[error("guided content is invalid: {0}")]
+    InvalidGuidedContent(String),
 }
 
 #[derive(Debug, Error)]
@@ -1088,6 +1099,7 @@ mod tests {
             fortifications: vec![],
             castling_routes: vec![],
             rules: ScenarioRules::default(),
+            guided: None,
         }
     }
 
@@ -1175,6 +1187,7 @@ mod tests {
             fortifications: vec![],
             castling_routes: vec![],
             rules: ScenarioRules::default(),
+            guided: None,
         }
     }
 

@@ -4,6 +4,7 @@
 //! wall-clock time. Hosts supply scenarios, actions, and elapsed time explicitly.
 
 pub mod clock;
+pub mod guided;
 pub mod journal;
 pub mod persistence;
 pub mod projection;
@@ -14,6 +15,11 @@ pub mod state;
 pub use clock::{
     ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES, advance_clock,
     apply_timed_action, start_clocks,
+};
+pub use guided::{
+    GUIDED_SCHEMA_VERSION, GuidedAiConfig, GuidedAiMode, GuidedCompletion, GuidedContent,
+    GuidedEventPredicate, GuidedKind, GuidedPredicate, GuidedPredicateContext, GuidedReplyNode,
+    GuidedStage, GuidedStart, ObjectiveResult,
 };
 pub use journal::{
     ActionJournal, AppendOutcome, IdempotencyKey, JournalError, JournalRecord, ReplayDivergence,

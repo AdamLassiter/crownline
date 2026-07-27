@@ -325,6 +325,16 @@ impl MatchState {
             .validate()
             .map_err(TransitionError::InvalidScenario)?;
 
+        if let Some(guided) = &scenario.guided {
+            let mut state = guided.start.state.clone();
+            state.validate_invariants()?;
+            if state.repetition_counts.is_empty() {
+                let key = state.repetition_key()?;
+                state.repetition_counts.insert(key, 1);
+            }
+            return Ok(state);
+        }
+
         let mut deployments = scenario.deployments.clone();
         deployments.sort_by_key(|piece| (piece.player, piece.at, piece.kind));
         let pieces = deployments
@@ -641,6 +651,13 @@ pub fn validate_exploration(
     scenario
         .validate()
         .map_err(TransitionError::InvalidScenario)?;
+    validate_exploration_unchecked(scenario, state)
+}
+
+pub(crate) fn validate_exploration_unchecked(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+) -> Result<(), TransitionError> {
     if state.scenario_id != scenario.id {
         return Err(TransitionError::ScenarioMismatch {
             expected: state.scenario_id.clone(),
@@ -894,6 +911,7 @@ mod tests {
                 army_setup: crate::scenario::ArmySetup::Custom,
                 ..ScenarioRules::default()
             },
+            guided: None,
         }
     }
 

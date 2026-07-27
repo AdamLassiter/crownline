@@ -836,6 +836,7 @@ mod tests {
                 }),
                 ..ScenarioRules::default()
             },
+            guided: None,
         }
     }
 

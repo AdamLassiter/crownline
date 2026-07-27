@@ -2441,6 +2441,7 @@ mod tests {
                 army_setup: crate::scenario::ArmySetup::Custom,
                 ..ScenarioRules::default()
             },
+            guided: None,
         }
     }
 

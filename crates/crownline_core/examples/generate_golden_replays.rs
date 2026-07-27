@@ -86,6 +86,7 @@ fn simple_scenario(id: &str, deployments: Vec<Deployment>) -> ScenarioDefinition
             army_setup: ArmySetup::Custom,
             ..ScenarioRules::default()
         },
+        guided: None,
     }
 }
 

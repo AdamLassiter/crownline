@@ -212,6 +212,7 @@ mod tests {
                 army_setup: ArmySetup::Custom,
                 ..ScenarioRules::default()
             },
+            guided: None,
         }
     }
 
