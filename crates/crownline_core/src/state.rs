@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{SeqAccess, Visitor},
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -107,7 +110,7 @@ impl<'de> Deserialize<'de> for PieceId {
     {
         struct PieceIdVisitor;
 
-        impl Visitor<'_> for PieceIdVisitor {
+        impl<'de> Visitor<'de> for PieceIdVisitor {
             type Value = PieceId;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -131,6 +134,21 @@ impl<'de> Deserialize<'de> for PieceId {
                     .parse::<u32>()
                     .map(PieceId)
                     .map_err(|_| E::custom("piece ID key is not a u32"))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let value = sequence
+                    .next_element::<u32>()?
+                    .ok_or_else(|| serde::de::Error::custom("piece ID newtype is empty"))?;
+                if sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    return Err(serde::de::Error::custom(
+                        "piece ID newtype contains more than one value",
+                    ));
+                }
+                Ok(PieceId(value))
             }
         }
 
@@ -873,6 +891,15 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn piece_id_accepts_ron_newtype_and_rejects_malformed_sequences() {
+        let encoded = ron::to_string(&PieceId(17)).unwrap();
+        assert_eq!(ron::from_str::<PieceId>(&encoded).unwrap(), PieceId(17));
+        assert!(ron::from_str::<PieceId>("()").is_err());
+        assert!(ron::from_str::<PieceId>("(17, 18)").is_err());
+        assert_eq!(serde_json::from_str::<PieceId>("17").unwrap(), PieceId(17));
+    }
 
     fn scenario() -> ScenarioDefinition {
         ScenarioDefinition {
