@@ -109,14 +109,17 @@ fn window_title() -> String {
 }
 
 fn runtime_asset_root() -> String {
-    std::env::current_exe()
+    let packaged = std::env::current_exe()
         .ok()
-        .and_then(|executable| executable.parent().map(|parent| parent.join("assets")))
-        .filter(|assets| assets.is_dir())
-        .map_or_else(
-            || "assets".to_owned(),
-            |assets| assets.to_string_lossy().into_owned(),
-        )
+        .and_then(|executable| executable.parent().map(|parent| parent.join("assets")));
+    if let Some(assets) = packaged.filter(|assets| assets.is_dir()) {
+        return assets.to_string_lossy().into_owned();
+    }
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    if source.is_dir() {
+        return source.to_string_lossy().into_owned();
+    }
+    "assets".to_owned()
 }
 
 fn configured_ui_scale(settings: &ClientSettings) -> UiScale {
@@ -224,6 +227,16 @@ fn font_visibility(load_failed: bool, chess_text: bool, fallback_text: bool) -> 
 #[cfg(test)]
 mod accessibility_tests {
     use super::*;
+
+    #[test]
+    fn runtime_asset_root_contains_the_bundled_chess_font() {
+        let root = std::path::PathBuf::from(runtime_asset_root());
+        assert!(
+            root.join("fonts/NotoSansSymbols2-Regular.ttf").is_file(),
+            "runtime asset root {} does not contain the bundled chess font",
+            root.display()
+        );
+    }
 
     #[test]
     fn configured_ui_scale_reaches_bevy_layout() {
