@@ -402,7 +402,7 @@ mod tests {
         },
         state::{
             ClockState, MandatoryChoice, MatchOutcome, OutcomeReason, PieceId, PieceOrigin,
-            TurnPhase,
+            PromotionEligibility, TurnPhase,
         },
     };
 
@@ -470,6 +470,7 @@ mod tests {
                 MandatoryChoice::Promote {
                     pawn,
                     site_index: 0,
+                    eligibility: PromotionEligibility::default(),
                 },
                 MandatoryChoice::PlacePawn {
                     settlement_index: 0,

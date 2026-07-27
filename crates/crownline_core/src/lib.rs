@@ -23,9 +23,9 @@ pub use persistence::{
 };
 pub use rules::{
     AttackLine, BlockedGovernanceLine, GovernanceBlocker, GovernanceReport, LegalMove,
-    MoveInspection, MoveKind, MoveUnavailability, RealmControlScore, Transition, TransitionEvent,
-    apply_action, attack_lines_on, governance_report, inspect_move, is_in_check, legal_moves,
-    pawn_placement_squares, realm_control_score,
+    MoveInspection, MoveKind, MoveUnavailability, Transition, TransitionEvent, apply_action,
+    attack_lines_on, governance_report, inspect_move, is_in_check, legal_mandatory_choice_actions,
+    legal_moves, pawn_placement_squares, realm_control_score,
 };
 pub use scenario::{PromotionUnlockRules, ScenarioDefinition, ScenarioError, ScenarioHashError};
-pub use state::{Action, MatchState, TransitionError};
+pub use state::{Action, MatchState, PromotionEligibility, RealmControlScore, TransitionError};

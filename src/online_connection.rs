@@ -1708,6 +1708,7 @@ mod tests {
             queue: vec![MandatoryChoice::Promote {
                 pawn: south_pawn,
                 site_index: 0,
+                eligibility: crownline_core::PromotionEligibility::default(),
             }],
         };
         variants.push(("promotion", promotion));

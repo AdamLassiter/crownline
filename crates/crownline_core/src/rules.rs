@@ -6,7 +6,8 @@ use crate::{
     scenario::{Coord, Edge, EdgeKind, PieceKind, Player, ScenarioDefinition, TileTerrain},
     state::{
         Action, EnPassantState, MandatoryChoice, MatchOutcome, MatchState, OutcomeReason, Piece,
-        PieceId, PieceOrigin, PromotionKind, TransitionError, TurnPhase,
+        PieceId, PieceOrigin, PromotionEligibility, PromotionKind, RealmControlScore,
+        TransitionError, TurnPhase,
     },
 };
 
@@ -55,22 +56,6 @@ pub struct GovernanceReport {
     pub owner: Option<Player>,
     pub governors: Vec<AttackLine>,
     pub blocked: Vec<BlockedGovernanceLine>,
-}
-
-/// Settlement counts contributing to one player's current promotion-control score.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RealmControlScore {
-    pub owned_settlements: u32,
-    pub governed_settlements: u32,
-    pub established_settlements: u32,
-}
-
-impl RealmControlScore {
-    /// Returns ownership + governance + twice establishment.
-    #[must_use]
-    pub const fn total(self) -> u32 {
-        self.owned_settlements + self.governed_settlements + self.established_settlements * 2
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -569,12 +554,12 @@ pub fn apply_action(
     if state.active_player != next.active_player && next.outcome.is_none() {
         let active_player = next.active_player;
         resolve_transfer_candidates(scenario, &mut next, active_player)?;
-        advance_promotion_candidates(scenario, &mut next, active_player)?;
     }
     latch_settlement_interruptions(scenario, &mut next)?;
     if state.active_player != next.active_player && next.outcome.is_none() {
         let owner = next.active_player;
         complete_owner_cycles(scenario, &mut next, owner);
+        advance_promotion_candidates(scenario, &mut next, owner)?;
         sort_mandatory_choices(scenario, &mut next);
         latch_settlement_interruptions(scenario, &mut next)?;
         record_repetition(&mut next)?;
@@ -610,8 +595,23 @@ fn apply_promotion_choice(
         TurnPhase::ResolvingChoices { queue } => queue,
         TurnPhase::Command => return Err(TransitionError::WrongTurnPhase),
     };
-    if !matches!(queue.first(), Some(MandatoryChoice::Promote { pawn, .. }) if *pawn == pawn_id) {
-        return Err(TransitionError::ChoiceDoesNotMatch);
+    let eligibility = match queue.first() {
+        Some(MandatoryChoice::Promote {
+            pawn, eligibility, ..
+        }) if *pawn == pawn_id => eligibility,
+        _ => return Err(TransitionError::ChoiceDoesNotMatch),
+    };
+    let expected =
+        PromotionEligibility::from_control(eligibility.control, scenario.rules.promotion_unlocks);
+    if *eligibility != expected {
+        return Err(TransitionError::InvalidPromotionEligibility);
+    }
+    if !eligibility.allows(promote_to) {
+        return Err(TransitionError::PromotionKindLocked {
+            requested: promote_to,
+            control_score: eligibility.control.total(),
+            required_score: promotion_required_score(scenario, promote_to),
+        });
     }
     let pawn = state
         .pieces
@@ -933,7 +933,9 @@ fn new_mandatory_choice_events(before: &MatchState, after: &MatchState) -> Vec<T
                 settlement_index: *settlement_index,
                 legal_squares: legal_squares.clone(),
             },
-            MandatoryChoice::Promote { pawn, site_index } => TransitionEvent::PromotionReady {
+            MandatoryChoice::Promote {
+                pawn, site_index, ..
+            } => TransitionEvent::PromotionReady {
                 pawn: *pawn,
                 site_index: *site_index,
             },
@@ -1076,7 +1078,7 @@ fn advance_promotion_candidates(
                 .ok_or(TransitionError::PromotionProgressOverflow)?;
         }
     }
-    let choices: Vec<_> = state
+    let ready: Vec<_> = state
         .promotion_candidates
         .iter()
         .filter(|(_, progress)| **progress >= scenario.rules.promotion_cycles)
@@ -1090,14 +1092,72 @@ fn advance_promotion_candidates(
                 .iter()
                 .position(|site| site.at == piece.at)
                 .and_then(|index| u16::try_from(index).ok())?;
-            Some(MandatoryChoice::Promote {
-                pawn: *pawn,
-                site_index,
-            })
+            Some((*pawn, site_index))
+        })
+        .collect();
+    if ready.is_empty() {
+        return Ok(());
+    }
+    let control = realm_control_score(scenario, state, active_player)?;
+    let eligibility = PromotionEligibility::from_control(control, scenario.rules.promotion_unlocks);
+    let choices = ready
+        .into_iter()
+        .map(|(pawn, site_index)| MandatoryChoice::Promote {
+            pawn,
+            site_index,
+            eligibility: eligibility.clone(),
         })
         .collect();
     append_mandatory_choices(state, choices);
     Ok(())
+}
+
+const fn promotion_required_score(scenario: &ScenarioDefinition, kind: PromotionKind) -> u32 {
+    match kind {
+        PromotionKind::Knight => 0,
+        PromotionKind::Bishop => scenario.rules.promotion_unlocks.bishop,
+        PromotionKind::Rook => scenario.rules.promotion_unlocks.rook,
+        PromotionKind::Queen => scenario.rules.promotion_unlocks.queen,
+    }
+}
+
+/// Enumerates actions resolving the first mandatory choice in stable order.
+#[must_use]
+pub fn legal_mandatory_choice_actions(state: &MatchState) -> Vec<Action> {
+    if state.outcome.is_some() {
+        return Vec::new();
+    }
+    let TurnPhase::ResolvingChoices { queue } = &state.phase else {
+        return Vec::new();
+    };
+    let Some(choice) = queue.first() else {
+        return Vec::new();
+    };
+    match choice {
+        MandatoryChoice::Promote {
+            pawn, eligibility, ..
+        } => PromotionKind::RECRUITMENT_ORDER
+            .into_iter()
+            .filter(|kind| eligibility.allows(*kind))
+            .map(|promote_to| Action::ChoosePromotion {
+                player: state.active_player,
+                pawn: *pawn,
+                promote_to,
+            })
+            .collect(),
+        MandatoryChoice::PlacePawn {
+            settlement_index,
+            legal_squares,
+        } => legal_squares
+            .iter()
+            .copied()
+            .map(|at| Action::PlacePawn {
+                player: state.active_player,
+                settlement_index: *settlement_index,
+                at,
+            })
+            .collect(),
+    }
 }
 
 fn append_mandatory_choices(state: &mut MatchState, choices: Vec<MandatoryChoice>) {
@@ -1117,7 +1177,9 @@ fn sort_mandatory_choices(scenario: &ScenarioDefinition, state: &mut MatchState)
         return;
     };
     queue.sort_by_key(|choice| match choice {
-        MandatoryChoice::Promote { pawn, site_index } => (
+        MandatoryChoice::Promote {
+            pawn, site_index, ..
+        } => (
             scenario
                 .promotion_sites
                 .get(usize::from(*site_index))
@@ -2220,8 +2282,8 @@ mod tests {
     use crate::{
         scenario::{
             BoardSize, CastlingRoute, Deployment, Edge, EdgeKind, Fortification, KeepDefinition,
-            PromotionSite, SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules,
-            SettlementSite, TileTerrain,
+            PromotionSite, PromotionUnlockRules, SCENARIO_SCHEMA_VERSION, ScenarioMetadata,
+            ScenarioRules, SettlementSite, TileTerrain,
         },
         state::PieceOrigin,
     };
@@ -2362,6 +2424,16 @@ mod tests {
             id: "governance-test".to_owned(),
             at,
         });
+    }
+
+    fn promotion_eligibility(score: u32) -> PromotionEligibility {
+        PromotionEligibility::from_control(
+            RealmControlScore {
+                owned_settlements: score,
+                ..RealmControlScore::default()
+            },
+            PromotionUnlockRules::default(),
+        )
     }
 
     #[test]
@@ -2559,6 +2631,236 @@ mod tests {
         assert_eq!(
             realm_control_score(&scenario, &state, Player::South).unwrap(),
             RealmControlScore::default()
+        );
+    }
+
+    #[test]
+    fn same_boundary_establishment_counts_before_promotion_snapshot() {
+        let settlement_at = Coord::new(3, 3);
+        let promotion_at = Coord::new(2, 2);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Pawn, 2, 2),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+        ]);
+        add_settlement(&mut scenario, settlement_at);
+        scenario.promotion_sites.push(PromotionSite {
+            id: "court".to_owned(),
+            at: promotion_at,
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        let founder = piece_id_at(&state, settlement_at);
+        let candidate = piece_id_at(&state, promotion_at);
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(founder);
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles - 1;
+        state.promotion_candidates.insert(candidate, 0);
+
+        let ready = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert!(ready.state.settlements[0].established);
+        let TurnPhase::ResolvingChoices { queue } = &ready.state.phase else {
+            panic!("promotion must be ready");
+        };
+        let MandatoryChoice::Promote { eligibility, .. } = &queue[0] else {
+            panic!("first choice must be promotion");
+        };
+        assert_eq!(eligibility.control.total(), 4);
+        assert!(eligibility.allows(PromotionKind::Rook));
+        assert!(!eligibility.allows(PromotionKind::Queen));
+    }
+
+    #[test]
+    fn promotion_batch_freezes_before_an_earlier_choice_increases_control() {
+        let settlement_at = Coord::new(4, 4);
+        let west_site = Coord::new(2, 2);
+        let east_site = Coord::new(6, 2);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 2, 2),
+            deployment(Player::South, PieceKind::Pawn, 6, 2),
+        ]);
+        add_settlement(&mut scenario, settlement_at);
+        scenario.promotion_sites = vec![
+            PromotionSite {
+                id: "west-court".to_owned(),
+                at: west_site,
+            },
+            PromotionSite {
+                id: "east-court".to_owned(),
+                at: east_site,
+            },
+        ];
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        let west = piece_id_at(&state, west_site);
+        let east = piece_id_at(&state, east_site);
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(west);
+        state.settlements[0].established = true;
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles;
+        state.promotion_candidates.insert(west, 0);
+        state.promotion_candidates.insert(east, 0);
+
+        let ready = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        let TurnPhase::ResolvingChoices { queue } = &ready.state.phase else {
+            panic!("both promotions must be ready");
+        };
+        assert_eq!(queue.len(), 2);
+        let snapshots = queue
+            .iter()
+            .map(|choice| match choice {
+                MandatoryChoice::Promote { eligibility, .. } => eligibility,
+                MandatoryChoice::PlacePawn { .. } => panic!("unexpected placement"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(snapshots[0], snapshots[1]);
+        assert_eq!(snapshots[0].control.total(), 3);
+        assert_eq!(
+            legal_mandatory_choice_actions(&ready.state),
+            vec![
+                Action::ChoosePromotion {
+                    player: Player::South,
+                    pawn: west,
+                    promote_to: PromotionKind::Knight,
+                },
+                Action::ChoosePromotion {
+                    player: Player::South,
+                    pawn: west,
+                    promote_to: PromotionKind::Bishop,
+                },
+            ]
+        );
+
+        let first = apply_action(
+            &scenario,
+            &ready.state,
+            &Action::ChoosePromotion {
+                player: Player::South,
+                pawn: west,
+                promote_to: PromotionKind::Bishop,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            realm_control_score(&scenario, &first.state, Player::South)
+                .unwrap()
+                .total(),
+            4,
+            "the new Bishop now governs the settlement"
+        );
+        let before_rejection = first.state.clone();
+        assert!(matches!(
+            apply_action(
+                &scenario,
+                &first.state,
+                &Action::ChoosePromotion {
+                    player: Player::South,
+                    pawn: east,
+                    promote_to: PromotionKind::Rook,
+                }
+            ),
+            Err(TransitionError::PromotionKindLocked {
+                requested: PromotionKind::Rook,
+                control_score: 3,
+                required_score: 4,
+            })
+        ));
+        assert_eq!(first.state, before_rejection);
+    }
+
+    #[test]
+    fn later_promotion_batch_relocks_after_current_control_is_lost() {
+        let settlement_at = Coord::new(4, 4);
+        let first_site = Coord::new(2, 2);
+        let later_site = Coord::new(6, 2);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 2, 2),
+            deployment(Player::South, PieceKind::Pawn, 6, 2),
+            deployment(Player::South, PieceKind::Rook, 7, 4),
+        ]);
+        add_settlement(&mut scenario, settlement_at);
+        scenario.promotion_sites = vec![
+            PromotionSite {
+                id: "first-court".to_owned(),
+                at: first_site,
+            },
+            PromotionSite {
+                id: "later-court".to_owned(),
+                at: later_site,
+            },
+        ];
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        let first_pawn = piece_id_at(&state, first_site);
+        let later_pawn = piece_id_at(&state, later_site);
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].founder = Some(later_pawn);
+        state.settlements[0].established = true;
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles;
+        state.promotion_candidates.insert(first_pawn, 0);
+
+        let first_batch = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        let TurnPhase::ResolvingChoices { queue } = &first_batch.state.phase else {
+            panic!("first promotion must be ready");
+        };
+        let MandatoryChoice::Promote { eligibility, .. } = &queue[0] else {
+            panic!("first choice must be promotion");
+        };
+        assert_eq!(eligibility.control.total(), 4);
+        assert!(eligibility.allows(PromotionKind::Rook));
+
+        let resolved = apply_action(
+            &scenario,
+            &first_batch.state,
+            &Action::ChoosePromotion {
+                player: Player::South,
+                pawn: first_pawn,
+                promote_to: PromotionKind::Knight,
+            },
+        )
+        .unwrap();
+        let mut lost_control = resolved.state;
+        lost_control.active_player = Player::North;
+        lost_control.settlements[0].owner = None;
+        lost_control.settlements[0].founder = None;
+        lost_control.promotion_candidates.insert(later_pawn, 0);
+
+        let later_batch = apply_action(
+            &scenario,
+            &lost_control,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            legal_mandatory_choice_actions(&later_batch.state),
+            vec![Action::ChoosePromotion {
+                player: Player::South,
+                pawn: later_pawn,
+                promote_to: PromotionKind::Knight,
+            }]
         );
     }
 
@@ -2899,6 +3201,7 @@ mod tests {
             queue: vec![MandatoryChoice::Promote {
                 pawn: produced,
                 site_index: 0,
+                eligibility: promotion_eligibility(8),
             }],
         };
         let promoted = apply_action(
@@ -3065,6 +3368,14 @@ mod tests {
                 queue: vec![MandatoryChoice::Promote {
                     pawn,
                     site_index: 0,
+                    eligibility: PromotionEligibility::from_control(
+                        RealmControlScore {
+                            owned_settlements: 1,
+                            established_settlements: 1,
+                            ..RealmControlScore::default()
+                        },
+                        PromotionUnlockRules::default(),
+                    ),
                 }]
             }
         );
@@ -3173,6 +3484,7 @@ mod tests {
             queue: vec![MandatoryChoice::Promote {
                 pawn,
                 site_index: 0,
+                eligibility: promotion_eligibility(8),
             }],
         };
         let before = state.clone();
@@ -3263,13 +3575,14 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(
-            queue[1],
+        assert!(matches!(
+            &queue[1],
             MandatoryChoice::Promote {
-                pawn: west_candidate,
+                pawn,
                 site_index: 0,
-            }
-        );
+                ..
+            } if *pawn == west_candidate
+        ));
         assert!(matches!(
             queue[2],
             MandatoryChoice::PlacePawn {
@@ -3277,13 +3590,14 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(
-            queue[3],
+        assert!(matches!(
+            &queue[3],
             MandatoryChoice::Promote {
-                pawn: east_candidate,
+                pawn,
                 site_index: 1,
-            }
-        );
+                ..
+            } if *pawn == east_candidate
+        ));
     }
 
     #[test]
@@ -3365,7 +3679,7 @@ mod tests {
                 Action::ChoosePromotion {
                     player: Player::South,
                     pawn,
-                    promote_to: PromotionKind::Rook,
+                    promote_to: PromotionKind::Knight,
                 },
             ),
         ] {
@@ -4499,6 +4813,7 @@ mod tests {
             queue: vec![MandatoryChoice::Promote {
                 pawn,
                 site_index: 0,
+                eligibility: PromotionEligibility::default(),
             }],
         };
         let before = state.clone();
@@ -4539,6 +4854,7 @@ mod tests {
             queue: vec![MandatoryChoice::Promote {
                 pawn,
                 site_index: 0,
+                eligibility: PromotionEligibility::default(),
             }],
         };
 

@@ -1,8 +1,9 @@
 use crownline_core::{
-    Action, MatchState, TransitionEvent, apply_action, is_in_check, legal_moves,
+    Action, MatchState, TransitionEvent, apply_action, is_in_check, legal_mandatory_choice_actions,
+    legal_moves,
     rules::MoveKind,
     scenario::{Coord, PieceKind, Player, ScenarioDefinition},
-    state::{MandatoryChoice, OutcomeReason, PromotionKind, TurnPhase},
+    state::{MandatoryChoice, OutcomeReason, TurnPhase},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -203,11 +204,10 @@ fn target_settlement(
 fn choose_action(scenario: &ScenarioDefinition, state: &MatchState, target: Coord) -> Action {
     if let TurnPhase::ResolvingChoices { queue } = &state.phase {
         return match queue.first().expect("choice queue is non-empty") {
-            MandatoryChoice::Promote { pawn, .. } => Action::ChoosePromotion {
-                player: state.active_player,
-                pawn: *pawn,
-                promote_to: PromotionKind::Queen,
-            },
+            MandatoryChoice::Promote { .. } => legal_mandatory_choice_actions(state)
+                .into_iter()
+                .next()
+                .expect("promotion has at least the Knight action"),
             MandatoryChoice::PlacePawn {
                 settlement_index,
                 legal_squares,

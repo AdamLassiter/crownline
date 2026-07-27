@@ -2,12 +2,12 @@ use std::collections::BTreeMap;
 
 use crownline_core::{
     Action, ActionJournal, AppendOutcome, ClockSettings, IdempotencyKey, MatchState,
-    ScenarioDefinition, TransitionEvent, is_in_check,
+    ScenarioDefinition, TransitionEvent, is_in_check, legal_mandatory_choice_actions,
     scenario::{
         ArmySetup, BoardSize, Coord, Deployment, PieceKind, Player, PromotionSite,
         SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules, SettlementSite,
     },
-    state::{MandatoryChoice, MatchOutcome, OutcomeReason, PieceId, PromotionKind, TurnPhase},
+    state::{MandatoryChoice, MatchOutcome, OutcomeReason, PieceId, TurnPhase},
 };
 
 const APPLICATION_VERSION: &str = "0.1.0-golden";
@@ -159,11 +159,10 @@ fn resolve_choices(
 ) {
     while let TurnPhase::ResolvingChoices { queue } = &state.phase {
         let action = match queue.first().expect("choice queue cannot be empty") {
-            MandatoryChoice::Promote { pawn, .. } => Action::ChoosePromotion {
-                player: state.active_player,
-                pawn: *pawn,
-                promote_to: PromotionKind::Knight,
-            },
+            MandatoryChoice::Promote { .. } => legal_mandatory_choice_actions(state)
+                .into_iter()
+                .next()
+                .expect("promotion has at least the Knight action"),
             MandatoryChoice::PlacePawn {
                 settlement_index,
                 legal_squares,

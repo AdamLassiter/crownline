@@ -915,6 +915,7 @@ mod tests {
                 MandatoryChoice::Promote {
                     pawn: PieceId(9),
                     site_index: 0,
+                    eligibility: crownline_core::PromotionEligibility::default(),
                 },
                 MandatoryChoice::PlacePawn {
                     settlement_index: 1,
@@ -941,6 +942,7 @@ mod tests {
             queue: vec![MandatoryChoice::Promote {
                 pawn: game.state.pieces.keys().next().copied().unwrap(),
                 site_index: 0,
+                eligibility: crownline_core::PromotionEligibility::default(),
             }],
         };
         let restored_choice_key = ChoicePresentationKey {

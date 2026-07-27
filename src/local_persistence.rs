@@ -266,7 +266,10 @@ mod tests {
     use crownline_core::{
         is_in_check,
         scenario::{Coord, PieceKind, Player},
-        state::{ClockState, MandatoryChoice, MatchOutcome, OutcomeReason, TurnPhase},
+        state::{
+            ClockState, MandatoryChoice, MatchOutcome, OutcomeReason, PieceId,
+            PromotionEligibility, TurnPhase,
+        },
     };
 
     use super::*;
@@ -287,6 +290,14 @@ mod tests {
             north_name: "North".to_owned(),
             south_name: "South".to_owned(),
             clock: None,
+        }
+    }
+
+    fn pending_promotion(pawn: PieceId) -> MandatoryChoice {
+        MandatoryChoice::Promote {
+            pawn,
+            site_index: 0,
+            eligibility: PromotionEligibility::default(),
         }
     }
 
@@ -326,10 +337,7 @@ mod tests {
             .unwrap()
             .id;
         document.core.state.phase = TurnPhase::ResolvingChoices {
-            queue: vec![MandatoryChoice::Promote {
-                pawn,
-                site_index: 0,
-            }],
+            queue: vec![pending_promotion(pawn)],
         };
         document.core.state.clocks = Some(ClockState {
             north_millis: 12_345,

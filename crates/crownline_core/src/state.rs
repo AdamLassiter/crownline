@@ -4,7 +4,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::Visitor};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::scenario::{Coord, PieceKind, Player, ScenarioDefinition};
+use crate::scenario::{Coord, PieceKind, Player, PromotionUnlockRules, ScenarioDefinition};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PieceId(pub u32);
@@ -86,7 +86,7 @@ pub struct SettlementState {
     pub transfer_candidate: Option<PieceId>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromotionKind {
     Queen,
@@ -95,12 +95,75 @@ pub enum PromotionKind {
     Knight,
 }
 
+impl PromotionKind {
+    pub const RECRUITMENT_ORDER: [Self; 4] = [Self::Knight, Self::Bishop, Self::Rook, Self::Queen];
+}
+
+/// Settlement counts contributing to one player's current promotion-control score.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealmControlScore {
+    pub owned_settlements: u32,
+    pub governed_settlements: u32,
+    pub established_settlements: u32,
+}
+
+impl RealmControlScore {
+    /// Returns ownership + governance + twice establishment.
+    #[must_use]
+    pub const fn total(self) -> u32 {
+        self.owned_settlements + self.governed_settlements + self.established_settlements * 2
+    }
+}
+
+/// Immutable promotion choices captured for one owner-turn batch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionEligibility {
+    pub control: RealmControlScore,
+    pub allowed_kinds: BTreeSet<PromotionKind>,
+}
+
+impl Default for PromotionEligibility {
+    fn default() -> Self {
+        Self::from_control(
+            RealmControlScore::default(),
+            PromotionUnlockRules::default(),
+        )
+    }
+}
+
+impl PromotionEligibility {
+    #[must_use]
+    pub fn from_control(control: RealmControlScore, unlocks: PromotionUnlockRules) -> Self {
+        let total = control.total();
+        let mut allowed_kinds = BTreeSet::from([PromotionKind::Knight]);
+        if total >= unlocks.bishop {
+            allowed_kinds.insert(PromotionKind::Bishop);
+        }
+        if total >= unlocks.rook {
+            allowed_kinds.insert(PromotionKind::Rook);
+        }
+        if total >= unlocks.queen {
+            allowed_kinds.insert(PromotionKind::Queen);
+        }
+        Self {
+            control,
+            allowed_kinds,
+        }
+    }
+
+    #[must_use]
+    pub fn allows(&self, kind: PromotionKind) -> bool {
+        self.allowed_kinds.contains(&kind)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MandatoryChoice {
     Promote {
         pawn: PieceId,
         site_index: u16,
+        eligibility: PromotionEligibility,
     },
     PlacePawn {
         settlement_index: u16,
@@ -444,6 +507,16 @@ pub enum TransitionError {
     ChoiceDoesNotMatch,
     #[error("piece {0:?} is not an eligible promotion Pawn")]
     InvalidPromotionPawn(PieceId),
+    #[error(
+        "promotion to {requested:?} requires control score {required_score}, but this batch froze at {control_score}"
+    )]
+    PromotionKindLocked {
+        requested: PromotionKind,
+        control_score: u32,
+        required_score: u32,
+    },
+    #[error("queued promotion eligibility does not match the scenario unlock rules")]
+    InvalidPromotionEligibility,
     #[error("promotion would leave the active King in check")]
     PromotionLeavesKingInCheck,
     #[error("promotion candidate progress overflowed")]
@@ -545,6 +618,42 @@ mod tests {
     }
 
     #[test]
+    fn promotion_eligibility_unlocks_cumulatively_at_exact_boundaries() {
+        let rules = PromotionUnlockRules::default();
+        let kinds_at = |score| {
+            PromotionEligibility::from_control(
+                RealmControlScore {
+                    owned_settlements: score,
+                    ..RealmControlScore::default()
+                },
+                rules,
+            )
+            .allowed_kinds
+        };
+
+        assert_eq!(kinds_at(0), BTreeSet::from([PromotionKind::Knight]));
+        assert_eq!(kinds_at(1), BTreeSet::from([PromotionKind::Knight]));
+        assert_eq!(
+            kinds_at(2),
+            BTreeSet::from([PromotionKind::Knight, PromotionKind::Bishop])
+        );
+        assert_eq!(kinds_at(3), kinds_at(2));
+        assert_eq!(
+            kinds_at(4),
+            BTreeSet::from([
+                PromotionKind::Knight,
+                PromotionKind::Bishop,
+                PromotionKind::Rook,
+            ])
+        );
+        assert_eq!(kinds_at(7), kinds_at(4));
+        assert_eq!(
+            kinds_at(8),
+            BTreeSet::from(PromotionKind::RECRUITMENT_ORDER)
+        );
+    }
+
+    #[test]
     fn construction_and_hash_are_deterministic() {
         let first = MatchState::from_scenario(&scenario()).expect("valid state");
         let second = MatchState::from_scenario(&scenario()).expect("valid state");
@@ -594,6 +703,7 @@ mod tests {
             queue: vec![MandatoryChoice::Promote {
                 pawn: first_piece,
                 site_index: 0,
+                eligibility: PromotionEligibility::default(),
             }],
         };
         variants.push(changed);
