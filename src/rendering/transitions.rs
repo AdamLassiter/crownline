@@ -249,8 +249,12 @@ pub(super) fn process_transition_events(
         }
         return;
     }
-    log.entries
-        .extend(queue.events.drain(..).map(|event| event_message(&event)));
+    log.entries.extend(
+        queue
+            .events
+            .drain(..)
+            .map(|event| event_message(&event, &game.state)),
+    );
 }
 
 fn spawn_retirement_ghost(
@@ -288,33 +292,116 @@ fn spawn_retirement_ghost(
         });
 }
 
-fn event_message(event: &TransitionEvent) -> String {
+#[allow(clippy::too_many_lines)]
+fn event_message(event: &TransitionEvent, state: &MatchState) -> String {
     match event {
-        TransitionEvent::PieceMoved { from, to, .. } => format!("Move {from:?} to {to:?}"),
+        TransitionEvent::PieceMoved { piece, from, to } => state.pieces.get(piece).map_or_else(
+            || format!("Move {from:?} to {to:?}"),
+            |piece| {
+                format!(
+                    "{:?} {:?} moved from {from:?} to {to:?}",
+                    piece.owner, piece.kind
+                )
+            },
+        ),
         TransitionEvent::PieceCaptured { at, .. } => format!("Capture at {at:?}"),
         TransitionEvent::TurnHeld { player } => format!("{player:?} held the turn"),
+        TransitionEvent::ClockAdvanced {
+            player,
+            elapsed_millis,
+            remaining_millis,
+        } => format!(
+            "{player:?} clock advanced by {elapsed_millis} ms; {remaining_millis} ms remain"
+        ),
+        TransitionEvent::ClockIncrementApplied {
+            player,
+            increment_millis,
+            remaining_millis,
+        } => format!(
+            "{player:?} received {increment_millis} ms increment; {remaining_millis} ms remain"
+        ),
         TransitionEvent::PiecePromoted { kind, at, .. } => {
             format!("Promotion to {kind:?} at {at:?}")
         }
+        TransitionEvent::PawnProduced {
+            settlement_index,
+            at,
+            ..
+        } => format!("Settlement {settlement_index} produced a Pawn at {at:?}"),
+        TransitionEvent::SettlementContinuityInterrupted { settlement_index } => {
+            format!("Settlement {settlement_index} continuity interrupted")
+        }
+        TransitionEvent::SettlementCycleStarted {
+            settlement_index,
+            player,
+            previous_continuous,
+        } => format!(
+            "Settlement {settlement_index} began {player:?} cycle; previous cycle {}",
+            if *previous_continuous {
+                "was continuous"
+            } else {
+                "was interrupted"
+            }
+        ),
         TransitionEvent::SettlementClaimed {
             settlement_index,
             owner,
             ..
         } => format!("{owner:?} claimed settlement {settlement_index}"),
+        TransitionEvent::SettlementContested {
+            settlement_index, ..
+        } => format!("Settlement {settlement_index} contested by a Pawn"),
+        TransitionEvent::SettlementTransferCancelled {
+            settlement_index, ..
+        } => format!("Settlement {settlement_index} transfer cancelled"),
         TransitionEvent::SettlementTransferred {
             settlement_index,
             owner,
             ..
         } => format!("Settlement {settlement_index} transferred to {owner:?}"),
+        TransitionEvent::SettlementDevelopmentAdvanced {
+            settlement_index,
+            progress,
+        } => format!("Settlement {settlement_index} development advanced to {progress}"),
+        TransitionEvent::SettlementDevelopmentReset { settlement_index } => {
+            format!("Settlement {settlement_index} development reset")
+        }
         TransitionEvent::SettlementEstablished { settlement_index } => {
             format!("Settlement {settlement_index} established")
         }
-        TransitionEvent::PawnProduced {
-            settlement_index, ..
-        } => format!("Settlement {settlement_index} produced a Pawn"),
-        TransitionEvent::PromotionReady { pawn, .. } => {
-            format!("Pawn {pawn:?} is ready to promote")
+        TransitionEvent::SettlementProductionAdvanced {
+            settlement_index,
+            progress,
+        } => format!("Settlement {settlement_index} production advanced to {progress}"),
+        TransitionEvent::SettlementProductionReset { settlement_index } => {
+            format!("Settlement {settlement_index} production reset")
         }
+        TransitionEvent::PawnPlacementReady {
+            settlement_index,
+            legal_squares,
+        } => format!(
+            "Settlement {settlement_index} has {} legal Pawn placements",
+            legal_squares.len()
+        ),
+        TransitionEvent::PromotionCandidateStarted { pawn } => {
+            format!(
+                "{} started promotion progress",
+                pawn_description(state, *pawn)
+            )
+        }
+        TransitionEvent::PromotionCandidateAdvanced { pawn, progress } => format!(
+            "{} promotion advanced to {progress}",
+            pawn_description(state, *pawn)
+        ),
+        TransitionEvent::PromotionCandidateCancelled { .. } => {
+            "A Pawn lost its promotion opportunity".to_owned()
+        }
+        TransitionEvent::PromotionReady {
+            pawn, site_index, ..
+        } => format!(
+            "{} is ready to promote at site {site_index}",
+            pawn_description(state, *pawn)
+        ),
         TransitionEvent::DrawOffered { player } => format!("{player:?} offered a draw"),
         TransitionEvent::DrawAnswered { player, accepted } => format!(
             "{player:?} {} the draw",
@@ -325,8 +412,14 @@ fn event_message(event: &TransitionEvent) -> String {
             turn_number,
         } => format!("Turn {turn_number}: {player:?}"),
         TransitionEvent::MatchEnded { outcome } => format!("Match ended: {:?}", outcome.reason),
-        other => format!("{other:?}"),
     }
+}
+
+fn pawn_description(state: &MatchState, pawn: PieceId) -> String {
+    state.pieces.get(&pawn).map_or_else(
+        || "Pawn no longer on board".to_owned(),
+        |piece| format!("{:?} Pawn at ({}, {})", piece.owner, piece.at.x, piece.at.y),
+    )
 }
 
 #[cfg(test)]
@@ -361,9 +454,16 @@ mod tests {
         };
         let mut queue = TransitionEventQueue::default();
         queue.push_transition(&transition);
-        let messages: Vec<_> = queue.events.iter().map(event_message).collect();
+        let messages: Vec<_> = queue
+            .events
+            .iter()
+            .map(|event| event_message(event, &transition.state))
+            .collect();
         assert_eq!(messages[0], "Settlement 2 established");
-        assert_eq!(messages[1], "Settlement 2 produced a Pawn");
+        assert_eq!(
+            messages[1],
+            "Settlement 2 produced a Pawn at Coord { x: 3, y: 4 }"
+        );
         assert_eq!(messages[2], "Turn 7: North");
     }
 
@@ -416,7 +516,11 @@ mod tests {
                 },
             },
         ];
-        let messages: Vec<_> = events.iter().map(event_message).collect();
+        let state = state_for_queue_test();
+        let messages: Vec<_> = events
+            .iter()
+            .map(|event| event_message(event, &state))
+            .collect();
         for expected in [
             "held",
             "offered a draw",
@@ -521,7 +625,11 @@ mod tests {
                 turn_number: 7,
             },
         ];
-        let expected: Vec<_> = events.iter().map(event_message).collect();
+        let state = state_for_queue_test();
+        let expected: Vec<_> = events
+            .iter()
+            .map(|event| event_message(event, &state))
+            .collect();
         app.world_mut()
             .resource_mut::<TransitionEventQueue>()
             .push_transition(&Transition {

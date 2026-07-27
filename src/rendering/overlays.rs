@@ -384,8 +384,8 @@ fn add_governance_preview(
             lines.push(format!(
                 "Settlement {} governors changed: added {}; removed {}.",
                 site.id,
-                piece_list(&added),
-                piece_list(&removed)
+                piece_list(&added, after, before),
+                piece_list(&removed, before, after)
             ));
         }
     }
@@ -402,7 +402,7 @@ fn add_transition_preview(
         match event {
             TransitionEvent::PieceCaptured { piece, at } => {
                 let description = before.pieces.get(piece).map_or_else(
-                    || format!("piece {piece:?}"),
+                    || "piece no longer on board".to_owned(),
                     |piece| format!("{:?} {:?}", piece.owner, piece.kind),
                 );
                 insert(overlays, *at, OverlayKind::Capture);
@@ -423,16 +423,26 @@ fn add_transition_preview(
                 settlement_name(scenario, *settlement_index)
             )),
             TransitionEvent::PromotionCandidateStarted { pawn } => {
-                lines.push(format!("Pawn {pawn:?} starts promotion progress."));
+                lines.push(format!(
+                    "{} starts promotion progress.",
+                    piece_description(before, *pawn)
+                ));
             }
             TransitionEvent::PromotionCandidateAdvanced { pawn, progress } => {
-                lines.push(format!("Pawn {pawn:?} promotion advances to {progress}."));
+                lines.push(format!(
+                    "{} promotion advances to {progress}.",
+                    piece_description(before, *pawn)
+                ));
             }
             TransitionEvent::PromotionCandidateCancelled { pawn } => {
-                lines.push(format!("Pawn {pawn:?} loses its promotion opportunity."));
+                lines.push(format!(
+                    "{} loses its promotion opportunity.",
+                    piece_description(before, *pawn)
+                ));
             }
             TransitionEvent::PromotionReady { pawn, site_index } => lines.push(format!(
-                "Pawn {pawn:?} becomes ready to promote at site {}.",
+                "{} becomes ready to promote at site {}.",
+                piece_description(before, *pawn),
                 scenario
                     .promotion_sites
                     .get(usize::from(*site_index))
@@ -482,16 +492,42 @@ fn coordinate_list(coords: &[Coord]) -> String {
         .join(", ")
 }
 
-fn piece_list(pieces: &[PieceId]) -> String {
+fn piece_list(pieces: &[PieceId], primary: &MatchState, fallback: &MatchState) -> String {
     if pieces.is_empty() {
         "none".to_owned()
     } else {
         pieces
             .iter()
-            .map(|piece| format!("{piece:?}"))
+            .map(|piece| {
+                primary
+                    .pieces
+                    .get(piece)
+                    .or_else(|| fallback.pieces.get(piece))
+                    .map_or_else(
+                        || "piece no longer on board".to_owned(),
+                        |piece| {
+                            format!(
+                                "{:?} {:?} at ({}, {})",
+                                piece.owner, piece.kind, piece.at.x, piece.at.y
+                            )
+                        },
+                    )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
+}
+
+fn piece_description(state: &MatchState, id: PieceId) -> String {
+    state.pieces.get(&id).map_or_else(
+        || "Pawn no longer on board".to_owned(),
+        |piece| {
+            format!(
+                "{:?} {:?} at ({}, {})",
+                piece.owner, piece.kind, piece.at.x, piece.at.y
+            )
+        },
+    )
 }
 
 fn add_governance_overlays(

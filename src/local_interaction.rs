@@ -906,8 +906,12 @@ fn promotion_choice_description(
     })
     .collect::<Vec<_>>()
     .join(" | ");
+    let pawn = state.pieces.get(&pawn).map_or_else(
+        || "Pawn no longer on board".to_owned(),
+        |piece| format!("{:?} Pawn at ({}, {})", piece.owner, piece.at.x, piece.at.y),
+    );
     format!(
-        "{heading}: promote Pawn {pawn:?} - BATCH SNAPSHOT score {score}\nOwned {} + governed {} + established {}x2; {next}. Available: {available}\n{options}",
+        "{heading}: promote {pawn} - BATCH SNAPSHOT score {score}\nOwned {} + governed {} + established {}x2; {next}. Available: {available}\n{options}",
         control.owned_settlements, control.governed_settlements, control.established_settlements,
     )
 }

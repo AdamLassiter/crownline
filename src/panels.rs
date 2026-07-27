@@ -513,8 +513,8 @@ fn match_panel_text_with_clock_context(
     }
     if let Some(piece) = selected.and_then(|id| state.pieces.get(&id)) {
         lines.push(format!(
-            "Selected: {:?} {:?} {:?} at {:?}",
-            piece.id, piece.owner, piece.kind, piece.at
+            "Selected: {:?} {:?} at ({}, {})",
+            piece.owner, piece.kind, piece.at.x, piece.at.y
         ));
     } else {
         lines.push("Selected: none".to_owned());
@@ -536,11 +536,10 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
         let founder = settlement.founder.map_or_else(
             || "none".to_owned(),
             |founder| {
-                if state.pieces.contains_key(&founder) {
-                    format!("{founder:?} present")
-                } else {
-                    format!("{founder:?} absent")
-                }
+                state.pieces.get(&founder).map_or_else(
+                    || "founder absent".to_owned(),
+                    |piece| format!("{} present", piece_description(piece)),
+                )
             },
         );
         let (governors, blockers) = governance_report(scenario, state, settlement.site_index)
@@ -553,7 +552,12 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
                         report
                             .governors
                             .iter()
-                            .map(|line| format!("{:?}", line.attacker))
+                            .map(|line| {
+                                state.pieces.get(&line.attacker).map_or_else(
+                                    || "piece no longer on board".to_owned(),
+                                    piece_description,
+                                )
+                            })
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
@@ -563,7 +567,7 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
                         report
                             .blocked
                             .iter()
-                            .map(|blocked| blocker_text(blocked.blocker))
+                            .map(|blocked| blocker_text(state, blocked.blocker))
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
@@ -582,10 +586,10 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
         let supported_pawn = settlement.produced_pawn.map_or_else(
             || "none".to_owned(),
             |pawn| {
-                state.pieces.get(&pawn).map_or_else(
-                    || format!("{pawn:?} unavailable"),
-                    |piece| format!("{pawn:?} at {:?}", piece.at),
-                )
+                state
+                    .pieces
+                    .get(&pawn)
+                    .map_or_else(|| "produced Pawn unavailable".to_owned(), piece_description)
             },
         );
         sections.push(format!(
@@ -608,12 +612,22 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
     }
 }
 
-fn blocker_text(blocker: GovernanceBlocker) -> String {
+fn blocker_text(state: &MatchState, blocker: GovernanceBlocker) -> String {
     match blocker {
-        GovernanceBlocker::Piece { piece, at } => format!("piece {piece:?} at {at:?}"),
+        GovernanceBlocker::Piece { piece, at } => state.pieces.get(&piece).map_or_else(
+            || format!("piece no longer on board at ({}, {})", at.x, at.y),
+            piece_description,
+        ),
         GovernanceBlocker::Terrain { terrain, at } => format!("{terrain:?} at {at:?}"),
         GovernanceBlocker::Edge { kind, edge } => format!("{kind:?} at {edge:?}"),
     }
+}
+
+fn piece_description(piece: &crownline_core::state::Piece) -> String {
+    format!(
+        "{:?} {:?} at ({}, {})",
+        piece.owner, piece.kind, piece.at.x, piece.at.y
+    )
 }
 
 fn bounded_history(entries: &[String]) -> String {

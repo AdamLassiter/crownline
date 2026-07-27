@@ -1020,6 +1020,7 @@ fn sync_guided_ui(
     flow: Res<ClientFlow>,
     catalog: Res<GuidedScenarioCatalog>,
     runtime: Res<GuidedRuntime>,
+    game: Option<Res<DisplayedGame>>,
     mut browser_roots: Query<&mut Visibility, With<GuidedBrowserRoot>>,
     mut browser_texts: Query<&mut Text, (With<GuidedBrowserText>, Without<GuidedObjectiveText>)>,
     mut objective_roots: Query<&mut Node, With<GuidedObjectiveRoot>>,
@@ -1056,7 +1057,7 @@ fn sync_guided_ui(
     for mut text in &mut browser_texts {
         text.0.clone_from(&browser_text);
     }
-    let objective_text = objective_summary(&catalog, &runtime);
+    let objective_text = objective_summary(&catalog, &runtime, game.as_deref());
     for mut text in &mut objective_texts {
         text.0.clone_from(&objective_text);
     }
@@ -1095,7 +1096,11 @@ fn browser_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -> 
     )
 }
 
-fn objective_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -> String {
+fn objective_summary(
+    catalog: &GuidedScenarioCatalog,
+    runtime: &GuidedRuntime,
+    game: Option<&DisplayedGame>,
+) -> String {
     let Some(session) = runtime.session.as_ref() else {
         return String::new();
     };
@@ -1118,7 +1123,12 @@ fn objective_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -
         guided.stages.len(),
         resolve_key(&stage.title_key),
         resolve_key(&stage.explanation_key),
-        observable_objective(stage),
+        observable_objective(
+            stage,
+            game.filter(|game| game.scenario.id == catalog.0[session.scenario_index].id)
+                .map(|game| &game.state),
+            &session.stage_start,
+        ),
         session.actions_taken,
         stage
             .action_limit
@@ -1139,27 +1149,45 @@ fn objective_summary(catalog: &GuidedScenarioCatalog, runtime: &GuidedRuntime) -
     )
 }
 
-fn observable_objective(stage: &crownline_core::GuidedStage) -> String {
+fn observable_objective(
+    stage: &crownline_core::GuidedStage,
+    current: Option<&MatchState>,
+    stage_start: &MatchState,
+) -> String {
     stage
         .success
         .iter()
-        .map(describe_predicate)
+        .map(|predicate| describe_predicate(predicate, current, stage_start))
         .collect::<Vec<_>>()
         .join(" and ")
 }
 
-fn describe_predicate(predicate: &GuidedPredicate) -> String {
+fn describe_predicate(
+    predicate: &GuidedPredicate,
+    current: Option<&MatchState>,
+    stage_start: &MatchState,
+) -> String {
     match predicate {
-        GuidedPredicate::LegalMove { player, piece, to } => format!(
-            "make {:?} piece {:?} able to move to ({}, {})",
-            player, piece, to.x, to.y
+        GuidedPredicate::LegalMove { piece, to, .. } => format!(
+            "make {} able to move to ({}, {})",
+            describe_piece(*piece, current, stage_start),
+            to.x,
+            to.y
         ),
         GuidedPredicate::PieceAt { player, kind, at } => {
             format!("place the {:?} {:?} on ({}, {})", player, kind, at.x, at.y)
         }
-        GuidedPredicate::PieceSurvives { piece } => format!("keep piece {piece:?} alive"),
+        GuidedPredicate::PieceSurvives { piece } => {
+            format!(
+                "keep {} alive",
+                describe_piece(*piece, current, stage_start)
+            )
+        }
         GuidedPredicate::PieceOnTerrain { piece, terrain } => {
-            format!("move piece {piece:?} onto {terrain:?} terrain")
+            format!(
+                "move {} onto {terrain:?} terrain",
+                describe_piece(*piece, current, stage_start)
+            )
         }
         GuidedPredicate::MaterialAtLeast {
             player,
@@ -1204,27 +1232,41 @@ fn describe_predicate(predicate: &GuidedPredicate) -> String {
             Some(player) => format!("finish with {player:?} winning by {reason:?}"),
             None => format!("finish with a draw by {reason:?}"),
         },
-        GuidedPredicate::Event(event) => describe_event(event),
+        GuidedPredicate::Event(event) => describe_event(event, current, stage_start),
     }
 }
 
-fn describe_event(event: &GuidedEventPredicate) -> String {
+fn describe_event(
+    event: &GuidedEventPredicate,
+    current: Option<&MatchState>,
+    stage_start: &MatchState,
+) -> String {
     match event {
         GuidedEventPredicate::Move { piece } => piece.map_or_else(
             || "complete the required move".to_owned(),
-            |piece| format!("move piece {piece:?}"),
+            |piece| format!("move {}", describe_piece(piece, current, stage_start)),
         ),
         GuidedEventPredicate::Capture { piece } => piece.map_or_else(
             || "make the required capture".to_owned(),
-            |piece| format!("capture piece {piece:?}"),
+            |piece| format!("capture {}", describe_piece(piece, current, stage_start)),
         ),
         GuidedEventPredicate::CrossEdge { piece, kind } => piece.map_or_else(
             || format!("cross a {kind:?} edge"),
-            |piece| format!("cross a {kind:?} edge with piece {piece:?}"),
+            |piece| {
+                format!(
+                    "cross a {kind:?} edge with {}",
+                    describe_piece(piece, current, stage_start)
+                )
+            },
         ),
         GuidedEventPredicate::EnterTerrain { piece, terrain } => piece.map_or_else(
             || format!("enter {terrain:?} terrain"),
-            |piece| format!("enter {terrain:?} terrain with piece {piece:?}"),
+            |piece| {
+                format!(
+                    "enter {terrain:?} terrain with {}",
+                    describe_piece(piece, current, stage_start)
+                )
+            },
         ),
         GuidedEventPredicate::SettlementClaimed { settlement_index } => {
             describe_settlement_event("claim", *settlement_index)
@@ -1254,13 +1296,37 @@ fn describe_event(event: &GuidedEventPredicate) -> String {
             describe_settlement_event("transfer", *settlement_index)
         }
         GuidedEventPredicate::Promotion { pawn, kind } => match (pawn, kind) {
-            (Some(pawn), Some(kind)) => format!("promote Pawn {pawn:?} to {kind:?}"),
-            (Some(pawn), None) => format!("promote Pawn {pawn:?}"),
+            (Some(pawn), Some(kind)) => format!(
+                "promote {} to {kind:?}",
+                describe_piece(*pawn, current, stage_start)
+            ),
+            (Some(pawn), None) => {
+                format!("promote {}", describe_piece(*pawn, current, stage_start))
+            }
             (None, Some(kind)) => format!("promote a Pawn to {kind:?}"),
             (None, None) => "complete a promotion".to_owned(),
         },
         GuidedEventPredicate::MatchEnded => "finish the match".to_owned(),
     }
+}
+
+fn describe_piece(
+    piece: crownline_core::state::PieceId,
+    current: Option<&MatchState>,
+    fallback: &MatchState,
+) -> String {
+    current
+        .and_then(|state| state.pieces.get(&piece))
+        .or_else(|| fallback.pieces.get(&piece))
+        .map_or_else(
+            || "the referenced piece (no longer on the board)".to_owned(),
+            |piece| {
+                format!(
+                    "{:?} {:?} at ({}, {})",
+                    piece.owner, piece.kind, piece.at.x, piece.at.y
+                )
+            },
+        )
 }
 
 fn describe_settlement_event(verb: &str, index: Option<u16>) -> String {
@@ -1647,6 +1713,41 @@ mod tests {
     #[test]
     fn competitive_match_has_no_guided_objective_copy() {
         let catalog = GuidedScenarioCatalog::default();
-        assert_eq!(objective_summary(&catalog, &GuidedRuntime::default()), "");
+        assert_eq!(
+            objective_summary(&catalog, &GuidedRuntime::default(), None),
+            ""
+        );
+    }
+
+    #[test]
+    fn objective_piece_copy_uses_kind_owner_and_current_square_not_internal_id() {
+        let catalog = GuidedScenarioCatalog::default();
+        let scenario = catalog
+            .0
+            .iter()
+            .find(|scenario| scenario.id == "guided-movement-capture")
+            .unwrap();
+        let guided = scenario.guided.as_ref().unwrap();
+        let stage = &guided.stages[0];
+        let start = &guided.start.state;
+        let target = start
+            .pieces
+            .values()
+            .find(|piece| {
+                piece.owner == crownline_core::scenario::Player::North
+                    && piece.kind == crownline_core::scenario::PieceKind::Pawn
+            })
+            .unwrap()
+            .id;
+
+        let initial = observable_objective(stage, Some(start), start);
+        assert!(initial.contains("North Pawn at (4, 6)"));
+        assert!(!initial.contains("PieceId"));
+
+        let mut moved = start.clone();
+        moved.pieces.get_mut(&target).unwrap().at = crownline_core::scenario::Coord::new(5, 6);
+        let updated = observable_objective(stage, Some(&moved), start);
+        assert!(updated.contains("North Pawn at (5, 6)"));
+        assert!(!updated.contains("PieceId"));
     }
 }
