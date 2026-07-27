@@ -10,8 +10,8 @@ use crownline_core::{
 use crate::{ChessFontText, config::ClientSettings};
 
 use super::{
-    ChessPieceFont, DisplayedGame, FogPresentation, piece_glyph, piece_glyph_vertical_offset,
-    player_piece_style,
+    ChessPieceFont, DisplayedGame, FogPresentation, coordinates::coordinate_label, piece_glyph,
+    piece_glyph_vertical_offset, player_piece_style,
 };
 
 const MOVE_SECONDS: f32 = 0.18;
@@ -296,15 +296,26 @@ fn spawn_retirement_ghost(
 fn event_message(event: &TransitionEvent, state: &MatchState) -> String {
     match event {
         TransitionEvent::PieceMoved { piece, from, to } => state.pieces.get(piece).map_or_else(
-            || format!("Move {from:?} to {to:?}"),
+            || {
+                format!(
+                    "Move {} to {}",
+                    coordinate_label(*from),
+                    coordinate_label(*to)
+                )
+            },
             |piece| {
                 format!(
-                    "{:?} {:?} moved from {from:?} to {to:?}",
-                    piece.owner, piece.kind
+                    "{:?} {:?} moved from {} to {}",
+                    piece.owner,
+                    piece.kind,
+                    coordinate_label(*from),
+                    coordinate_label(*to)
                 )
             },
         ),
-        TransitionEvent::PieceCaptured { at, .. } => format!("Capture at {at:?}"),
+        TransitionEvent::PieceCaptured { at, .. } => {
+            format!("Capture at {}", coordinate_label(*at))
+        }
         TransitionEvent::TurnHeld { player } => format!("{player:?} held the turn"),
         TransitionEvent::ClockAdvanced {
             player,
@@ -321,13 +332,16 @@ fn event_message(event: &TransitionEvent, state: &MatchState) -> String {
             "{player:?} received {increment_millis} ms increment; {remaining_millis} ms remain"
         ),
         TransitionEvent::PiecePromoted { kind, at, .. } => {
-            format!("Promotion to {kind:?} at {at:?}")
+            format!("Promotion to {kind:?} at {}", coordinate_label(*at))
         }
         TransitionEvent::PawnProduced {
             settlement_index,
             at,
             ..
-        } => format!("Settlement {settlement_index} produced a Pawn at {at:?}"),
+        } => format!(
+            "Settlement {settlement_index} produced a Pawn at {}",
+            coordinate_label(*at)
+        ),
         TransitionEvent::SettlementContinuityInterrupted { settlement_index } => {
             format!("Settlement {settlement_index} continuity interrupted")
         }
@@ -418,7 +432,7 @@ fn event_message(event: &TransitionEvent, state: &MatchState) -> String {
 fn pawn_description(state: &MatchState, pawn: PieceId) -> String {
     state.pieces.get(&pawn).map_or_else(
         || "Pawn no longer on board".to_owned(),
-        |piece| format!("{:?} Pawn at ({}, {})", piece.owner, piece.at.x, piece.at.y),
+        |piece| format!("{:?} Pawn at {}", piece.owner, coordinate_label(piece.at)),
     )
 }
 
@@ -460,10 +474,7 @@ mod tests {
             .map(|event| event_message(event, &transition.state))
             .collect();
         assert_eq!(messages[0], "Settlement 2 established");
-        assert_eq!(
-            messages[1],
-            "Settlement 2 produced a Pawn at Coord { x: 3, y: 4 }"
-        );
+        assert_eq!(messages[1], "Settlement 2 produced a Pawn at d5");
         assert_eq!(messages[2], "Turn 7: North");
     }
 

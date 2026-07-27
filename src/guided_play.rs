@@ -21,6 +21,7 @@ use crate::{
     panels::{PanelBody, PanelKind, PanelSurface},
     rendering::{
         DisplayedGame, LocalTransitionEventQueue, LocalTransitionNoticeLog, OverlaySelection,
+        coordinates::coordinate_label,
     },
 };
 
@@ -1169,13 +1170,12 @@ fn describe_predicate(
 ) -> String {
     match predicate {
         GuidedPredicate::LegalMove { piece, to, .. } => format!(
-            "make {} able to move to ({}, {})",
+            "make {} able to move to {}",
             describe_piece(*piece, current, stage_start),
-            to.x,
-            to.y
+            coordinate_label(*to)
         ),
         GuidedPredicate::PieceAt { player, kind, at } => {
-            format!("place the {:?} {:?} on ({}, {})", player, kind, at.x, at.y)
+            format!("place the {player:?} {kind:?} on {}", coordinate_label(*at))
         }
         GuidedPredicate::PieceSurvives { piece } => {
             format!(
@@ -1322,8 +1322,10 @@ fn describe_piece(
             || "the referenced piece (no longer on the board)".to_owned(),
             |piece| {
                 format!(
-                    "{:?} {:?} at ({}, {})",
-                    piece.owner, piece.kind, piece.at.x, piece.at.y
+                    "{:?} {:?} at {}",
+                    piece.owner,
+                    piece.kind,
+                    coordinate_label(piece.at)
                 )
             },
         )
@@ -1741,13 +1743,13 @@ mod tests {
             .id;
 
         let initial = observable_objective(stage, Some(start), start);
-        assert!(initial.contains("North Pawn at (4, 6)"));
+        assert!(initial.contains("North Pawn at e7"));
         assert!(!initial.contains("PieceId"));
 
         let mut moved = start.clone();
         moved.pieces.get_mut(&target).unwrap().at = crownline_core::scenario::Coord::new(5, 6);
         let updated = observable_objective(stage, Some(&moved), start);
-        assert!(updated.contains("North Pawn at (5, 6)"));
+        assert!(updated.contains("North Pawn at f7"));
         assert!(!updated.contains("PieceId"));
     }
 }

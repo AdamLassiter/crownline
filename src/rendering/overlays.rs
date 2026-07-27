@@ -9,7 +9,10 @@ use crownline_core::{
     state::{Action, MatchState, PieceId, TurnPhase},
 };
 
-use super::{DisplayedGame, FogPresentation, HoveredBoardSquare, tile_position};
+use super::{
+    DisplayedGame, FogPresentation, HoveredBoardSquare, coordinates::coordinate_label,
+    tile_position,
+};
 
 const OVERLAY_Z: f32 = 4.5;
 
@@ -287,17 +290,24 @@ fn add_hover_preview(
             insert(overlays, hovered, OverlayKind::IllegalWarning);
             lines.push(match reason {
                 MoveUnavailability::ExposesKing => format!(
-                    "Unavailable at {hovered:?}: this move would expose your King to check."
+                    "Unavailable at {}: this move would expose your King to check.",
+                    coordinate_label(hovered)
                 ),
                 MoveUnavailability::NotALegalMovement => {
-                    format!("Unavailable at {hovered:?}: the selected piece cannot move there.")
+                    format!(
+                        "Unavailable at {}: the selected piece cannot move there.",
+                        coordinate_label(hovered)
+                    )
                 }
             });
             return;
         }
         Err(error) => {
             insert(overlays, hovered, OverlayKind::IllegalWarning);
-            lines.push(format!("Preview unavailable at {hovered:?}: {error}."));
+            lines.push(format!(
+                "Preview unavailable at {}: {error}.",
+                coordinate_label(hovered)
+            ));
             return;
         }
     };
@@ -309,7 +319,8 @@ fn add_hover_preview(
     let Ok(preview) = apply_action(scenario, state, &action) else {
         insert(overlays, hovered, OverlayKind::IllegalWarning);
         lines.push(format!(
-            "Preview unavailable at {hovered:?}: the reducer rejected the move."
+            "Preview unavailable at {}: the reducer rejected the move.",
+            coordinate_label(hovered)
         ));
         return;
     };
@@ -352,7 +363,9 @@ fn add_hover_preview(
         lines.push(format!("Preview gives check to the {opponent:?} King."));
     }
     lines.push(format!(
-        "Preview from {piece_at:?} to {hovered:?}: {} attack lines opened, {} closed.",
+        "Preview from {} to {}: {} attack lines opened, {} closed.",
+        coordinate_label(piece_at),
+        coordinate_label(hovered),
         gained_attacks.len(),
         lost_attacks.len(),
     ));
@@ -406,7 +419,10 @@ fn add_transition_preview(
                     |piece| format!("{:?} {:?}", piece.owner, piece.kind),
                 );
                 insert(overlays, *at, OverlayKind::Capture);
-                lines.push(format!("Preview captures {description} at {at:?}."));
+                lines.push(format!(
+                    "Preview captures {description} at {}.",
+                    coordinate_label(*at)
+                ));
             }
             TransitionEvent::SettlementContinuityInterrupted { settlement_index }
             | TransitionEvent::SettlementDevelopmentReset { settlement_index } => {
@@ -487,7 +503,7 @@ fn settlement_name(scenario: &ScenarioDefinition, index: u16) -> &str {
 fn coordinate_list(coords: &[Coord]) -> String {
     coords
         .iter()
-        .map(|at| format!("{at:?}"))
+        .map(|at| coordinate_label(*at))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -507,8 +523,10 @@ fn piece_list(pieces: &[PieceId], primary: &MatchState, fallback: &MatchState) -
                         || "piece no longer on board".to_owned(),
                         |piece| {
                             format!(
-                                "{:?} {:?} at ({}, {})",
-                                piece.owner, piece.kind, piece.at.x, piece.at.y
+                                "{:?} {:?} at {}",
+                                piece.owner,
+                                piece.kind,
+                                coordinate_label(piece.at)
                             )
                         },
                     )
@@ -523,8 +541,10 @@ fn piece_description(state: &MatchState, id: PieceId) -> String {
         || "Pawn no longer on board".to_owned(),
         |piece| {
             format!(
-                "{:?} {:?} at ({}, {})",
-                piece.owner, piece.kind, piece.at.x, piece.at.y
+                "{:?} {:?} at {}",
+                piece.owner,
+                piece.kind,
+                coordinate_label(piece.at)
             )
         },
     )

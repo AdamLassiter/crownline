@@ -15,6 +15,7 @@ use crate::{
     playtest::PlaytestStatus,
     rendering::{
         DisplayedGame, FogPresentation, LocalTransitionNoticeLog, OverlaySelection, PointerCapture,
+        coordinates::coordinate_label,
     },
     ui_layout::{BOTTOM_REGION_PERCENT, SIDE_REGION_PERCENT},
 };
@@ -513,8 +514,10 @@ fn match_panel_text_with_clock_context(
     }
     if let Some(piece) = selected.and_then(|id| state.pieces.get(&id)) {
         lines.push(format!(
-            "Selected: {:?} {:?} at ({}, {})",
-            piece.owner, piece.kind, piece.at.x, piece.at.y
+            "Selected: {:?} {:?} at {}",
+            piece.owner,
+            piece.kind,
+            coordinate_label(piece.at)
         ));
     } else {
         lines.push("Selected: none".to_owned());
@@ -593,9 +596,9 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
             },
         );
         sections.push(format!(
-            "{} at {:?}\nOwner: {:?} - founder: {founder}\nGovernors: {governors}\nBlockers: {blockers}\nEstablishment: {}/{}{}\nProduction: {}/{} - readiness: {}\nSupported Pawn: {supported_pawn}",
+            "{} at {}\nOwner: {:?} - founder: {founder}\nGovernors: {governors}\nBlockers: {blockers}\nEstablishment: {}/{}{}\nProduction: {}/{} - readiness: {}\nSupported Pawn: {supported_pawn}",
             site.id,
-            site.at,
+            coordinate_label(site.at),
             settlement.owner,
             settlement.establishment_progress,
             scenario.rules.establishment_cycles,
@@ -615,18 +618,26 @@ fn settlement_panel_text(scenario: &ScenarioDefinition, state: &MatchState) -> S
 fn blocker_text(state: &MatchState, blocker: GovernanceBlocker) -> String {
     match blocker {
         GovernanceBlocker::Piece { piece, at } => state.pieces.get(&piece).map_or_else(
-            || format!("piece no longer on board at ({}, {})", at.x, at.y),
+            || format!("piece no longer on board at {}", coordinate_label(at)),
             piece_description,
         ),
-        GovernanceBlocker::Terrain { terrain, at } => format!("{terrain:?} at {at:?}"),
-        GovernanceBlocker::Edge { kind, edge } => format!("{kind:?} at {edge:?}"),
+        GovernanceBlocker::Terrain { terrain, at } => {
+            format!("{terrain:?} at {}", coordinate_label(at))
+        }
+        GovernanceBlocker::Edge { kind, edge } => format!(
+            "{kind:?} between {} and {}",
+            coordinate_label(edge.first),
+            coordinate_label(edge.second)
+        ),
     }
 }
 
 fn piece_description(piece: &crownline_core::state::Piece) -> String {
     format!(
-        "{:?} {:?} at ({}, {})",
-        piece.owner, piece.kind, piece.at.x, piece.at.y
+        "{:?} {:?} at {}",
+        piece.owner,
+        piece.kind,
+        coordinate_label(piece.at)
     )
 }
 

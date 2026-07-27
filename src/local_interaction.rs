@@ -11,7 +11,8 @@ use crate::{
     panels::PanelSurface,
     rendering::{
         DisplayedGame, FogPresentation, HoveredBoardSquare, LocalTransitionEventQueue,
-        LocalTransitionNoticeLog, OverlaySelection, PointerCapture, coordinates::BoardGeometry,
+        LocalTransitionNoticeLog, OverlaySelection, PointerCapture,
+        coordinates::{BoardGeometry, coordinate_label},
     },
     ui_layout::SIDE_REGION_PERCENT,
 };
@@ -908,7 +909,7 @@ fn promotion_choice_description(
     .join(" | ");
     let pawn = state.pieces.get(&pawn).map_or_else(
         || "Pawn no longer on board".to_owned(),
-        |piece| format!("{:?} Pawn at ({}, {})", piece.owner, piece.at.x, piece.at.y),
+        |piece| format!("{:?} Pawn at {}", piece.owner, coordinate_label(piece.at)),
     );
     format!(
         "{heading}: promote {pawn} - BATCH SNAPSHOT score {score}\nOwned {} + governed {} + established {}x2; {next}. Available: {available}\n{options}",

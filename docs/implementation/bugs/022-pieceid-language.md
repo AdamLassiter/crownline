@@ -7,14 +7,18 @@
 ## Resolution
 
 - Guided objectives now resolve every referenced piece against the live
-  canonical state and describe its owner, kind, and current coordinate. If the
-  piece has just left the board, the stage-start description is used without
-  exposing its internal identity.
+  canonical state and describe its owner, kind, and current chess-notation
+  square. If the piece has just left the board, the stage-start description is
+  used without exposing its internal identity.
 - Removed `PieceId(...)` formatting from the match and settlement panels,
   mandatory-promotion copy, transition history, and hover previews so the same
   implementation detail cannot leak through another player-facing surface.
+- Follow-up implementation replaces Cartesian `(x, y)` copy across these
+  surfaces and the authored guidance catalogue with the shared canonical board
+  formatter (`a1`, `b12`, and so on). Labels describe the same square regardless
+  of camera orientation.
 - Added a regression that reproduces the first capture lesson and verifies both
-  the initial `North Pawn at (4, 6)` description and an updated coordinate after
+  the initial `North Pawn at e7` description and an updated `f7` square after
   that same piece moves.
 
 ## Linked task and introducing commit
@@ -30,7 +34,8 @@
 
 ## Expected behavior
 
-Text should describe the piece type and currently occupied square (updated if the piece moves).
+Text should describe the piece type and currently occupied square in canonical
+chess notation (updated if the piece moves).
 
 ## Actual behavior
 
@@ -46,4 +51,5 @@ This does not successfully identify the objective to the user and leaves the gui
 
 ## Acceptance criteria
 
-- All piece descriptions in-game must use user-friendly notation when referring to specific pieces.
+- All piece descriptions in-game must use user-friendly chess notation when
+  referring to specific pieces.
