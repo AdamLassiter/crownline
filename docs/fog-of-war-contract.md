@@ -117,3 +117,12 @@ diagnostics, exports, transition logs, or protocol payloads to receive canonical
 legal-move lists or unredacted action results as a shortcut. Any client preview
 must be derived from the viewing seat's projection and must not claim that an
 unseen route is legal.
+
+`crownline_core::project_player_view` is the canonical-to-observer boundary. It
+requires an explicit North or South seat and emits independently versioned,
+deterministically hashed `PlayerView` data; there is no default or spectator
+projection. The view contains ordered explored squares and edges, currently
+permitted pieces and settlement facts, own private choices without canonical
+placement-square lists, and declared public facts. Projection-derived move and
+placement candidates are submission affordances, not legal-move claims. Every
+authority rejection crossing this boundary is the same `illegal_intent` result.

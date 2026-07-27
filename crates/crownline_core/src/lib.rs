@@ -6,6 +6,7 @@
 pub mod clock;
 pub mod journal;
 pub mod persistence;
+pub mod projection;
 pub mod rules;
 pub mod scenario;
 pub mod state;
@@ -21,6 +22,12 @@ pub use persistence::{
     AtomicSaveStorage, AtomicWriteStage, MAX_PERSISTED_BYTES, PersistenceError,
     SAVE_FORMAT_VERSION, SNAPSHOT_FORMAT_VERSION, SaveEnvelope, SaveReader, SnapshotEnvelope,
     write_bytes_atomically, write_save_atomically,
+};
+pub use projection::{
+    GovernanceState, HoverView, KnownEdge, KnownSquare, PLAYER_VIEW_SCHEMA_VERSION, PlayerEvent,
+    PlayerIntentError, PlayerView, SettlementDynamicView, SettlementView, StaticOwnedSiteView,
+    StaticSiteView, ViewMandatoryChoice, ViewPiece, ViewTurnPhase, apply_player_intent,
+    project_events, project_player_view,
 };
 pub use rules::{
     AttackLine, BlockedGovernanceLine, GovernanceBlocker, GovernanceReport, LegalMove,
