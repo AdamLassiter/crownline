@@ -3,7 +3,8 @@
 Crownlines is a deterministic two-player strategy game: pieces move and capture
 like chess, while Pawns claim settlements and seek fixed promotion sites. The
 realm layer changes the value of position; it does not add random combat,
-resources, hidden information, or unit statistics.
+resources or unit statistics. Most scenarios use perfect information; The
+Veiled Crossing is an optional fog-of-war variant.
 
 ## Requirements and installation
 
@@ -154,11 +155,30 @@ not rank or recommend moves.
 | Scenario | Board | Expected time | Purpose |
 | --- | ---: | ---: | --- |
 | The First Crossing | 16x16 | 30-45 min | Compact symmetric learning battlefield with Keeps, crossings, settlements, terrain, governance, and faster promotion. |
+| The Veiled Crossing | 16x16 | 35-55 min | The First Crossing with scenario-tuned radius-3 fog of war and secure local/online seat views. |
 | Crownlines | 20x20 | 60-90 min | Default battlefield with four river crossings, tower walls, distributed settlements, and contested central heights. |
 | The Three Theatres | 24x24 | 105-135 min | Long-form western, central, and eastern fronts divided by paired rivers and multiple crossings. |
 
 These times are design targets pending the final structured balance record; they
 are not turn limits.
+
+### Fog of war
+
+On The Veiled Crossing, every friendly piece currently sees all squares within
+Chebyshev radius 3. `?` squares are fully undiscovered and reveal neither board
+parity nor terrain. Dim terrain (or `·` for open ground) is explored static
+knowledge outside current vision. Normal terrain is currently visible. Static
+terrain, sites, Keeps, fortifications, and discovered edges remain known;
+enemy pieces and settlement ownership/progress disappear immediately outside
+vision with no last-known ghost. Check, whose turn it is, clocks, draw state,
+and the exact outcome remain public even when their cause is hidden.
+
+In local hot-seat fog play, the board is replaced by an opaque curtain whenever
+control changes. Pass the device, then the named player presses Enter. Board
+input and both local clocks remain paused through the handoff. Online servers
+send only the authenticated seat's projection. An active fog match cannot be
+exported with `F8`; after the terminal outcome, explicit export may contain the
+complete replay truth for joint review.
 
 ## Saves and clocks
 
@@ -176,7 +196,8 @@ Move or Hold. Online clocks are server-owned and continue through disconnects.
 
 ## Accessibility
 
-- Information never relies on hue alone: terrain has F/M/R marks, Keeps N/S,
+- Information never relies on hue alone: terrain has F/M/R marks, fog has
+  ?/dim-or-dot/normal states, Keeps N/S,
   settlements -/N/S, owner plates differ in contrast and rotation, and every
   overlay meaning has a unique symbol plus legend text.
 - Keyboard-only play covers setup, online rooms, board focus, choices, match
@@ -196,7 +217,8 @@ The initial release has no AI opponent, public matchmaking, spectators, player
 accounts, factions/asymmetric rules, scenario editor, campaign, web client, or
 mobile client. It is two-player hot-seat or private-room play only. It also has
 no random combat, unit health, resource inventory, worker units, technology
-tree, hidden information, or separate economic victory.
+tree or separate economic victory. Hidden information exists only in scenarios
+that explicitly enable the fog rules block.
 
 ## Troubleshooting
 

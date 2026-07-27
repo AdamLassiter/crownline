@@ -946,13 +946,24 @@ The core game does not include:
 * technology trees;
 * equipment;
 * unit experience levels;
-* hidden information;
+* hidden information in the core perfect-information rules;
 * tactical combat sub-screens;
 * diplomacy in two-player competitive play.
 
 These systems may be familiar from 4X games, but they would weaken the game’s central identity.
 
 The intended complexity comes from the relationship between pieces, settlements, objectives and board geometry.
+
+### Optional fog-of-war scenario rule
+
+The shipped **Veiled Crossing** variant is an explicit exception to the core
+perfect-information boundary. Each friendly piece reveals a Chebyshev radius of
+3 squares. First sight permanently reveals static terrain and sites; enemy
+pieces and dynamic settlement facts appear only in current vision. Check,
+active player, clocks, draw state, and terminal outcome remain public. Radius 3
+is scenario tuning, not a global rule. Local hot-seat play uses an opaque,
+confirmed handoff with both clocks paused; online play sends independently
+authenticated seat projections.
 
 ---
 

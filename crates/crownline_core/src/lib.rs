@@ -37,8 +37,8 @@ pub use rules::{
     validate_promotion_eligibility,
 };
 pub use scenario::{
-    FOG_RULES_SCHEMA_VERSION, FogRules, PromotionUnlockRules, ScenarioDefinition, ScenarioError,
-    ScenarioHashError,
+    FOG_RULES_SCHEMA_VERSION, FogRules, FogScenarioVariant, PromotionUnlockRules,
+    SCENARIO_VARIANT_SCHEMA_VERSION, ScenarioDefinition, ScenarioError, ScenarioHashError,
 };
 pub use state::{
     Action, ExplorationState, MatchState, PromotionEligibility, RealmControlScore, TransitionError,

@@ -286,9 +286,13 @@ fn help_text(
             match_help()
         ),
         HelpSection::Movement => movement_help(scenario),
-        HelpSection::Realm => format!("{}\n\n{}", realm_help(scenario), legend_help(legend)),
+        HelpSection::Realm => format!(
+            "{}\n\n{}",
+            realm_help(scenario),
+            legend_help(scenario, legend)
+        ),
         HelpSection::Match => match_help(),
-        HelpSection::Legend => legend_help(legend),
+        HelpSection::Legend => legend_help(scenario, legend),
     }
 }
 
@@ -323,7 +327,7 @@ fn match_help() -> String {
         .to_owned()
 }
 
-fn legend_help(legend: &OverlayLegend) -> String {
+fn legend_help(scenario: &ScenarioDefinition, legend: &OverlayLegend) -> String {
     let mut lines = vec![
         "BOARD LEGEND".to_owned(),
         "Tiles: alternating light/dark parity remains visible under every tint. Open = unmarked neutral sand/stone; F = Forest green; M = Mountain gray; R = Road ochre.".to_owned(),
@@ -332,6 +336,12 @@ fn legend_help(legend: &OverlayLegend) -> String {
         "Edges: blue band = River; brown thick band with = = Bridge; light-blue band with -- = Ford; dark band = Wall; gold band with / = Gate.".to_owned(),
         "Overlays:".to_owned(),
     ];
+    if let Some(fog) = scenario.rules.fog {
+        lines.push(format!(
+            "Fog (radius {}): ? = undiscovered opaque square; dim terrain or · = explored but not currently visible; normal terrain = currently visible. Enemy pieces and dynamic settlement facts appear only while visible. Check, clocks, draw state, and outcomes remain public.",
+            fog.vision_radius
+        ));
+    }
     lines.extend(
         legend
             .entries
@@ -368,7 +378,7 @@ mod tests {
     #[test]
     fn legend_names_every_terrain_edge_feature_and_overlay() {
         let legend = OverlayLegend::default();
-        let text = legend_help(&legend);
+        let text = legend_help(&scenario(), &legend);
         for name in [
             "Open",
             "Forest",
@@ -389,6 +399,26 @@ mod tests {
         for (_, description) in &legend.entries {
             assert!(text.contains(description));
         }
+    }
+
+    #[test]
+    fn fog_legend_explains_all_three_states_and_public_facts() {
+        let base = scenario();
+        let variant: crownline_core::FogScenarioVariant =
+            ron::from_str(include_str!("../assets/scenarios/introductory-fog.ron")).unwrap();
+        let introductory: ScenarioDefinition =
+            ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap();
+        let fog = variant.apply(&introductory).unwrap();
+        let text = legend_help(&fog, &OverlayLegend::default());
+        for phrase in [
+            "? = undiscovered",
+            "explored but not currently visible",
+            "currently visible",
+            "Check, clocks, draw state, and outcomes remain public",
+        ] {
+            assert!(text.contains(phrase));
+        }
+        assert!(!legend_help(&base, &OverlayLegend::default()).contains("Fog (radius"));
     }
 
     #[test]

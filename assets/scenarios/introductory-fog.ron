@@ -1,0 +1,12 @@
+(
+    schema_version: 1,
+    base_scenario_id: "introductory-crossing",
+    id: "introductory-crossing-fog",
+    metadata: (
+        name: "The Veiled Crossing",
+        description: "A fog-of-war variant of The First Crossing. Radius 3 reveals terrain permanently while enemy pieces appear only in current vision.",
+        expected_minutes: (35, 55),
+        is_default: false,
+    ),
+    fog: (schema_version: 1, vision_radius: 3),
+)

@@ -16,9 +16,11 @@ fog: Some((schema_version: 1, vision_radius: 3)),
 Radius 3 is the initial tuning baseline. The radius uses Chebyshev distance,
 terrain and edges deliberately do not block vision, and validation bounds it to
 `1..=max(board.width, board.height) - 1`. See the complete deterministic
-[fog-of-war contract](fog-of-war-contract.md) before authoring a variant. No
-shipped scenario should enable the block until the seat-state, client, online,
-privacy, and validation tasks in Story 12.01 are complete.
+[fog-of-war contract](fog-of-war-contract.md) before authoring a variant. The
+shipped `introductory-fog.ron` overlay applies radius 3 to The First Crossing;
+that number is scenario tuning rather than a global default. Fog variants use
+the versioned `FogScenarioVariant` overlay so unchanged base scenario bytes and
+hashes remain available for perfect-information play.
 
 ## Promotion progression
 

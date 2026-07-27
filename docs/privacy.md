@@ -27,6 +27,14 @@ seat credential needed for authentication. The authoritative server persists
 display names, match state/actions, clocks, room metadata, and a cryptographic
 hash of each credential. It does not persist raw reconnect tokens.
 
+For fog-enabled rooms, the server still retains complete canonical match state
+and exploration for authority, recovery, and replay. Protocol 3 authenticates a
+seat before producing any match view and sends that client only its projection
+and projection hash; it does not send the canonical state or canonical hash.
+North and South payloads are independently constructed. Operators must treat
+the canonical database and backups as hidden match data even though connected
+clients receive redacted views.
+
 Server operators control their own database, logs, backups, retention, network
 address, and legal obligations. Ask the operator before sending information you
 do not want retained. Crownlines logs are designed not to contain raw reconnect
@@ -49,3 +57,6 @@ canonical action/event/hash records, timing and balance counts, outcome, and
 blank qualitative-review fields. It excludes player names, credentials, room
 codes, server addresses, settings, and save contents. No playtest export or
 other local file is uploaded automatically.
+During an active fog match this export is blocked because it would reveal both
+seats' hidden truth. After the match ends, `F8` is an explicit full-truth replay
+export intended for joint review by both players.

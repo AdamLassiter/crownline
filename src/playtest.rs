@@ -402,6 +402,7 @@ fn sync_and_capture_playtest(
 fn export_playtest(
     keys: Res<ButtonInput<KeyCode>>,
     flow: Res<ClientFlow>,
+    game: Res<DisplayedGame>,
     recorder: Res<PlaytestRecorder>,
     mut status: ResMut<PlaytestStatus>,
 ) {
@@ -411,6 +412,11 @@ fn export_playtest(
             ClientFlow::Setup | ClientFlow::OnlineLobby | ClientFlow::OnlinePlaying
         )
     {
+        return;
+    }
+    if active_fog_export_is_locked(&game) {
+        "Fog playtest export is locked until the match ends; active hidden truth remains private."
+            .clone_into(&mut status.message);
         return;
     }
     let Some(report) = recorder.report.as_ref() else {
@@ -424,6 +430,10 @@ fn export_playtest(
         ),
         Err(error) => format!("Playtest export failed without upload: {error}"),
     };
+}
+
+fn active_fog_export_is_locked(game: &DisplayedGame) -> bool {
+    game.scenario.rules.fog.is_some() && game.state.outcome.is_none()
 }
 
 fn write_report(report: &PlaytestReport) -> Result<PathBuf, String> {
@@ -518,6 +528,25 @@ mod tests {
 
     fn scenario() -> ScenarioDefinition {
         ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap()
+    }
+
+    #[test]
+    fn fog_full_truth_export_is_terminal_only() {
+        let mut scenario = scenario();
+        scenario.rules.fog = Some(crownline_core::FogRules {
+            schema_version: crownline_core::FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 3,
+        });
+        let mut game = DisplayedGame {
+            state: MatchState::from_scenario(&scenario).unwrap(),
+            scenario,
+        };
+        assert!(active_fog_export_is_locked(&game));
+        game.state.outcome = Some(MatchOutcome {
+            winner: None,
+            reason: OutcomeReason::AgreedDraw,
+        });
+        assert!(!active_fog_export_is_locked(&game));
     }
 
     #[test]

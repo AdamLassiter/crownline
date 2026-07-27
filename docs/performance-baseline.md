@@ -22,6 +22,9 @@ The scheduled benchmark fails when a release-profile mean exceeds:
 | Canonical snapshot clone/projection boundary | 5 ms |
 | Unchanged revision-cached Bevy update | 5 ms |
 | Revision-invalidated Bevy update | 30 ms |
+| Both fog visibility masks | 5 ms |
+| Both authenticated seat projections | 5 ms |
+| Combined reconnect projection JSON | 256 KiB |
 
 These ceilings are intentionally above the initial machine's means so normal hosted-runner variance does not create noise. Changes that approach a ceiling require profiling and an explicit baseline note rather than silently raising the threshold.
 
@@ -36,6 +39,24 @@ Recorded 2026-07-22 from the worktree based on `7320c76`, Rust 1.95.0, Linux x86
 | Sparse endgame | 12 | 6,254 | 99.20 | 97.78 | 10,178.26 | 6.41 | 3.98 | 0.81 |
 
 On the 24x24 opening state, an unchanged cache-hit Bevy update averaged 252.12 microseconds and a forced canonical-revision invalidation averaged 275.57 microseconds. Both include the headless rendering schedules; they do not include GPU presentation.
+
+### Fog-of-war extension
+
+Recorded 2026-07-27 on the same AMD Ryzen 9 7950X3D class environment after
+adding protocol-3 seat views. Radius 3 is applied to the unchanged 24x24 map;
+payload bytes are the combined North and South `PlayerView` JSON sizes:
+
+| Workload | Pieces | Both visibility masks | Both projections | Combined JSON |
+| --- | ---: | ---: | ---: | ---: |
+| Opening | 32 | 22.45 us | 124.39 us | 25,880 B |
+| Dense midgame | 32 | 22.38 us | 298.38 us | 83,339 B |
+| Sparse endgame | 12 | 14.78 us | 220.00 us | 78,146 B |
+
+The same run measured the expanded headless Bevy schedules at 697.12 us for an
+unchanged update and 770.53 us for revision invalidation, both below their
+existing budgets. The projection workload includes projection hashing. Network
+envelopes add small fixed metadata beyond the recorded `PlayerView` bytes and
+remain below the 256 KiB combined reconnect ceiling.
 
 ## Allocation and invalidation interpretation
 

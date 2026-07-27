@@ -6,7 +6,7 @@ use bevy::{
 use crownline_core::{
     Action, ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES,
     advance_clock, apply_timed_action,
-    scenario::{Player, ScenarioDefinition},
+    scenario::{FogScenarioVariant, Player, ScenarioDefinition},
     start_clocks,
     state::MatchState,
 };
@@ -36,10 +36,16 @@ pub(crate) struct ScenarioCatalog(pub(crate) Vec<ScenarioDefinition>);
 
 impl Default for ScenarioCatalog {
     fn default() -> Self {
+        let introductory: ScenarioDefinition =
+            ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap();
+        let fog_variant: FogScenarioVariant =
+            ron::from_str(include_str!("../assets/scenarios/introductory-fog.ron")).unwrap();
+        let introductory_fog = fog_variant.apply(&introductory).unwrap();
         Self(vec![
-            ron::from_str(include_str!("../assets/scenarios/introductory.ron")).unwrap(),
+            introductory,
             ron::from_str(include_str!("../assets/scenarios/standard.ron")).unwrap(),
             ron::from_str(include_str!("../assets/scenarios/large.ron")).unwrap(),
+            introductory_fog,
         ])
     }
 }

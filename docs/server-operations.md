@@ -155,6 +155,14 @@ matrix is maintained in [`compatibility.md`](compatibility.md). Check that matri
 and the candidate release notes before upgrade or rollback; the application
 version alone is not a compatibility signal.
 
+Fog-enabled matches remain complete in SQLite, journals, recovery snapshots,
+and backups even though protocol 3 sends each authenticated client only its
+seat projection. Treat those operator-controlled files as hidden match truth:
+restrict access, never paste canonical snapshots into support tickets or logs,
+and disclose a full replay only after the match is terminal under the players'
+agreed review policy. A protocol capture should contain `seat_snapshot` with a
+projection hash, never `state_hash` or canonical `exploration` fields.
+
 Release CI scans locked dependencies and the built runtime image for high and
 critical known vulnerabilities. Review base-image updates and scan exceptions
 as part of every release rather than suppressing unfixed findings silently.

@@ -572,8 +572,10 @@ mod tests {
     use std::{collections::BTreeSet, hint::black_box, time::Instant};
 
     use crownline_core::{
-        attack_lines_on, governance_report,
+        FOG_RULES_SCHEMA_VERSION, FogRules, attack_lines_on, governance_report,
+        project_player_view,
         scenario::{Player, ScenarioDefinition},
+        visible_coordinates,
     };
 
     use super::*;
@@ -920,6 +922,47 @@ mod tests {
                     projection <= SNAPSHOT_PROJECTION_LIMIT_US,
                     "{name} snapshot projection: {projection:.2} us"
                 );
+            }
+        }
+
+        let mut fog_scenario = large_scenario();
+        fog_scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 3,
+        });
+        for (name, state) in performance_states(&fog_scenario) {
+            let visibility = average_micros(500, || {
+                for seat in Player::ALL {
+                    black_box(visible_coordinates(&fog_scenario, &state, seat).unwrap());
+                }
+            });
+            let projections = average_micros(250, || {
+                for seat in Player::ALL {
+                    black_box(project_player_view(&fog_scenario, &state, seat).unwrap());
+                }
+            });
+            let payload_bytes: usize = Player::ALL
+                .into_iter()
+                .map(|seat| {
+                    serde_json::to_vec(&project_player_view(&fog_scenario, &state, seat).unwrap())
+                        .unwrap()
+                        .len()
+                })
+                .sum();
+            println!(
+                "{name},fog_visibility_both_seats,{visibility:.2},{},{}",
+                state.pieces.len(),
+                payload_bytes
+            );
+            println!(
+                "{name},fog_projection_both_seats,{projections:.2},{},{}",
+                state.pieces.len(),
+                payload_bytes
+            );
+            if !cfg!(debug_assertions) {
+                assert!(visibility <= SNAPSHOT_PROJECTION_LIMIT_US);
+                assert!(projections <= SNAPSHOT_PROJECTION_LIMIT_US);
+                assert!(payload_bytes <= 256 * 1024);
             }
         }
 

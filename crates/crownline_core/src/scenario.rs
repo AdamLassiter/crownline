@@ -11,6 +11,7 @@ pub const SCENARIO_SCHEMA_VERSION: u16 = 2;
 pub const MIN_SUPPORTED_SCENARIO_SCHEMA_VERSION: u16 = 1;
 pub const FOG_RULES_SCHEMA_VERSION: u16 = 1;
 pub const MIN_SUPPORTED_FOG_RULES_SCHEMA_VERSION: u16 = 1;
+pub const SCENARIO_VARIANT_SCHEMA_VERSION: u16 = 1;
 const MIN_BOARD_DIMENSION: u16 = 8;
 const MAX_BOARD_DIMENSION: u16 = 64;
 const MAX_EXPECTED_MATCH_MINUTES: u16 = 24 * 60;
@@ -272,6 +273,52 @@ pub struct ScenarioDefinition {
     #[serde(default)]
     pub castling_routes: Vec<CastlingRoute>,
     pub rules: ScenarioRules,
+}
+
+/// A small authored overlay for shipping a fog variant without duplicating the
+/// complete base battlefield document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FogScenarioVariant {
+    pub schema_version: u16,
+    pub base_scenario_id: String,
+    pub id: String,
+    pub metadata: ScenarioMetadata,
+    pub fog: FogRules,
+}
+
+impl FogScenarioVariant {
+    /// Applies this authored overlay and validates the resulting standalone scenario.
+    ///
+    /// # Errors
+    ///
+    /// Returns a readable error for an unsupported overlay version, wrong base,
+    /// or invalid resulting scenario.
+    pub fn apply(&self, base: &ScenarioDefinition) -> Result<ScenarioDefinition, String> {
+        if self.schema_version != SCENARIO_VARIANT_SCHEMA_VERSION {
+            return Err(format!(
+                "scenario variant schema {} is unsupported; expected {}",
+                self.schema_version, SCENARIO_VARIANT_SCHEMA_VERSION
+            ));
+        }
+        if self.base_scenario_id != base.id {
+            return Err(format!(
+                "scenario variant expects base {:?}, found {:?}",
+                self.base_scenario_id, base.id
+            ));
+        }
+        let mut scenario = base.clone();
+        scenario.id.clone_from(&self.id);
+        scenario.metadata.clone_from(&self.metadata);
+        scenario.rules.fog = Some(self.fog);
+        scenario.validate().map_err(|errors| {
+            errors
+                .into_iter()
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+        Ok(scenario)
+    }
 }
 
 impl ScenarioDefinition {

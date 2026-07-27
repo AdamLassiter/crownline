@@ -4,7 +4,8 @@ use std::{
 };
 
 use crownline_core::{
-    ClockSettings, MatchState, ScenarioDefinition, scenario::Player, start_clocks,
+    ClockSettings, FogScenarioVariant, MatchState, ScenarioDefinition, scenario::Player,
+    start_clocks,
 };
 use crownline_protocol::{
     CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, PROTOCOL_VERSION,
@@ -41,21 +42,35 @@ impl ScenarioCatalog {
             include_str!("../../../assets/scenarios/standard.ron"),
             include_str!("../../../assets/scenarios/large.ron"),
         ];
-        let entries = sources.into_iter().map(|source| {
-            let definition: ScenarioDefinition =
-                ron::from_str(source).expect("installed scenario must parse");
-            definition
-                .validate()
-                .expect("installed scenario must validate");
-            let hash = definition
-                .canonical_hash()
-                .expect("installed scenario must hash");
-            (
-                definition.id.clone(),
-                InstalledScenario { definition, hash },
-            )
-        });
-        Self(entries.collect())
+        let mut definitions: Vec<_> = sources
+            .into_iter()
+            .map(|source| {
+                let definition: ScenarioDefinition =
+                    ron::from_str(source).expect("installed scenario must parse");
+                definition
+                    .validate()
+                    .expect("installed scenario must validate");
+                let hash = definition
+                    .canonical_hash()
+                    .expect("installed scenario must hash");
+                InstalledScenario { definition, hash }
+            })
+            .collect();
+        let variant: FogScenarioVariant = ron::from_str(include_str!(
+            "../../../assets/scenarios/introductory-fog.ron"
+        ))
+        .expect("installed fog variant must parse");
+        let definition = variant
+            .apply(&definitions[0].definition)
+            .expect("installed fog variant must validate");
+        let hash = definition.canonical_hash().expect("fog variant must hash");
+        definitions.push(InstalledScenario { definition, hash });
+        Self(
+            definitions
+                .into_iter()
+                .map(|installed| (installed.definition.id.clone(), installed))
+                .collect(),
+        )
     }
 
     pub fn get(&self, id: &str) -> Option<&InstalledScenario> {
