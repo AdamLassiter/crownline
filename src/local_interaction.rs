@@ -7,6 +7,7 @@ use crownline_core::{
 
 use crate::{
     lifecycle::{ClientFlow, LocalSetup},
+    menu::MenuState,
     online_connection::{OnlineActionIntent, OnlineIntentOutbox},
     panels::PanelSurface,
     rendering::{
@@ -227,7 +228,14 @@ fn handle_board_input(
     flow: Option<Res<ClientFlow>>,
     setup: Option<Res<LocalSetup>>,
     fog: Res<FogPresentation>,
+    menu: Option<Res<MenuState>>,
 ) {
+    if menu.as_deref().is_some_and(MenuState::is_open) {
+        selection.piece = None;
+        interaction.keyboard_focus = None;
+        promotion_pointer.0 = None;
+        return;
+    }
     let online = flow
         .as_deref()
         .is_some_and(|flow| *flow == ClientFlow::OnlinePlaying);

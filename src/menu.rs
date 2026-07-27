@@ -11,7 +11,8 @@ use bevy::{
     window::PrimaryWindow,
 };
 use crownline_core::{
-    ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES, scenario::Player,
+    Action, ClockSettings, MAX_BASE_MINUTES, MAX_INCREMENT_SECONDS, MIN_BASE_MINUTES,
+    scenario::Player,
 };
 
 use crate::{
@@ -19,13 +20,20 @@ use crate::{
     guided_play::GuidedRuntime,
     help::HelpState,
     lifecycle::{
-        ClientFlow, LocalSetup, ScenarioCatalog, SeatController, start_fresh_match, validate_names,
+        ClientFlow, LocalClockRuntime, LocalSetup, ScenarioCatalog, SeatController, apply_control,
+        start_fresh_match, validate_names,
     },
     local_ai::AiCancellationEpoch,
-    local_persistence::has_readable_local_save,
+    local_persistence::{
+        LocalPersistenceStatus, has_readable_local_save, load_slot, local_save_slot_summaries,
+        save_slot,
+    },
     online_lobby::{LobbyScreen, OnlineLobby},
     panels::PanelSurface,
-    rendering::{DisplayedGame, LocalTransitionNoticeLog, OverlaySelection},
+    rendering::{
+        DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
+        OverlaySelection,
+    },
 };
 
 const MENU_BACKGROUND: Color = Color::srgba(0.018, 0.026, 0.045, 0.985);
@@ -80,6 +88,15 @@ pub(crate) enum MenuAction {
     ApplySettings,
     CancelSettings,
     ForgetSavedSeat,
+    ResumeMatch,
+    SaveSlot(u8),
+    LoadSlot(u8),
+    OfferDraw,
+    AcceptDraw,
+    DeclineDraw,
+    RequestResign,
+    Rematch,
+    ReturnHome,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -106,6 +123,10 @@ pub(crate) enum CameraBindingSlot {
 pub(crate) enum MenuModal {
     Quit,
     ForgetSavedSeat,
+    OverwriteSlot(u8),
+    LoadSlot(u8),
+    Resign,
+    AbandonMatch,
 }
 
 #[derive(Debug, Clone, Resource, Default)]
@@ -307,10 +328,12 @@ impl Plugin for MenuPlugin {
                     dispatch_focused_action,
                     dispatch_local_setup_accelerators,
                     capture_camera_binding,
+                    dispatch_match_menu,
                     dispatch_escape,
                     handle_navigation_action,
                     handle_local_setup_intent,
                     handle_settings_intent,
+                    handle_match_menu_intent,
                     clear_menu_intent,
                     restore_home_after_submenu,
                     sync_menu_shell,
@@ -565,6 +588,32 @@ const fn set_camera_binding(
         CameraBindingSlot::ZoomIn => bindings.zoom_in = key,
         CameraBindingSlot::ZoomOut => bindings.zoom_out = key,
         CameraBindingSlot::Reset => bindings.reset = key,
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn dispatch_match_menu(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut flow: Option<ResMut<ClientFlow>>,
+    mut state: ResMut<MenuState>,
+) {
+    if state.is_open() {
+        return;
+    }
+    let Some(flow) = flow.as_deref_mut() else {
+        return;
+    };
+    match *flow {
+        ClientFlow::Paused => state.open(MenuRoute::Pause),
+        ClientFlow::Outcome => state.open(MenuRoute::Outcome),
+        ClientFlow::Playing if keys.just_pressed(KeyCode::KeyP) => {
+            *flow = ClientFlow::Paused;
+            state.open(MenuRoute::Pause);
+        }
+        ClientFlow::OnlinePlaying if keys.just_pressed(KeyCode::KeyP) => {
+            state.open(MenuRoute::Pause);
+        }
+        _ => {}
     }
 }
 
@@ -990,6 +1039,280 @@ fn preview_accessibility(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value
+)]
+fn handle_match_menu_intent(
+    intent: Res<MenuIntent>,
+    mut state: ResMut<MenuState>,
+    mut flow: Option<ResMut<ClientFlow>>,
+    mut setup: Option<ResMut<LocalSetup>>,
+    mut clock_runtime: Option<ResMut<LocalClockRuntime>>,
+    mut game: Option<ResMut<DisplayedGame>>,
+    mut history: Option<ResMut<LocalTransitionNoticeLog>>,
+    mut events: Option<ResMut<LocalTransitionEventQueue>>,
+    mut selection: Option<ResMut<OverlaySelection>>,
+    mut fog: Option<ResMut<FogPresentation>>,
+    mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
+    mut persistence: Option<ResMut<LocalPersistenceStatus>>,
+) {
+    let Some(action) = intent.peek() else {
+        return;
+    };
+    if action == MenuAction::ResumeMatch {
+        if let Some(flow) = flow.as_deref_mut()
+            && *flow == ClientFlow::Paused
+        {
+            *flow = ClientFlow::Playing;
+        }
+        state.close();
+        return;
+    }
+    if action == MenuAction::ReturnHome {
+        state.modal = Some(MenuModal::AbandonMatch);
+        return;
+    }
+    if action == MenuAction::RequestResign {
+        state.modal = Some(MenuModal::Resign);
+        return;
+    }
+    if let MenuAction::SaveSlot(slot) = action {
+        let occupied = local_save_slot_summaries()
+            .into_iter()
+            .find(|summary| summary.slot == slot)
+            .is_some_and(|summary| summary.occupied);
+        if occupied {
+            state.modal = Some(MenuModal::OverwriteSlot(slot));
+        } else if let (Some(game), Some(setup), Some(history)) =
+            (game.as_deref(), setup.as_deref(), history.as_deref())
+        {
+            record_save_result(
+                slot,
+                save_slot(slot, game, setup, &history.entries),
+                persistence.as_deref_mut(),
+            );
+        }
+        return;
+    }
+    if let MenuAction::LoadSlot(slot) = action {
+        let replacing_match = flow.as_deref().is_some_and(|flow| {
+            matches!(
+                *flow,
+                ClientFlow::Playing | ClientFlow::Paused | ClientFlow::Outcome
+            )
+        });
+        if replacing_match {
+            state.modal = Some(MenuModal::LoadSlot(slot));
+            return;
+        }
+        restore_slot(
+            slot,
+            flow.as_deref_mut(),
+            setup.as_deref_mut(),
+            clock_runtime.as_deref_mut(),
+            game.as_deref_mut(),
+            history.as_deref_mut(),
+            events.as_deref_mut(),
+            selection.as_deref_mut(),
+            fog.as_deref_mut(),
+            ai_epoch.as_deref_mut(),
+            persistence.as_deref_mut(),
+            &mut state,
+        );
+        return;
+    }
+    if action == MenuAction::Confirm {
+        match state.modal {
+            Some(MenuModal::OverwriteSlot(slot)) => {
+                if let (Some(game), Some(setup), Some(history)) =
+                    (game.as_deref(), setup.as_deref(), history.as_deref())
+                {
+                    record_save_result(
+                        slot,
+                        save_slot(slot, game, setup, &history.entries),
+                        persistence.as_deref_mut(),
+                    );
+                }
+                state.modal = None;
+            }
+            Some(MenuModal::LoadSlot(slot)) => {
+                state.modal = None;
+                restore_slot(
+                    slot,
+                    flow.as_deref_mut(),
+                    setup.as_deref_mut(),
+                    clock_runtime.as_deref_mut(),
+                    game.as_deref_mut(),
+                    history.as_deref_mut(),
+                    events.as_deref_mut(),
+                    selection.as_deref_mut(),
+                    fog.as_deref_mut(),
+                    ai_epoch.as_deref_mut(),
+                    persistence.as_deref_mut(),
+                    &mut state,
+                );
+            }
+            Some(MenuModal::Resign) => {
+                if let (Some(game), Some(events), Some(flow)) = (
+                    game.as_deref_mut(),
+                    events.as_deref_mut(),
+                    flow.as_deref_mut(),
+                ) {
+                    apply_control(
+                        &Action::Resign {
+                            player: game.state.active_player,
+                        },
+                        game,
+                        events,
+                    );
+                    *flow = ClientFlow::Outcome;
+                    state.modal = None;
+                    state.replace(MenuRoute::Outcome);
+                }
+            }
+            Some(MenuModal::AbandonMatch) => {
+                if let Some(flow) = flow.as_deref_mut() {
+                    *flow = ClientFlow::Setup;
+                }
+                if let Some(selection) = selection.as_deref_mut() {
+                    selection.piece = None;
+                }
+                state.modal = None;
+                state.previous.clear();
+                state.replace(MenuRoute::Home);
+            }
+            _ => {}
+        }
+        return;
+    }
+    let (Some(game), Some(events)) = (game.as_deref_mut(), events.as_deref_mut()) else {
+        return;
+    };
+    match action {
+        MenuAction::OfferDraw => apply_control(
+            &Action::OfferDraw {
+                player: game.state.active_player,
+            },
+            game,
+            events,
+        ),
+        MenuAction::AcceptDraw | MenuAction::DeclineDraw => apply_control(
+            &Action::RespondToDraw {
+                player: game.state.active_player,
+                accept: action == MenuAction::AcceptDraw,
+            },
+            game,
+            events,
+        ),
+        MenuAction::Rematch => {
+            let (Some(setup), Some(flow), Some(selection), Some(history)) = (
+                setup.as_deref_mut(),
+                flow.as_deref_mut(),
+                selection.as_deref_mut(),
+                history.as_deref_mut(),
+            ) else {
+                return;
+            };
+            let scenario = game.scenario.clone();
+            start_fresh_match(&scenario, setup, game, selection, history);
+            if let Some(epoch) = ai_epoch.as_deref_mut() {
+                epoch.cancel_pending();
+            }
+            *flow = ClientFlow::Playing;
+            state.close();
+        }
+        _ => {}
+    }
+}
+
+fn record_save_result(
+    slot: u8,
+    result: Result<std::path::PathBuf, String>,
+    status: Option<&mut LocalPersistenceStatus>,
+) {
+    let Some(status) = status else {
+        return;
+    };
+    status.slot = slot;
+    status.message = match result {
+        Ok(path) => format!("Saved slot {slot} safely to {}.", path.display()),
+        Err(error) => format!("Save failed; the previous slot was preserved. {error}"),
+    };
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restore_slot(
+    slot: u8,
+    flow: Option<&mut ClientFlow>,
+    setup: Option<&mut LocalSetup>,
+    runtime: Option<&mut LocalClockRuntime>,
+    game: Option<&mut DisplayedGame>,
+    history: Option<&mut LocalTransitionNoticeLog>,
+    events: Option<&mut LocalTransitionEventQueue>,
+    selection: Option<&mut OverlaySelection>,
+    fog: Option<&mut FogPresentation>,
+    ai_epoch: Option<&mut AiCancellationEpoch>,
+    status: Option<&mut LocalPersistenceStatus>,
+    menu: &mut MenuState,
+) {
+    let (
+        Some(flow),
+        Some(setup),
+        Some(runtime),
+        Some(game),
+        Some(history),
+        Some(events),
+        Some(selection),
+        Some(fog),
+    ) = (flow, setup, runtime, game, history, events, selection, fog)
+    else {
+        return;
+    };
+    match load_slot(slot) {
+        Ok(document) => {
+            game.scenario = ron::from_str(&document.scenario_ron)
+                .expect("decoded save scenario was already validated");
+            game.state = document.core.state;
+            history.entries = document.history;
+            setup.selected_scenario = document.selected_scenario;
+            setup.session_id = document.session_id;
+            setup.north_name = document.north_name;
+            setup.south_name = document.south_name;
+            setup.clock = document.clock;
+            setup.north_controller = document.north_controller;
+            setup.south_controller = document.south_controller;
+            setup.error.clear();
+            runtime.sub_millisecond_nanos = 0;
+            selection.piece = None;
+            events.mark_local_discontinuity();
+            fog.require_handoff(game);
+            if let Some(epoch) = ai_epoch {
+                epoch.cancel_pending();
+            }
+            *flow = if game.state.outcome.is_some() {
+                ClientFlow::Outcome
+            } else {
+                ClientFlow::Playing
+            };
+            if let Some(status) = status {
+                status.slot = slot;
+                status.message = format!(
+                    "Loaded slot {slot}. Offline time was not charged; canonical revision {} restored.",
+                    game.state.revision
+                );
+            }
+            menu.close();
+        }
+        Err(error) => {
+            if let Some(status) = status {
+                status.message = format!("Load failed; the slot was unchanged. {error}");
+            }
+        }
+    }
+}
+
 #[allow(clippy::needless_pass_by_value)]
 fn restore_home_after_submenu(
     flow: Option<Res<ClientFlow>>,
@@ -1038,12 +1361,15 @@ fn sync_menu_shell(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn rebuild_menu_page(
     state: Res<MenuState>,
     setup: Option<Res<LocalSetup>>,
     catalog: Option<Res<ScenarioCatalog>>,
     settings: Res<SettingsMenuState>,
+    flow: Option<Res<ClientFlow>>,
+    game: Option<Res<DisplayedGame>>,
+    guided: Option<Res<GuidedRuntime>>,
     mut commands: Commands,
     content: Query<Entity, With<MenuContent>>,
 ) {
@@ -1075,6 +1401,26 @@ fn rebuild_menu_page(
                     "The local reconnect credential will be removed. This cannot be undone.",
                     "Forget seat",
                 ),
+                MenuModal::OverwriteSlot(_) => (
+                    "OVERWRITE LOCAL SAVE?",
+                    "The existing slot will be atomically replaced only after the new save validates.",
+                    "Overwrite slot",
+                ),
+                MenuModal::LoadSlot(_) => (
+                    "REPLACE ACTIVE MATCH?",
+                    "Loading replaces the active local match with the selected validated save.",
+                    "Load",
+                ),
+                MenuModal::Resign => (
+                    "CONFIRM RESIGNATION?",
+                    "The active player will immediately lose this local match.",
+                    "Resign",
+                ),
+                MenuModal::AbandonMatch => (
+                    "RETURN TO HOME?",
+                    "Unsaved local match progress will be discarded.",
+                    "Return Home",
+                ),
             };
             page.spawn(section_heading(heading));
             page.spawn(body_text(copy));
@@ -1101,23 +1447,132 @@ fn rebuild_menu_page(
                 "Host, Join, reconnect, and waiting-room controls are grouped here.",
             ),
             MenuRoute::Settings => spawn_settings_page(page, &settings),
-            MenuRoute::Saves => spawn_placeholder(
+            MenuRoute::Saves => spawn_saves_page(page, &state, flow.as_deref()),
+            MenuRoute::Pause => spawn_pause_page(
                 page,
-                "Continue / Load Game",
-                "The three local save slots are grouped here.",
+                flow.as_deref(),
+                game.as_deref(),
+                guided.as_deref().is_some_and(GuidedRuntime::is_active),
             ),
-            MenuRoute::Pause => spawn_placeholder(
-                page,
-                "Match Menu",
-                "Resume, persistence, rules, and match controls are grouped here.",
-            ),
-            MenuRoute::Outcome => spawn_placeholder(
-                page,
-                "Match Complete",
-                "Outcome, rematch, and return actions are grouped here.",
-            ),
+            MenuRoute::Outcome => spawn_outcome_page(page, game.as_deref()),
         }
     });
+}
+
+fn spawn_pause_page(
+    page: &mut ChildSpawnerCommands,
+    flow: Option<&ClientFlow>,
+    game: Option<&DisplayedGame>,
+    guided: bool,
+) {
+    let online = flow.is_some_and(|flow| *flow == ClientFlow::OnlinePlaying);
+    page.spawn(body_text(if online {
+        "ONLINE MATCH MENU\nBoard input is blocked while this menu is open. The authoritative server clock continues."
+    } else {
+        "LOCAL MATCH PAUSED\nBoard input and the local clock are paused."
+    }));
+    page.spawn(menu_button("Resume Match [P]", MenuAction::ResumeMatch, 0));
+    page.spawn(menu_button(
+        "Settings",
+        MenuAction::Open(MenuRoute::Settings),
+        1,
+    ));
+    page.spawn(menu_button("Rules & Legend [F1]", MenuAction::OpenHelp, 2));
+    if online {
+        page.spawn(body_text(
+            "Manual save/load is unavailable online. Draw, resignation, rematch, and leave actions remain authoritative and are available in the online match controls.",
+        ));
+        return;
+    }
+    if guided {
+        page.spawn(body_text(
+            "Guided attempts save progress automatically in separate storage; ordinary save slots are unavailable. Use the guided objective controls to retry or leave.",
+        ));
+        return;
+    }
+    page.spawn(menu_button(
+        "Save / Load Game",
+        MenuAction::Open(MenuRoute::Saves),
+        3,
+    ));
+    if let Some(game) = game {
+        match game.state.outstanding_draw_offer {
+            None => {
+                page.spawn(menu_button("Offer Draw", MenuAction::OfferDraw, 4));
+            }
+            Some(offering) if offering != game.state.active_player => {
+                page.spawn(menu_button("Accept Draw", MenuAction::AcceptDraw, 4));
+                page.spawn(menu_button("Decline Draw", MenuAction::DeclineDraw, 5));
+            }
+            Some(_) => {
+                page.spawn(body_text("Draw offer sent; waiting for the opponent."));
+            }
+        }
+    }
+    page.spawn(menu_button("Resign", MenuAction::RequestResign, 6))
+        .insert(MenuButton::new(MenuAction::RequestResign).destructive());
+    page.spawn(menu_button("Return to Home", MenuAction::ReturnHome, 7))
+        .insert(MenuButton::new(MenuAction::ReturnHome).destructive());
+}
+
+fn spawn_saves_page(page: &mut ChildSpawnerCommands, state: &MenuState, flow: Option<&ClientFlow>) {
+    let can_save = state.previous.last() == Some(&MenuRoute::Pause)
+        && flow.is_some_and(|flow| *flow == ClientFlow::Paused);
+    page.spawn(body_text(if can_save {
+        "Choose one of three local slots. Occupied slots require overwrite confirmation."
+    } else {
+        "Choose a readable local slot to continue."
+    }));
+    for summary in local_save_slot_summaries() {
+        page.spawn(section_heading(format!(
+            "SLOT {} - {}",
+            summary.slot, summary.description
+        )));
+        if can_save {
+            page.spawn(menu_button(
+                if summary.occupied {
+                    format!("Overwrite slot {}", summary.slot)
+                } else {
+                    format!("Save to slot {}", summary.slot)
+                },
+                MenuAction::SaveSlot(summary.slot),
+                i32::from(summary.slot) * 2,
+            ));
+        }
+        page.spawn(menu_button(
+            if summary.readable {
+                format!("Load slot {}", summary.slot)
+            } else {
+                format!("Load slot {} - unavailable", summary.slot)
+            },
+            MenuAction::LoadSlot(summary.slot),
+            i32::from(summary.slot) * 2 + 1,
+        ))
+        .insert(if summary.readable {
+            MenuButton::new(MenuAction::LoadSlot(summary.slot))
+        } else {
+            MenuButton::new(MenuAction::LoadSlot(summary.slot)).disabled()
+        });
+    }
+    page.spawn(menu_button("Back [Esc]", MenuAction::Back, 20));
+}
+
+fn spawn_outcome_page(page: &mut ChildSpawnerCommands, game: Option<&DisplayedGame>) {
+    if let Some(outcome) = game.and_then(|game| game.state.outcome) {
+        page.spawn(section_heading("MATCH COMPLETE"));
+        page.spawn(body_text(format!(
+            "Winner: {}\nReason: {:?}",
+            outcome
+                .winner
+                .map_or_else(|| "Draw".to_owned(), |winner| format!("{winner:?}")),
+            outcome.reason
+        )));
+    }
+    page.spawn(menu_button("Rematch", MenuAction::Rematch, 0));
+    page.spawn(menu_button("Rules & Legend", MenuAction::OpenHelp, 1));
+    page.spawn(menu_button("Return to Home", MenuAction::ReturnHome, 2));
+    page.spawn(menu_button("Quit", MenuAction::Quit, 3))
+        .insert(MenuButton::new(MenuAction::Quit).destructive());
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1697,5 +2152,28 @@ mod tests {
             local_setup_accelerator(&function_key, true),
             Some(MenuAction::StartLocal)
         );
+    }
+
+    #[test]
+    fn match_menu_pauses_local_time_but_not_authoritative_online_time() {
+        for (initial, expected) in [
+            (ClientFlow::Playing, ClientFlow::Paused),
+            (ClientFlow::OnlinePlaying, ClientFlow::OnlinePlaying),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<ButtonInput<KeyCode>>()
+                .init_resource::<MenuState>()
+                .insert_resource(initial)
+                .add_systems(Update, dispatch_match_menu);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::KeyP);
+            app.update();
+            assert_eq!(*app.world().resource::<ClientFlow>(), expected);
+            assert_eq!(
+                app.world().resource::<MenuState>().route,
+                Some(MenuRoute::Pause)
+            );
+        }
     }
 }

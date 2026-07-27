@@ -13,6 +13,7 @@ use crate::{
     guided_play::GuidedRuntime,
     lifecycle::{ClientFlow, LocalClockRuntime, LocalSetup, ScenarioCatalog, SeatController},
     local_ai::AiCancellationEpoch,
+    menu::MenuState,
     rendering::{
         DisplayedGame, FogPresentation, LocalTransitionEventQueue, LocalTransitionNoticeLog,
         OverlaySelection,
@@ -27,23 +28,73 @@ pub(crate) fn has_readable_local_save() -> bool {
     (1..=SLOT_COUNT).any(|slot| load_slot(slot).is_ok())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocalSaveSlotSummary {
+    pub(crate) slot: u8,
+    pub(crate) occupied: bool,
+    pub(crate) readable: bool,
+    pub(crate) description: String,
+}
+
+pub(crate) fn local_save_slot_summaries() -> Vec<LocalSaveSlotSummary> {
+    (1..=SLOT_COUNT)
+        .map(|slot| match load_slot(slot) {
+            Ok(document) => {
+                let scenario = ron::from_str::<ScenarioDefinition>(&document.scenario_ron)
+                    .map_or_else(
+                        |_| "Unknown scenario".to_owned(),
+                        |scenario| scenario.metadata.name,
+                    );
+                LocalSaveSlotSummary {
+                    slot,
+                    occupied: true,
+                    readable: true,
+                    description: format!(
+                        "{scenario} - {} vs {} - revision {}{}",
+                        document.north_name,
+                        document.south_name,
+                        document.core.state.revision,
+                        if document.core.state.outcome.is_some() {
+                            " - complete"
+                        } else {
+                            ""
+                        }
+                    ),
+                }
+            }
+            Err(error) if slot_path(slot).is_ok_and(|path| path.exists()) => LocalSaveSlotSummary {
+                slot,
+                occupied: true,
+                readable: false,
+                description: format!("Unreadable - {error}"),
+            },
+            Err(_) => LocalSaveSlotSummary {
+                slot,
+                occupied: false,
+                readable: false,
+                description: "Empty".to_owned(),
+            },
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct LocalSaveDocument {
-    format_version: u16,
-    application_version: String,
-    scenario_schema_version: u16,
-    scenario_ron: String,
-    core: SaveEnvelope,
-    history: Vec<String>,
-    selected_scenario: usize,
-    session_id: u64,
-    north_name: String,
-    south_name: String,
-    clock: Option<crownline_core::ClockSettings>,
+pub(crate) struct LocalSaveDocument {
+    pub(crate) format_version: u16,
+    pub(crate) application_version: String,
+    pub(crate) scenario_schema_version: u16,
+    pub(crate) scenario_ron: String,
+    pub(crate) core: SaveEnvelope,
+    pub(crate) history: Vec<String>,
+    pub(crate) selected_scenario: usize,
+    pub(crate) session_id: u64,
+    pub(crate) north_name: String,
+    pub(crate) south_name: String,
+    pub(crate) clock: Option<crownline_core::ClockSettings>,
     #[serde(default)]
-    north_controller: SeatController,
+    pub(crate) north_controller: SeatController,
     #[serde(default)]
-    south_controller: SeatController,
+    pub(crate) south_controller: SeatController,
 }
 
 #[derive(Resource)]
@@ -84,7 +135,11 @@ fn handle_save_load_keys(
     mut fog: ResMut<FogPresentation>,
     mut ai_epoch: Option<ResMut<AiCancellationEpoch>>,
     guided: Option<Res<GuidedRuntime>>,
+    menu: Option<Res<MenuState>>,
 ) {
+    if menu.as_deref().is_some_and(MenuState::is_open) {
+        return;
+    }
     if keys.just_pressed(KeyCode::F6) {
         status.slot = status.slot % SLOT_COUNT + 1;
         status.message = format!("Selected save slot {}.", status.slot);
@@ -145,7 +200,7 @@ fn handle_save_load_keys(
     }
 }
 
-fn save_slot(
+pub(crate) fn save_slot(
     slot: u8,
     game: &DisplayedGame,
     setup: &LocalSetup,
@@ -179,7 +234,7 @@ fn save_slot(
     Ok(path)
 }
 
-fn load_slot(slot: u8) -> Result<LocalSaveDocument, String> {
+pub(crate) fn load_slot(slot: u8) -> Result<LocalSaveDocument, String> {
     let path = slot_path(slot)?;
     let metadata = fs::metadata(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     if metadata.len() > u64::try_from(MAX_PERSISTED_BYTES).unwrap() {

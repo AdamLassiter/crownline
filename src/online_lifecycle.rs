@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::{
     config::unmodified_just_pressed,
     lifecycle::ClientFlow,
+    menu::MenuState,
     online_connection::{
         OnlineControlKind, OnlineControlOutbox, OnlineControlResolved, OnlineIntentOutbox,
         OnlineRematchStateChanged,
@@ -32,6 +33,21 @@ struct OnlineLifecycleState {
 
 #[derive(Component)]
 struct OnlineLifecycleText;
+#[derive(Component)]
+struct OnlineLifecycleRoot;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Component)]
+enum OnlineLifecycleControl {
+    OfferDraw,
+    AcceptDraw,
+    DeclineDraw,
+    RequestResign,
+    ConfirmResign,
+    CancelResign,
+    Rematch,
+    DeclineRematch,
+    Leave,
+}
 
 pub struct OnlineLifecyclePlugin;
 
@@ -52,27 +68,81 @@ impl Plugin for OnlineLifecyclePlugin {
 }
 
 fn spawn_online_lifecycle_controls(mut commands: Commands) {
-    commands.spawn((
-        Text::new(""),
-        TextFont {
-            font_size: FontSize::Px(13.0),
-            ..default()
-        },
-        TextColor(Color::srgb(0.94, 0.95, 1.0)),
-        TextLayout::justify(Justify::Right),
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                right: px(0),
+                bottom: px(0),
+                width: percent(SIDE_REGION_PERCENT),
+                max_height: percent(20),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(4),
+                padding: UiRect::all(px(7)),
+                overflow: Overflow::scroll_y(),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.025, 0.035, 0.06, 0.94)),
+            GlobalZIndex(72),
+            Visibility::Hidden,
+            OnlineLifecycleRoot,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.94, 0.95, 1.0)),
+                TextLayout::justify(Justify::Right),
+                OnlineLifecycleText,
+            ));
+            root.spawn(Node {
+                display: Display::Flex,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: px(4),
+                row_gap: px(4),
+                ..default()
+            })
+            .with_children(|buttons| {
+                for (label, control) in [
+                    ("Offer draw", OnlineLifecycleControl::OfferDraw),
+                    ("Accept", OnlineLifecycleControl::AcceptDraw),
+                    ("Decline", OnlineLifecycleControl::DeclineDraw),
+                    ("Resign", OnlineLifecycleControl::RequestResign),
+                    ("Confirm resign", OnlineLifecycleControl::ConfirmResign),
+                    ("Cancel", OnlineLifecycleControl::CancelResign),
+                    ("Rematch", OnlineLifecycleControl::Rematch),
+                    ("Decline rematch", OnlineLifecycleControl::DeclineRematch),
+                    ("Leave", OnlineLifecycleControl::Leave),
+                ] {
+                    buttons.spawn(online_control_button(label, control));
+                }
+            });
+        });
+}
+
+fn online_control_button(label: &'static str, control: OnlineLifecycleControl) -> impl Bundle {
+    (
+        Button,
         Node {
-            position_type: PositionType::Absolute,
-            right: px(0),
-            bottom: px(10),
-            width: percent(SIDE_REGION_PERCENT),
-            padding: UiRect::all(px(7)),
+            min_height: px(30),
+            padding: UiRect::axes(px(7), px(4)),
+            justify_content: JustifyContent::Center,
             ..default()
         },
-        BackgroundColor(Color::srgba(0.025, 0.035, 0.06, 0.9)),
-        GlobalZIndex(72),
-        Visibility::Hidden,
-        OnlineLifecycleText,
-    ));
+        BackgroundColor(Color::srgb(0.12, 0.2, 0.3)),
+        control,
+        children![(
+            Text::new(label),
+            TextFont {
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.92, 0.95, 1.0)),
+        )],
+    )
 }
 
 fn observe_lifecycle_results(
@@ -121,7 +191,18 @@ fn handle_online_lifecycle_input(
     board_outbox: Res<OnlineIntentOutbox>,
     mut control_outbox: ResMut<OnlineControlOutbox>,
     mut lifecycle: ResMut<OnlineLifecycleState>,
+    buttons: Query<(&Interaction, &OnlineLifecycleControl), Changed<Interaction>>,
+    menu: Option<Res<MenuState>>,
 ) {
+    if menu.as_deref().is_some_and(MenuState::is_open) {
+        return;
+    }
+    let pressed = buttons
+        .iter()
+        .filter_map(|(interaction, control)| {
+            (*interaction == Interaction::Pressed).then_some(*control)
+        })
+        .collect::<Vec<_>>();
     if *flow != ClientFlow::OnlinePlaying {
         lifecycle.confirm_resign = false;
         return;
@@ -137,7 +218,7 @@ fn handle_online_lifecycle_input(
         if controls_locked {
             return;
         }
-        if keys.just_pressed(KeyCode::KeyL) {
+        if keys.just_pressed(KeyCode::KeyL) || pressed.contains(&OnlineLifecycleControl::Leave) {
             submit_control(
                 &mut control_outbox,
                 leave_message(seat.match_id, game.state.revision),
@@ -145,7 +226,8 @@ fn handle_online_lifecycle_input(
             );
             "Leaving this finished room; its durable result remains on the server."
                 .clone_into(&mut lifecycle.status);
-        } else if keys.just_pressed(KeyCode::KeyN)
+        } else if (keys.just_pressed(KeyCode::KeyN)
+            || pressed.contains(&OnlineLifecycleControl::DeclineRematch))
             && lifecycle.rematch_state == Some(RematchState::Requested)
         {
             submit_control(
@@ -154,7 +236,8 @@ fn handle_online_lifecycle_input(
                 OnlineControlKind::Rematch,
             );
             lifecycle.requested_rematch_by_self = false;
-        } else if keys.just_pressed(KeyCode::KeyR)
+        } else if (keys.just_pressed(KeyCode::KeyR)
+            || pressed.contains(&OnlineLifecycleControl::Rematch))
             && lifecycle.rematch_state != Some(RematchState::Accepted)
         {
             let accepting_other = lifecycle.rematch_state == Some(RematchState::Requested)
@@ -178,10 +261,15 @@ fn handle_online_lifecycle_input(
     }
 
     if lifecycle.confirm_resign {
-        if keys.just_pressed(KeyCode::Escape) {
+        if keys.just_pressed(KeyCode::Escape)
+            || pressed.contains(&OnlineLifecycleControl::CancelResign)
+        {
             lifecycle.confirm_resign = false;
             "Resignation cancelled.".clone_into(&mut lifecycle.status);
-        } else if keys.just_pressed(KeyCode::Enter) && !controls_locked {
+        } else if (keys.just_pressed(KeyCode::Enter)
+            || pressed.contains(&OnlineLifecycleControl::ConfirmResign))
+            && !controls_locked
+        {
             if resignation_available(&game.state, seat.seat) {
                 submit_control(
                     &mut control_outbox,
@@ -201,7 +289,8 @@ fn handle_online_lifecycle_input(
     if controls_locked {
         return;
     }
-    if unmodified_just_pressed(&keys, KeyCode::KeyQ)
+    if (unmodified_just_pressed(&keys, KeyCode::KeyQ)
+        || pressed.contains(&OnlineLifecycleControl::RequestResign))
         && resignation_available(&game.state, seat.seat)
     {
         lifecycle.confirm_resign = true;
@@ -209,7 +298,8 @@ fn handle_online_lifecycle_input(
         return;
     }
     match game.state.outstanding_draw_offer {
-        None if unmodified_just_pressed(&keys, KeyCode::KeyD)
+        None if (unmodified_just_pressed(&keys, KeyCode::KeyD)
+            || pressed.contains(&OnlineLifecycleControl::OfferDraw))
             && game.state.active_player == seat.seat =>
         {
             submit_control(
@@ -220,14 +310,19 @@ fn handle_online_lifecycle_input(
         }
         Some(offering)
             if offering != seat.seat
-                && (keys.just_pressed(KeyCode::KeyY) || keys.just_pressed(KeyCode::KeyN)) =>
+                && (keys.just_pressed(KeyCode::KeyY)
+                    || keys.just_pressed(KeyCode::KeyN)
+                    || pressed.contains(&OnlineLifecycleControl::AcceptDraw)
+                    || pressed.contains(&OnlineLifecycleControl::DeclineDraw)) =>
         {
             submit_control(
                 &mut control_outbox,
                 draw_message(
                     seat.match_id,
                     game.state.revision,
-                    if keys.just_pressed(KeyCode::KeyY) {
+                    if keys.just_pressed(KeyCode::KeyY)
+                        || pressed.contains(&OnlineLifecycleControl::AcceptDraw)
+                    {
                         DrawCommand::Accept
                     } else {
                         DrawCommand::Reject
@@ -297,7 +392,7 @@ fn resignation_available(state: &MatchState, seat: Player) -> bool {
     state.outcome.is_none() && state.active_player == seat
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 fn sync_online_lifecycle_ui(
     flow: Res<ClientFlow>,
     game: Res<DisplayedGame>,
@@ -305,7 +400,9 @@ fn sync_online_lifecycle_ui(
     board_outbox: Res<OnlineIntentOutbox>,
     control_outbox: Res<OnlineControlOutbox>,
     lifecycle: Res<OnlineLifecycleState>,
-    mut text: Query<(&mut Text, &mut Visibility), With<OnlineLifecycleText>>,
+    mut roots: Query<&mut Visibility, With<OnlineLifecycleRoot>>,
+    mut text: Query<&mut Text, With<OnlineLifecycleText>>,
+    mut buttons: Query<(&OnlineLifecycleControl, &mut Visibility)>,
 ) {
     let body = lobby.seat.as_ref().map_or_else(String::new, |seat| {
         if let Some(outcome) = game.state.outcome {
@@ -326,13 +423,53 @@ fn sync_online_lifecycle_ui(
             )
         }
     });
-    for (mut text, mut visibility) in &mut text {
+    for mut visibility in &mut roots {
         *visibility = if *flow == ClientFlow::OnlinePlaying {
             Visibility::Visible
         } else {
             Visibility::Hidden
         };
+    }
+    for mut text in &mut text {
         text.0.clone_from(&body);
+    }
+    let locked = board_outbox.locked || control_outbox.locked;
+    let seat = lobby.seat.as_ref().map(|seat| seat.seat);
+    for (control, mut visibility) in &mut buttons {
+        let visible = if *flow != ClientFlow::OnlinePlaying || locked {
+            false
+        } else if game.state.outcome.is_some() {
+            match control {
+                OnlineLifecycleControl::Rematch | OnlineLifecycleControl::Leave => true,
+                OnlineLifecycleControl::DeclineRematch => {
+                    lifecycle.rematch_state == Some(RematchState::Requested)
+                }
+                _ => false,
+            }
+        } else if lifecycle.confirm_resign {
+            matches!(
+                control,
+                OnlineLifecycleControl::ConfirmResign | OnlineLifecycleControl::CancelResign
+            )
+        } else {
+            match control {
+                OnlineLifecycleControl::OfferDraw => {
+                    game.state.outstanding_draw_offer.is_none()
+                        && seat == Some(game.state.active_player)
+                }
+                OnlineLifecycleControl::AcceptDraw | OnlineLifecycleControl::DeclineDraw => game
+                    .state
+                    .outstanding_draw_offer
+                    .is_some_and(|offering| Some(offering) != seat),
+                OnlineLifecycleControl::RequestResign => seat == Some(game.state.active_player),
+                _ => false,
+            }
+        };
+        *visibility = if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -465,5 +602,29 @@ mod tests {
         assert_eq!(resign.context.expected_revision, 4);
         assert_ne!(draw.idempotency_key, resign.context.idempotency_key);
         assert_ne!(draw.idempotency_key, rematch.idempotency_key);
+    }
+
+    #[test]
+    fn pointer_controls_cover_every_online_lifecycle_action() {
+        let mut app = App::new();
+        app.add_systems(Startup, spawn_online_lifecycle_controls);
+        app.update();
+        let world = app.world_mut();
+        let mut controls = world.query::<&OnlineLifecycleControl>();
+        let values: std::collections::BTreeSet<_> = controls
+            .iter(world)
+            .map(|control| format!("{control:?}"))
+            .collect();
+        assert_eq!(values.len(), 9);
+        for expected in [
+            "OfferDraw",
+            "AcceptDraw",
+            "DeclineDraw",
+            "RequestResign",
+            "Rematch",
+            "Leave",
+        ] {
+            assert!(values.contains(expected), "missing {expected}");
+        }
     }
 }

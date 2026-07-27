@@ -463,7 +463,7 @@ pub(crate) fn start_fresh_match(
     history.entries.clear();
 }
 
-fn apply_control(
+pub(crate) fn apply_control(
     action: &Action,
     game: &mut DisplayedGame,
     events: &mut LocalTransitionEventQueue,
