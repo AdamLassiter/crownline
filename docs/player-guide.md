@@ -91,7 +91,7 @@ the same room setup.
 | --- | --- |
 | Local setup | Tab edit names; `X` swap assignments; PageUp/PageDown scenario; `C`, `-`/`+`, `,`/`.` clock; `F2` start; `F3` online. |
 | Board | Arrows focus; Enter select/move; Escape release; `H` Hold; Shift + configured camera key (defaults: W/A/S/D pan, Q/E zoom, `F` reset); mouse wheel/drag also work. |
-| Mandatory promotion | `1` Queen, `2` Rook, `3` Bishop, `4` Knight. |
+| Mandatory promotion | `1` Queen, `2` Rook, `3` Bishop, `4` Knight. The same four buttons are clickable; locked choices report their required score without submitting. |
 | Mandatory Pawn placement | Arrows cycle only legal adjacent squares; Enter confirms; Escape returns focus to the required choice. |
 | Match | `P` pause/resume; `Q` resign then Enter/Escape; `D` offer draw; `Y` accept; `N` decline; `I` panels. |
 | Saves | `F5` save; `F6` cycle slots 1-3; `F9` load. |
@@ -125,9 +125,22 @@ initial release and are always printed in their relevant surface.
   rather than resets progress. An established settlement produces after three
   further eligible cycles and queues mandatory placement of one adjacent Pawn.
   A site supports only one produced Pawn until that Pawn is captured or promotes.
-- A Pawn surviving on a promotion site becomes a mandatory Queen/Rook/Bishop/
-  Knight choice. **The First Crossing** requires one surviving cycle;
-  **Crownlines** and **The Three Theatres** require two.
+- A Pawn surviving on a promotion site becomes a mandatory promotion choice.
+  **The First Crossing** requires one surviving cycle; **Crownlines** and **The
+  Three Theatres** require two. Its owner's current control score is: 1 per
+  owned settlement, +1 when that settlement is currently governed, and +2 when
+  it is established. Knight is always available; Bishop unlocks at 2, Rook at
+  4, and Queen at 8 in every shipped scenario.
+- Examples: a promotion rush with no settlement control offers only Knight; one
+  owned and governed settlement scores 2 and adds Bishop; establishing it
+  scores 4 and adds Rook; two owned, governed, established settlements score 8
+  and add Queen. The HUD marks every fixed choice READY or LOCKED, gives its
+  threshold, and shows the score breakdown and next unlock.
+- Promotion control is current, not a lifetime total. Losing governance or a
+  settlement can relock a later promotion. Transfers and establishment complete
+  before the owner-turn score is captured. All promotions made ready together
+  share one frozen batch snapshot, so resolving the first cannot unlock the
+  second and later live board changes do not alter choices already displayed.
 - A match ends by checkmate, timeout, resignation, accepted draw, or automatic
   third repetition of the complete gameplay state. There is no economic victory.
 

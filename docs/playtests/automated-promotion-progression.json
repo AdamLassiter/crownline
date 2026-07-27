@@ -1,0 +1,218 @@
+[
+  {
+    "scenario_id": "introductory-crossing",
+    "scenario_hash": "466adb9039df9156f6be834587f5954a3ffc1d83979afbe199d1b1c8a3f3b6c2",
+    "board": [
+      16,
+      16
+    ],
+    "settlement_count": 4,
+    "promotion_site_count": 2,
+    "bishop_threshold": 2,
+    "rook_threshold": 4,
+    "queen_threshold": 8,
+    "maximum_full_control_score": 16,
+    "rush_queen_legal": false,
+    "queen_requires_two_full_settlements": true,
+    "tiers": [
+      {
+        "strategy": "promotion rush without settlement control",
+        "control": {
+          "owned_settlements": 0,
+          "governed_settlements": 0,
+          "established_settlements": 0
+        },
+        "score": 0,
+        "allowed_kinds": [
+          "knight"
+        ]
+      },
+      {
+        "strategy": "claim and govern one settlement",
+        "control": {
+          "owned_settlements": 1,
+          "governed_settlements": 1,
+          "established_settlements": 0
+        },
+        "score": 2,
+        "allowed_kinds": [
+          "knight",
+          "bishop"
+        ]
+      },
+      {
+        "strategy": "establish one governed settlement",
+        "control": {
+          "owned_settlements": 1,
+          "governed_settlements": 1,
+          "established_settlements": 1
+        },
+        "score": 4,
+        "allowed_kinds": [
+          "knight",
+          "bishop",
+          "rook"
+        ]
+      },
+      {
+        "strategy": "establish and govern two settlements",
+        "control": {
+          "owned_settlements": 2,
+          "governed_settlements": 2,
+          "established_settlements": 2
+        },
+        "score": 8,
+        "allowed_kinds": [
+          "knight",
+          "bishop",
+          "rook",
+          "queen"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario_id": "crownlines-standard",
+    "scenario_hash": "874c4ac1b7b0ad90698c961ff8c830f745fe30eebdaca480b2695cc88fd7a568",
+    "board": [
+      20,
+      20
+    ],
+    "settlement_count": 6,
+    "promotion_site_count": 4,
+    "bishop_threshold": 2,
+    "rook_threshold": 4,
+    "queen_threshold": 8,
+    "maximum_full_control_score": 24,
+    "rush_queen_legal": false,
+    "queen_requires_two_full_settlements": true,
+    "tiers": [
+      {
+        "strategy": "promotion rush without settlement control",
+        "control": {
+          "owned_settlements": 0,
+          "governed_settlements": 0,
+          "established_settlements": 0
+        },
+        "score": 0,
+        "allowed_kinds": [
+          "knight"
+        ]
+      },
+      {
+        "strategy": "claim and govern one settlement",
+        "control": {
+          "owned_settlements": 1,
+          "governed_settlements": 1,
+          "established_settlements": 0
+        },
+        "score": 2,
+        "allowed_kinds": [
+          "knight",
+          "bishop"
+        ]
+      },
+      {
+        "strategy": "establish one governed settlement",
+        "control": {
+          "owned_settlements": 1,
+          "governed_settlements": 1,
+          "established_settlements": 1
+        },
+        "score": 4,
+        "allowed_kinds": [
+          "knight",
+          "bishop",
+          "rook"
+        ]
+      },
+      {
+        "strategy": "establish and govern two settlements",
+        "control": {
+          "owned_settlements": 2,
+          "governed_settlements": 2,
+          "established_settlements": 2
+        },
+        "score": 8,
+        "allowed_kinds": [
+          "knight",
+          "bishop",
+          "rook",
+          "queen"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario_id": "three-theatres",
+    "scenario_hash": "d0ea7d230a309a9da6d87051e9c087eae0328e8fc8f9d9b61c855da1470015cd",
+    "board": [
+      24,
+      24
+    ],
+    "settlement_count": 6,
+    "promotion_site_count": 4,
+    "bishop_threshold": 2,
+    "rook_threshold": 4,
+    "queen_threshold": 8,
+    "maximum_full_control_score": 24,
+    "rush_queen_legal": false,
+    "queen_requires_two_full_settlements": true,
+    "tiers": [
+      {
+        "strategy": "promotion rush without settlement control",
+        "control": {
+          "owned_settlements": 0,
+          "governed_settlements": 0,
+          "established_settlements": 0
+        },
+        "score": 0,
+        "allowed_kinds": [
+          "knight"
+        ]
+      },
+      {
+        "strategy": "claim and govern one settlement",
+        "control": {
+          "owned_settlements": 1,
+          "governed_settlements": 1,
+          "established_settlements": 0
+        },
+        "score": 2,
+        "allowed_kinds": [
+          "knight",
+          "bishop"
+        ]
+      },
+      {
+        "strategy": "establish one governed settlement",
+        "control": {
+          "owned_settlements": 1,
+          "governed_settlements": 1,
+          "established_settlements": 1
+        },
+        "score": 4,
+        "allowed_kinds": [
+          "knight",
+          "bishop",
+          "rook"
+        ]
+      },
+      {
+        "strategy": "establish and govern two settlements",
+        "control": {
+          "owned_settlements": 2,
+          "governed_settlements": 2,
+          "established_settlements": 2
+        },
+        "score": 8,
+        "allowed_kinds": [
+          "knight",
+          "bishop",
+          "rook",
+          "queen"
+        ]
+      }
+    ]
+  }
+]

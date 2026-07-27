@@ -385,7 +385,26 @@ Instead, promotion occurs at fixed sites such as:
 
 A Pawn that ends its move on a promotion site becomes a **candidate**.
 
-If it remains on the site until the start of its owner’s next turn, it promotes into:
+If it remains on the site for the scenario's required owner-turn cycles, it
+becomes a mandatory promotion choice. The available recruits depend on a
+frozen snapshot of that player's current realm control:
+
+* each owned settlement contributes 1;
+* each owned settlement with at least one current governor contributes 1 more;
+* each owned established settlement contributes 2 more.
+
+Knight is always available. Bishop unlocks at score 2, Rook at 4, and Queen at
+8. Thus a promotion rush without settlement control can recruit only a Knight;
+one claimed and governed settlement unlocks Bishop; fully establishing it
+unlocks Rook; and Queen normally requires two owned, governed, established
+settlements. Scenario data may tune the three thresholds.
+
+The snapshot is taken after settlement transfers and cycle completion at the
+owner-turn boundary and shared by every promotion becoming ready in that batch.
+Later choices cannot bootstrap stronger recruits. Losing current control may
+relock a future batch, but never rewrites a choice already shown to the player.
+
+An eligible Pawn may be replaced by:
 
 * Queen;
 * Rook;
@@ -1013,7 +1032,7 @@ The following values can be changed during testing without altering the core des
 
 * time required to promote;
 * number of promotion sites;
-* pieces available through promotion;
+* Bishop, Rook and Queen realm-control thresholds;
 * whether promotion sites may be controlled or blocked;
 * whether a settlement can also function as a promotion site.
 

@@ -2742,6 +2742,59 @@ mod tests {
     }
 
     #[test]
+    fn same_boundary_transfer_counts_before_promotion_snapshot() {
+        let settlement_at = Coord::new(3, 3);
+        let promotion_at = Coord::new(2, 2);
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Pawn, 3, 3),
+            deployment(Player::South, PieceKind::Pawn, 2, 2),
+            deployment(Player::South, PieceKind::Rook, 3, 7),
+            deployment(Player::North, PieceKind::Pawn, 0, 1),
+        ]);
+        add_settlement(&mut scenario, settlement_at);
+        scenario.promotion_sites.push(PromotionSite {
+            id: "court".to_owned(),
+            at: promotion_at,
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.active_player = Player::North;
+        let candidate = piece_id_at(&state, settlement_at);
+        let promotion = piece_id_at(&state, promotion_at);
+        state.settlements[0].owner = Some(Player::North);
+        state.settlements[0].founder = Some(piece_id_at(&state, Coord::new(0, 1)));
+        state.settlements[0].established = true;
+        state.settlements[0].establishment_progress = scenario.rules.establishment_cycles;
+        state.settlements[0].transfer_candidate = Some(candidate);
+        state.promotion_candidates.insert(promotion, 0);
+
+        let ready = apply_action(
+            &scenario,
+            &state,
+            &Action::Hold {
+                player: Player::North,
+            },
+        )
+        .unwrap();
+        assert_eq!(ready.state.settlements[0].owner, Some(Player::South));
+        let TurnPhase::ResolvingChoices { queue } = &ready.state.phase else {
+            panic!("promotion must be ready");
+        };
+        let MandatoryChoice::Promote { eligibility, .. } = &queue[0] else {
+            panic!("first choice must be promotion");
+        };
+        assert_eq!(
+            eligibility.control,
+            RealmControlScore {
+                owned_settlements: 1,
+                governed_settlements: 1,
+                established_settlements: 1,
+            }
+        );
+        assert!(eligibility.allows(PromotionKind::Rook));
+        assert!(!eligibility.allows(PromotionKind::Queen));
+    }
+
+    #[test]
     fn promotion_batch_freezes_before_an_earlier_choice_increases_control() {
         let settlement_at = Coord::new(4, 4);
         let west_site = Coord::new(2, 2);

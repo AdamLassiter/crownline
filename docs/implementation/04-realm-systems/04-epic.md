@@ -4,13 +4,13 @@ Layer settlements, governance, promotion, Hold, clocks, and terminal outcomes on
 
 ## Status
 
-- [ ] In progress
+- [x] Done
 
 ## Implementation notes
 
 - Canonical actions now resolve governance, settlement claim/transfer/development/production, promotion, stable turn-start choices, and Move/Hold through one deterministic reducer.
 - Optional host-driven clocks, timed journals, full-state repetition, draw/resignation controls, and immutable typed outcomes complete the match-flow layer without adding wall-clock or Bevy dependencies to core rules.
-- Stories 04.01-04.04 are complete. Story 04.05 reopens this epic to make stronger promotion recruits depend on current realm control.
+- Stories 04.01-04.05 are complete. Stronger promotion recruits now depend on versioned, scenario-authored current realm control and preserve one frozen batch snapshot across every execution boundary.
 
 ## Stories
 

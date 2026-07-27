@@ -5,6 +5,9 @@ with settlements, promotion sites, and terrain-shaped territorial play. The
 authoritative design is in [GDD.md](GDD.md); the ordered delivery backlog begins
 at [docs/implementation/00-index.md](docs/implementation/00-index.md).
 
+Authored scenario rules and promotion-threshold tuning are documented in the
+[scenario authoring guide](docs/scenario-authoring.md).
+
 Players can start with the [player guide](docs/player-guide.md), including local
 and private-online quick starts, controls, rules, scenarios, saves, accessibility,
 requirements, exclusions, and troubleshooting. Data handling is described in
