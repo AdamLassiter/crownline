@@ -57,6 +57,22 @@ pub struct GovernanceReport {
     pub blocked: Vec<BlockedGovernanceLine>,
 }
 
+/// Settlement counts contributing to one player's current promotion-control score.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RealmControlScore {
+    pub owned_settlements: u32,
+    pub governed_settlements: u32,
+    pub established_settlements: u32,
+}
+
+impl RealmControlScore {
+    /// Returns ownership + governance + twice establishment.
+    #[must_use]
+    pub const fn total(self) -> u32 {
+        self.owned_settlements + self.governed_settlements + self.established_settlements * 2
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockedGovernanceLine {
     pub candidate: PieceId,
@@ -409,6 +425,55 @@ pub fn governance_report(
         }
     }
     Ok(report)
+}
+
+/// Calculates the current settlement-control score used for promotion recruitment.
+///
+/// # Errors
+///
+/// Returns typed scenario, state, identity, or settlement-index errors.
+pub fn realm_control_score(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    player: Player,
+) -> Result<RealmControlScore, TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    state.validate_invariants()?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+
+    let mut score = RealmControlScore::default();
+    for settlement in &state.settlements {
+        if settlement.owner != Some(player) {
+            continue;
+        }
+        score.owned_settlements = score
+            .owned_settlements
+            .checked_add(1)
+            .ok_or(TransitionError::TooManySites)?;
+        if settlement.established {
+            score.established_settlements = score
+                .established_settlements
+                .checked_add(1)
+                .ok_or(TransitionError::TooManySites)?;
+        }
+        if !governance_report(scenario, state, settlement.site_index)?
+            .governors
+            .is_empty()
+        {
+            score.governed_settlements = score
+                .governed_settlements
+                .checked_add(1)
+                .ok_or(TransitionError::TooManySites)?;
+        }
+    }
+    Ok(score)
 }
 
 /// Returns every currently legal adjacent square for a ready settlement Pawn.
@@ -2456,6 +2521,45 @@ mod tests {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn realm_control_score_counts_only_current_owned_governed_established_settlements() {
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Rook, 0, 7)]);
+        add_settlement(&mut scenario, Coord::new(0, 4));
+        scenario.settlements.push(SettlementSite {
+            id: "north-settlement".to_owned(),
+            at: Coord::new(7, 4),
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].established = true;
+        state.settlements[1].owner = Some(Player::North);
+        state.settlements[1].established = true;
+
+        let score = realm_control_score(&scenario, &state, Player::South).unwrap();
+        assert_eq!(
+            score,
+            RealmControlScore {
+                owned_settlements: 1,
+                governed_settlements: 1,
+                established_settlements: 1,
+            }
+        );
+        assert_eq!(score.total(), 4);
+
+        let mut reordered = state.clone();
+        reordered.settlements.reverse();
+        assert_eq!(
+            realm_control_score(&scenario, &reordered, Player::South).unwrap(),
+            score
+        );
+
+        state.settlements[0].owner = None;
+        assert_eq!(
+            realm_control_score(&scenario, &state, Player::South).unwrap(),
+            RealmControlScore::default()
+        );
     }
 
     #[test]

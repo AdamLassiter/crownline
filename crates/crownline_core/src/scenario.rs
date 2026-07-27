@@ -7,7 +7,8 @@ use serde::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub const SCENARIO_SCHEMA_VERSION: u16 = 1;
+pub const SCENARIO_SCHEMA_VERSION: u16 = 2;
+pub const MIN_SUPPORTED_SCENARIO_SCHEMA_VERSION: u16 = 1;
 const MIN_BOARD_DIMENSION: u16 = 8;
 const MAX_BOARD_DIMENSION: u16 = 64;
 const MAX_EXPECTED_MATCH_MINUTES: u16 = 24 * 60;
@@ -184,6 +185,8 @@ pub struct ScenarioRules {
     pub establishment_cycles: u8,
     pub production_cycles: u8,
     pub promotion_cycles: u8,
+    #[serde(default)]
+    pub promotion_unlocks: PromotionUnlockRules,
     pub development_resets_when_interrupted: bool,
 }
 
@@ -197,7 +200,25 @@ impl Default for ScenarioRules {
             establishment_cycles: 3,
             production_cycles: 3,
             promotion_cycles: 1,
+            promotion_unlocks: PromotionUnlockRules::default(),
             development_resets_when_interrupted: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionUnlockRules {
+    pub bishop: u32,
+    pub rook: u32,
+    pub queen: u32,
+}
+
+impl Default for PromotionUnlockRules {
+    fn default() -> Self {
+        Self {
+            bishop: 2,
+            rook: 4,
+            queen: 8,
         }
     }
 }
@@ -372,10 +393,13 @@ where
 }
 
 fn validate_header(scenario: &ScenarioDefinition, errors: &mut Vec<ScenarioError>) {
-    if scenario.schema_version != SCENARIO_SCHEMA_VERSION {
+    if !(MIN_SUPPORTED_SCENARIO_SCHEMA_VERSION..=SCENARIO_SCHEMA_VERSION)
+        .contains(&scenario.schema_version)
+    {
         errors.push(ScenarioError::UnsupportedSchema {
             found: scenario.schema_version,
-            supported: SCENARIO_SCHEMA_VERSION,
+            minimum: MIN_SUPPORTED_SCENARIO_SCHEMA_VERSION,
+            maximum: SCENARIO_SCHEMA_VERSION,
         });
     }
     if scenario.id.trim().is_empty() {
@@ -411,6 +435,14 @@ fn validate_rule_configuration(scenario: &ScenarioDefinition, errors: &mut Vec<S
         == scenario.rules.pawn_forward_y.get(&Player::South)
     {
         errors.push(ScenarioError::PawnDirectionsNotOpposed);
+    }
+    let unlocks = scenario.rules.promotion_unlocks;
+    if unlocks.bishop == 0 || unlocks.bishop > unlocks.rook || unlocks.rook > unlocks.queen {
+        errors.push(ScenarioError::InvalidPromotionUnlocks {
+            bishop: unlocks.bishop,
+            rook: unlocks.rook,
+            queen: unlocks.queen,
+        });
     }
 }
 
@@ -810,8 +842,12 @@ fn validate_standard_army(
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ScenarioError {
-    #[error("scenario schema {found} is unsupported; this build supports {supported}")]
-    UnsupportedSchema { found: u16, supported: u16 },
+    #[error("scenario schema {found} is unsupported; this build supports {minimum}..={maximum}")]
+    UnsupportedSchema {
+        found: u16,
+        minimum: u16,
+        maximum: u16,
+    },
     #[error("{kind} id must not be empty")]
     EmptyId { kind: &'static str },
     #[error("required field {0} must not be empty")]
@@ -897,6 +933,10 @@ pub enum ScenarioError {
     },
     #[error("development, production, and promotion thresholds must be in {minimum}..={maximum}")]
     CycleThresholdOutOfRange { minimum: u8, maximum: u8 },
+    #[error(
+        "promotion unlocks must satisfy 0 < bishop ({bishop}) <= rook ({rook}) <= queen ({queen})"
+    )]
+    InvalidPromotionUnlocks { bishop: u32, rook: u32, queen: u32 },
     #[error("North and South Pawn directions must be opposed")]
     PawnDirectionsNotOpposed,
 }
@@ -1056,6 +1096,74 @@ mod tests {
     }
 
     #[test]
+    fn omitted_promotion_unlocks_use_the_current_ladder_for_legacy_scenarios() {
+        let mut explicit = minimal_scenario();
+        explicit.rules.army_setup = ArmySetup::Custom;
+        let encoded = ron::to_string(&explicit).expect("scenario serializes");
+        let without_unlocks = encoded.replace("promotion_unlocks:(bishop:2,rook:4,queen:8),", "");
+        assert_ne!(
+            without_unlocks, encoded,
+            "fixture must remove the new field"
+        );
+
+        let omitted_current: ScenarioDefinition =
+            ron::from_str(&without_unlocks).expect("omitted unlocks deserialize");
+        assert_eq!(
+            omitted_current.canonical_hash().unwrap(),
+            explicit.canonical_hash().unwrap(),
+            "an omitted default and an explicit default canonicalize identically"
+        );
+
+        let mut legacy = omitted_current;
+        legacy.schema_version = MIN_SUPPORTED_SCENARIO_SCHEMA_VERSION;
+
+        assert_eq!(
+            legacy.rules.promotion_unlocks,
+            PromotionUnlockRules::default()
+        );
+        assert_eq!(legacy.validate(), Ok(()));
+    }
+
+    #[test]
+    fn promotion_unlock_ladder_must_start_above_zero_and_be_nondecreasing() {
+        for invalid in [
+            PromotionUnlockRules {
+                bishop: 0,
+                rook: 4,
+                queen: 8,
+            },
+            PromotionUnlockRules {
+                bishop: 4,
+                rook: 2,
+                queen: 8,
+            },
+            PromotionUnlockRules {
+                bishop: 2,
+                rook: 8,
+                queen: 4,
+            },
+        ] {
+            let mut scenario = minimal_scenario();
+            scenario.rules.army_setup = ArmySetup::Custom;
+            scenario.rules.promotion_unlocks = invalid;
+            assert!(
+                scenario.validate().unwrap_err().iter().any(|error| {
+                    matches!(error, ScenarioError::InvalidPromotionUnlocks { .. })
+                })
+            );
+        }
+
+        let mut equal_thresholds = minimal_scenario();
+        equal_thresholds.rules.army_setup = ArmySetup::Custom;
+        equal_thresholds.rules.promotion_unlocks = PromotionUnlockRules {
+            bishop: 2,
+            rook: 2,
+            queen: 2,
+        };
+        assert_eq!(equal_thresholds.validate(), Ok(()));
+    }
+
+    #[test]
     fn reports_multiple_errors_at_once() {
         let mut scenario = minimal_scenario();
         scenario.rules.army_setup = ArmySetup::Custom;
@@ -1132,9 +1240,10 @@ mod tests {
 
     #[test]
     fn introductory_authored_layout_is_valid_and_rotationally_symmetric() {
+        let authored = include_str!("../../../assets/scenarios/introductory.ron");
+        assert!(authored.contains("promotion_unlocks: (bishop: 2, rook: 4, queen: 8)"));
         let scenario: ScenarioDefinition =
-            ron::from_str(include_str!("../../../assets/scenarios/introductory.ron"))
-                .expect("introductory scenario parses");
+            ron::from_str(authored).expect("introductory scenario parses");
         assert_eq!(scenario.validate(), Ok(()));
         assert_eq!(
             scenario.board,
@@ -1223,9 +1332,10 @@ mod tests {
     fn standard_authored_layout_is_valid_default_and_rotationally_symmetric() {
         use crate::{rules::governance_report, state::MatchState};
 
+        let authored = include_str!("../../../assets/scenarios/standard.ron");
+        assert!(authored.contains("promotion_unlocks: (bishop: 2, rook: 4, queen: 8)"));
         let scenario: ScenarioDefinition =
-            ron::from_str(include_str!("../../../assets/scenarios/standard.ron"))
-                .expect("standard scenario parses");
+            ron::from_str(authored).expect("standard scenario parses");
         assert_eq!(scenario.validate(), Ok(()));
         assert_eq!(
             scenario.board,
@@ -1321,9 +1431,9 @@ mod tests {
 
     #[test]
     fn large_authored_layout_is_valid_symmetric_and_has_multiple_theatre_routes() {
-        let scenario: ScenarioDefinition =
-            ron::from_str(include_str!("../../../assets/scenarios/large.ron"))
-                .expect("large scenario parses");
+        let authored = include_str!("../../../assets/scenarios/large.ron");
+        assert!(authored.contains("promotion_unlocks: (bishop: 2, rook: 4, queen: 8)"));
+        let scenario: ScenarioDefinition = ron::from_str(authored).expect("large scenario parses");
         assert_eq!(scenario.validate(), Ok(()));
         assert_eq!(
             scenario.board,

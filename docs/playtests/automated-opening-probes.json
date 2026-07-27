@@ -1,7 +1,7 @@
 [
   {
     "scenario_id": "introductory-crossing",
-    "scenario_hash": "40dcc81b2df40b0b0fc2a75212a392e1cdc7a7acb1b9e12865c5f927c1028bff",
+    "scenario_hash": "466adb9039df9156f6be834587f5954a3ffc1d83979afbe199d1b1c8a3f3b6c2",
     "flank": "west",
     "north_target_settlement": "south-crossroads",
     "south_target_settlement": "north-homestead",
@@ -23,7 +23,7 @@
   },
   {
     "scenario_id": "introductory-crossing",
-    "scenario_hash": "40dcc81b2df40b0b0fc2a75212a392e1cdc7a7acb1b9e12865c5f927c1028bff",
+    "scenario_hash": "466adb9039df9156f6be834587f5954a3ffc1d83979afbe199d1b1c8a3f3b6c2",
     "flank": "east",
     "north_target_settlement": "south-homestead",
     "south_target_settlement": "north-crossroads",
@@ -45,7 +45,7 @@
   },
   {
     "scenario_id": "crownlines-standard",
-    "scenario_hash": "2eb804d4b738631214d17e291b7e3fa5d38fda1dd5d4051765d165e75bc61118",
+    "scenario_hash": "874c4ac1b7b0ad90698c961ff8c830f745fe30eebdaca480b2695cc88fd7a568",
     "flank": "west",
     "north_target_settlement": "south-west-market",
     "south_target_settlement": "north-gate-town",
@@ -67,7 +67,7 @@
   },
   {
     "scenario_id": "crownlines-standard",
-    "scenario_hash": "2eb804d4b738631214d17e291b7e3fa5d38fda1dd5d4051765d165e75bc61118",
+    "scenario_hash": "874c4ac1b7b0ad90698c961ff8c830f745fe30eebdaca480b2695cc88fd7a568",
     "flank": "east",
     "north_target_settlement": "south-gate-town",
     "south_target_settlement": "north-east-market",
@@ -89,7 +89,7 @@
   },
   {
     "scenario_id": "three-theatres",
-    "scenario_hash": "9f67ed7f28e660ead5bbcb5be93c941e8d0692e1ed51162dfc1385b9f8e97248",
+    "scenario_hash": "d0ea7d230a309a9da6d87051e9c087eae0328e8fc8f9d9b61c855da1470015cd",
     "flank": "west",
     "north_target_settlement": "south-west-front",
     "south_target_settlement": "north-west-front",
@@ -111,7 +111,7 @@
   },
   {
     "scenario_id": "three-theatres",
-    "scenario_hash": "9f67ed7f28e660ead5bbcb5be93c941e8d0692e1ed51162dfc1385b9f8e97248",
+    "scenario_hash": "d0ea7d230a309a9da6d87051e9c087eae0328e8fc8f9d9b61c855da1470015cd",
     "flank": "east",
     "north_target_settlement": "south-east-front",
     "south_target_settlement": "north-east-front",

@@ -1,5 +1,5 @@
 (
-    schema_version: 1,
+    schema_version: 2,
     id: "three-theatres",
     metadata: (
         name: "The Three Theatres",
@@ -166,6 +166,7 @@
         pawn_forward_y: {north: 1, south: -1}, army_setup: standard,
         allow_pawn_double_step: true, allow_en_passant: true,
         establishment_cycles: 3, production_cycles: 3, promotion_cycles: 2,
+        promotion_unlocks: (bishop: 2, rook: 4, queen: 8),
         development_resets_when_interrupted: false,
     ),
 )

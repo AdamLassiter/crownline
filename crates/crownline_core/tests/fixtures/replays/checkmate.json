@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "application_version": "0.1.0-golden",
-  "scenario_schema_version": 1,
+  "scenario_schema_version": 2,
   "scenario_id": "golden-checkmate",
   "initial_state_hash": "d49d7e661d1bd7cca8fbf7bb9e992f78c0ea4a440291fc7fe4160c6feb07ac9c",
   "initial_clocks": null,
@@ -66,4 +66,3 @@
     }
   ]
 }
-

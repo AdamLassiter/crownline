@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "application_version": "0.1.0-golden",
-  "scenario_schema_version": 1,
+  "scenario_schema_version": 2,
   "scenario_id": "golden-timeout",
   "initial_state_hash": "ddb6f977ed328c314c268d2f16353bbfc2c9e7001ee9299cfdc5d0cc9fef7da8",
   "initial_clocks": {
@@ -59,4 +59,3 @@
     }
   ]
 }
-

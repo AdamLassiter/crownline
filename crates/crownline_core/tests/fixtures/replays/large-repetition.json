@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "application_version": "0.1.0-golden",
-  "scenario_schema_version": 1,
+  "scenario_schema_version": 2,
   "scenario_id": "three-theatres",
   "initial_state_hash": "c621d67a54fd1572e457bebcb1cdb8bd3c091622391c428e179f8208dca821a5",
   "initial_clocks": null,
@@ -182,4 +182,3 @@
     }
   ]
 }
-

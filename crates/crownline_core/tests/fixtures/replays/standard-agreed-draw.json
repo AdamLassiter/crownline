@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "application_version": "0.1.0-golden",
-  "scenario_schema_version": 1,
+  "scenario_schema_version": 2,
   "scenario_id": "crownlines-standard",
   "initial_state_hash": "830e10a978db2c5e9bf2019d750c19e62f6dae91e740fdab518658ff50f0a526",
   "initial_clocks": null,
@@ -92,4 +92,3 @@
     }
   ]
 }
-

@@ -1,5 +1,5 @@
 (
-    schema_version: 1,
+    schema_version: 2,
     id: "golden-combined-realms",
     metadata: (
         name: "golden-combined-realms",
@@ -111,7 +111,7 @@
         establishment_cycles: 1,
         production_cycles: 1,
         promotion_cycles: 1,
+        promotion_unlocks: (bishop: 2, rook: 4, queen: 8),
         development_resets_when_interrupted: false,
     ),
 )
-
