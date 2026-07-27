@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::{
     rules::{migrate_promotion_eligibility, validate_promotion_eligibility},
     scenario::{SCENARIO_SCHEMA_VERSION, ScenarioDefinition},
-    state::{MatchState, TransitionError},
+    state::{MatchState, TransitionError, validate_exploration},
 };
 
 pub const SAVE_FORMAT_VERSION: u16 = 2;
@@ -150,6 +150,7 @@ impl SnapshotEnvelope {
             validate_envelope_scenario(&envelope.scenario_id, scenario)?;
             validate_promotion_eligibility(scenario, &envelope.state)
                 .map_err(PersistenceError::State)?;
+            validate_exploration(scenario, &envelope.state).map_err(PersistenceError::State)?;
             return Ok(envelope);
         }
         if source_version != 1 {
@@ -158,12 +159,14 @@ impl SnapshotEnvelope {
                 current: SNAPSHOT_FORMAT_VERSION,
             });
         }
+        reject_legacy_fog_migration(source_version, scenario)?;
         set_version_fields(&mut value, SNAPSHOT_FORMAT_VERSION)?;
         let mut envelope: Self = serde_json::from_value(value)
             .map_err(|error| PersistenceError::MalformedJson(error.to_string()))?;
         validate_envelope_scenario(&envelope.scenario_id, scenario)?;
         migrate_promotion_eligibility(scenario, &mut envelope.state)
             .map_err(|error| migration_error(source_version, &error))?;
+        validate_exploration(scenario, &envelope.state).map_err(PersistenceError::State)?;
         envelope.state_hash = envelope
             .state
             .canonical_hash()
@@ -258,17 +261,20 @@ impl SaveReader {
             validate_envelope_scenario(&envelope.scenario_id, scenario)?;
             validate_promotion_eligibility(scenario, &envelope.state)
                 .map_err(PersistenceError::State)?;
+            validate_exploration(scenario, &envelope.state).map_err(PersistenceError::State)?;
             return Ok(envelope);
         }
         if source_version != 1 {
             return self.read(bytes);
         }
+        reject_legacy_fog_migration(source_version, scenario)?;
         set_version_fields(&mut value, SAVE_FORMAT_VERSION)?;
         let mut envelope: SaveEnvelope = serde_json::from_value(value)
             .map_err(|error| PersistenceError::MalformedJson(error.to_string()))?;
         validate_envelope_scenario(&envelope.scenario_id, scenario)?;
         migrate_promotion_eligibility(scenario, &mut envelope.state)
             .map_err(|error| migration_error(source_version, &error))?;
+        validate_exploration(scenario, &envelope.state).map_err(PersistenceError::State)?;
         envelope.state_hash = envelope
             .state
             .canonical_hash()
@@ -503,6 +509,20 @@ fn migration_error(source_version: u16, error: &TransitionError) -> PersistenceE
     }
 }
 
+fn reject_legacy_fog_migration(
+    source_version: u16,
+    scenario: &ScenarioDefinition,
+) -> Result<(), PersistenceError> {
+    if scenario.rules.fog.is_some() {
+        return Err(PersistenceError::MigrationFailed {
+            source_version,
+            message: "legacy state has no exploration history for a fog-enabled scenario"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
 fn atomic_error(stage: AtomicWriteStage, message: String) -> PersistenceError {
     PersistenceError::AtomicWrite { stage, message }
 }
@@ -512,12 +532,13 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use crate::{
+        rules::apply_action,
         scenario::{
-            ArmySetup, BoardSize, Coord, Deployment, PieceKind, Player, ScenarioDefinition,
-            ScenarioMetadata, ScenarioRules,
+            ArmySetup, BoardSize, Coord, Deployment, FOG_RULES_SCHEMA_VERSION, FogRules, PieceKind,
+            Player, ScenarioDefinition, ScenarioMetadata, ScenarioRules,
         },
         state::{
-            ClockState, MandatoryChoice, MatchOutcome, OutcomeReason, PieceId, PieceOrigin,
+            Action, ClockState, MandatoryChoice, MatchOutcome, OutcomeReason, PieceId, PieceOrigin,
             PromotionEligibility, TurnPhase,
         },
     };
@@ -617,6 +638,71 @@ mod tests {
         let snapshot = SnapshotEnvelope::new("0.1.0-test", state).unwrap();
         let decoded = SnapshotEnvelope::from_json(&snapshot.to_json().unwrap()).unwrap();
         assert_eq!(decoded, snapshot);
+    }
+
+    #[test]
+    fn fog_save_and_snapshot_preserve_exploration_and_reject_missing_history() {
+        let mut scenario = persistence_scenario();
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let king = state
+            .pieces
+            .values()
+            .find(|piece| piece.owner == Player::South && piece.kind == PieceKind::King)
+            .unwrap()
+            .id;
+        let state = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: king,
+                to: Coord::new(4, 6),
+            },
+        )
+        .unwrap()
+        .state;
+
+        let save = SaveEnvelope::new("0.1.0-test", state.clone()).unwrap();
+        let decoded = SaveReader::new()
+            .read_with_scenario(&save.to_json().unwrap(), &scenario)
+            .unwrap();
+        assert_eq!(decoded.state.exploration, state.exploration);
+
+        let snapshot = SnapshotEnvelope::new("0.1.0-test", state.clone()).unwrap();
+        let decoded =
+            SnapshotEnvelope::from_json_with_scenario(&snapshot.to_json().unwrap(), &scenario)
+                .unwrap();
+        assert_eq!(decoded.state.exploration, state.exploration);
+
+        let mut missing = serde_json::to_value(save).unwrap();
+        missing["state"]
+            .as_object_mut()
+            .unwrap()
+            .remove("exploration");
+        let missing_state: MatchState = serde_json::from_value(missing["state"].clone()).unwrap();
+        missing["state_hash"] = Value::from(missing_state.canonical_hash().unwrap());
+        assert!(matches!(
+            SaveReader::new()
+                .read_with_scenario(&serde_json::to_vec(&missing).unwrap(), &scenario,),
+            Err(PersistenceError::State(
+                TransitionError::ExplorationModeMismatch
+            ))
+        ));
+
+        missing["format_version"] = Value::from(1);
+        missing["scenario_schema_version"] = Value::from(1);
+        assert!(matches!(
+            SaveReader::new()
+                .read_with_scenario(&serde_json::to_vec(&missing).unwrap(), &scenario,),
+            Err(PersistenceError::MigrationFailed {
+                source_version: 1,
+                ..
+            })
+        ));
     }
 
     #[test]

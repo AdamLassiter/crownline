@@ -96,6 +96,12 @@ not substitute a stale or sentinel value that implies it still exists.
   restored canonical pieces. Replay at revision zero follows match creation;
   each later accepted record follows the same post-transition boundary.
 
+Exploration is part of canonical state serialization and hashing but is excluded
+from the threefold-repetition identity because knowledge does not change board
+legality. Perfect-information states omit the optional exploration field. Current
+vision is never serialized; consumers use a non-canonical cache invalidated by
+scenario geometry, fog configuration, or canonical revision.
+
 ## Action-result inference boundary
 
 The authoritative reducer continues to use complete canonical state. A seat may

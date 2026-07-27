@@ -6,6 +6,97 @@ use thiserror::Error;
 
 use crate::scenario::{Coord, PieceKind, Player, PromotionUnlockRules, ScenarioDefinition};
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplorationState {
+    pub north: BTreeSet<Coord>,
+    pub south: BTreeSet<Coord>,
+}
+
+impl ExplorationState {
+    #[must_use]
+    pub const fn explored(&self, player: Player) -> &BTreeSet<Coord> {
+        match player {
+            Player::North => &self.north,
+            Player::South => &self.south,
+        }
+    }
+
+    fn explored_mut(&mut self, player: Player) -> &mut BTreeSet<Coord> {
+        match player {
+            Player::North => &mut self.north,
+            Player::South => &mut self.south,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisibilityState {
+    Undiscovered,
+    Explored,
+    Visible,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VisibilityCacheKey {
+    scenario_id: String,
+    board: crate::scenario::BoardSize,
+    fog: Option<crate::scenario::FogRules>,
+    revision: u64,
+}
+
+/// Non-canonical derived current vision, invalidated at scenario or revision boundaries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VisibilityCache {
+    key: Option<VisibilityCacheKey>,
+    north: BTreeSet<Coord>,
+    south: BTreeSet<Coord>,
+}
+
+impl VisibilityCache {
+    /// Returns one seat's derived visibility, recomputing both seats only when
+    /// scenario geometry, fog configuration, or canonical revision changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns scenario, identity, or canonical-state validation errors.
+    pub fn visible<'a>(
+        &'a mut self,
+        scenario: &ScenarioDefinition,
+        state: &MatchState,
+        player: Player,
+    ) -> Result<&'a BTreeSet<Coord>, TransitionError> {
+        let key = VisibilityCacheKey {
+            scenario_id: scenario.id.clone(),
+            board: scenario.board,
+            fog: scenario.rules.fog,
+            revision: state.revision,
+        };
+        if self.key.as_ref() != Some(&key) {
+            scenario
+                .validate()
+                .map_err(TransitionError::InvalidScenario)?;
+            if state.scenario_id != scenario.id {
+                return Err(TransitionError::ScenarioMismatch {
+                    expected: state.scenario_id.clone(),
+                    actual: scenario.id.clone(),
+                });
+            }
+            state.validate_invariants()?;
+            self.north = visible_coordinates_unchecked(scenario, state, Player::North);
+            self.south = visible_coordinates_unchecked(scenario, state, Player::South);
+            self.key = Some(key);
+        }
+        Ok(match player {
+            Player::North => &self.north,
+            Player::South => &self.south,
+        })
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PieceId(pub u32);
 
@@ -210,6 +301,8 @@ pub struct MatchState {
     pub active_player: Player,
     pub phase: TurnPhase,
     pub pieces: BTreeMap<PieceId, Piece>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exploration: Option<ExplorationState>,
     pub settlements: Vec<SettlementState>,
     pub en_passant: Option<EnPassantState>,
     pub available_castling_routes: BTreeSet<String>,
@@ -262,6 +355,7 @@ impl MatchState {
             active_player: Player::South,
             phase: TurnPhase::Command,
             pieces,
+            exploration: scenario.rules.fog.map(|_| ExplorationState::default()),
             settlements: (0..scenario.settlements.len())
                 .map(|index| {
                     Ok(SettlementState {
@@ -292,6 +386,7 @@ impl MatchState {
             outcome: None,
             next_piece_id,
         };
+        update_exploration_unchecked(scenario, &mut state);
         state.validate_invariants()?;
         let key = state.repetition_key()?;
         state.repetition_counts.insert(key, 1);
@@ -445,6 +540,183 @@ impl MatchState {
     }
 }
 
+/// Derives one seat's current visible coordinates from living friendly pieces.
+///
+/// Version-1 fog uses board-clipped Chebyshev distance and no blockers. Perfect-
+/// information scenarios return every board coordinate.
+///
+/// # Errors
+///
+/// Returns scenario, identity, or canonical-state validation errors.
+pub fn visible_coordinates(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    player: Player,
+) -> Result<BTreeSet<Coord>, TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+    state.validate_invariants()?;
+    Ok(visible_coordinates_unchecked(scenario, state, player))
+}
+
+/// Classifies one coordinate for a seat using durable exploration and derived vision.
+///
+/// # Errors
+///
+/// Returns scenario, state, identity, exploration, or coordinate errors.
+pub fn visibility_at(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    player: Player,
+    at: Coord,
+) -> Result<VisibilityState, TransitionError> {
+    if !at.is_within(scenario.board) {
+        return Err(TransitionError::CoordinateOutOfBounds(at));
+    }
+    validate_exploration(scenario, state)?;
+    if scenario.rules.fog.is_none() {
+        return Ok(VisibilityState::Visible);
+    }
+    if visible_coordinates_unchecked(scenario, state, player).contains(&at) {
+        return Ok(VisibilityState::Visible);
+    }
+    Ok(
+        if state
+            .exploration
+            .as_ref()
+            .is_some_and(|knowledge| knowledge.explored(player).contains(&at))
+        {
+            VisibilityState::Explored
+        } else {
+            VisibilityState::Undiscovered
+        },
+    )
+}
+
+/// Unions current vision into each seat's durable exploration knowledge.
+///
+/// Perfect-information states retain `None`, keeping their legacy serialized
+/// representation. This function is also the single reconstruction primitive
+/// used by creation and persistence migrations.
+///
+/// # Errors
+///
+/// Returns scenario, identity, or canonical-state validation errors.
+pub fn update_exploration(
+    scenario: &ScenarioDefinition,
+    state: &mut MatchState,
+) -> Result<(), TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+    state.validate_invariants()?;
+    update_exploration_unchecked(scenario, state);
+    Ok(())
+}
+
+/// Validates that durable exploration matches the scenario mode and contains
+/// current vision for both seats.
+///
+/// # Errors
+///
+/// Returns typed errors for mode mismatch, out-of-board knowledge, or a missing
+/// current-visible coordinate.
+pub fn validate_exploration(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+) -> Result<(), TransitionError> {
+    scenario
+        .validate()
+        .map_err(TransitionError::InvalidScenario)?;
+    if state.scenario_id != scenario.id {
+        return Err(TransitionError::ScenarioMismatch {
+            expected: state.scenario_id.clone(),
+            actual: scenario.id.clone(),
+        });
+    }
+    state.validate_invariants()?;
+    match (scenario.rules.fog, &state.exploration) {
+        (None, None) => Ok(()),
+        (None, Some(_)) | (Some(_), None) => Err(TransitionError::ExplorationModeMismatch),
+        (Some(_), Some(knowledge)) => {
+            for player in Player::ALL {
+                for &at in knowledge.explored(player) {
+                    if !at.is_within(scenario.board) {
+                        return Err(TransitionError::ExploredCoordinateOutOfBounds { player, at });
+                    }
+                }
+                if let Some(at) = visible_coordinates_unchecked(scenario, state, player)
+                    .difference(knowledge.explored(player))
+                    .next()
+                    .copied()
+                {
+                    return Err(TransitionError::VisibleCoordinateNotExplored { player, at });
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+fn update_exploration_unchecked(scenario: &ScenarioDefinition, state: &mut MatchState) {
+    let Some(_) = scenario.rules.fog else {
+        state.exploration = None;
+        return;
+    };
+    let visible = Player::ALL.map(|player| {
+        (
+            player,
+            visible_coordinates_unchecked(scenario, state, player),
+        )
+    });
+    let knowledge = state
+        .exploration
+        .get_or_insert_with(ExplorationState::default);
+    for (player, coordinates) in visible {
+        knowledge.explored_mut(player).extend(coordinates);
+    }
+}
+
+fn visible_coordinates_unchecked(
+    scenario: &ScenarioDefinition,
+    state: &MatchState,
+    player: Player,
+) -> BTreeSet<Coord> {
+    let Some(fog) = scenario.rules.fog else {
+        return (0..scenario.board.width)
+            .flat_map(|x| (0..scenario.board.height).map(move |y| Coord::new(x, y)))
+            .collect();
+    };
+    let friendly: Vec<_> = state
+        .pieces
+        .values()
+        .filter(|piece| piece.owner == player)
+        .map(|piece| piece.at)
+        .collect();
+    (0..scenario.board.width)
+        .flat_map(|x| (0..scenario.board.height).map(move |y| Coord::new(x, y)))
+        .filter(|at| {
+            friendly.iter().any(|piece| {
+                u32::from(piece.x.abs_diff(at.x)).max(u32::from(piece.y.abs_diff(at.y)))
+                    <= fog.vision_radius
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Action {
@@ -566,6 +838,12 @@ pub enum TransitionError {
     InvalidKingCount { player: Player, found: u8 },
     #[error("canonical state references missing piece {0:?}")]
     DanglingPieceReference(PieceId),
+    #[error("canonical exploration presence does not match the scenario fog mode")]
+    ExplorationModeMismatch,
+    #[error("{player:?} exploration contains out-of-board coordinate {at:?}")]
+    ExploredCoordinateOutOfBounds { player: Player, at: Coord },
+    #[error("{player:?} current-visible coordinate {at:?} is missing from exploration")]
+    VisibleCoordinateNotExplored { player: Player, at: Coord },
 }
 
 #[cfg(test)]
@@ -573,7 +851,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::scenario::{
-        BoardSize, Deployment, SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules,
+        BoardSize, Deployment, FOG_RULES_SCHEMA_VERSION, FogRules, SCENARIO_SCHEMA_VERSION,
+        ScenarioMetadata, ScenarioRules,
     };
 
     use super::*;
@@ -663,6 +942,152 @@ mod tests {
             first.canonical_hash().unwrap(),
             second.canonical_hash().unwrap()
         );
+        assert!(first.exploration.is_none());
+        assert!(
+            !serde_json::to_string(&first)
+                .unwrap()
+                .contains("exploration")
+        );
+    }
+
+    #[test]
+    fn fog_creation_and_moves_update_independent_monotonic_knowledge() {
+        let mut scenario = scenario();
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let knowledge = state.exploration.as_ref().unwrap();
+        let north_before = knowledge.north.clone();
+        assert_eq!(knowledge.north.len(), 9);
+        assert_eq!(knowledge.south.len(), 9);
+        assert_eq!(
+            visibility_at(&scenario, &state, Player::South, Coord::new(3, 15)).unwrap(),
+            VisibilityState::Visible
+        );
+        assert_eq!(
+            visibility_at(&scenario, &state, Player::South, Coord::new(0, 0)).unwrap(),
+            VisibilityState::Undiscovered
+        );
+
+        let king = state
+            .pieces
+            .values()
+            .find(|piece| piece.owner == Player::South)
+            .unwrap()
+            .id;
+        let moved = crate::rules::apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: king,
+                to: Coord::new(4, 13),
+            },
+        )
+        .unwrap()
+        .state;
+        let moved_knowledge = moved.exploration.as_ref().unwrap();
+        assert_eq!(&moved_knowledge.north, &north_before);
+        assert!(moved_knowledge.south.is_superset(&knowledge.south));
+        assert_eq!(moved_knowledge.south.len(), 12);
+        assert_eq!(
+            visibility_at(&scenario, &moved, Player::South, Coord::new(3, 15)).unwrap(),
+            VisibilityState::Explored
+        );
+        assert_eq!(
+            visibility_at(&scenario, &moved, Player::South, Coord::new(3, 12)).unwrap(),
+            VisibilityState::Visible
+        );
+        validate_exploration(&scenario, &moved).unwrap();
+
+        let mut cache = VisibilityCache::default();
+        assert!(
+            cache
+                .visible(&scenario, &state, Player::South)
+                .unwrap()
+                .contains(&Coord::new(3, 15))
+        );
+        assert_eq!(cache.key.as_ref().unwrap().revision, 0);
+        assert!(
+            !cache
+                .visible(&scenario, &moved, Player::South)
+                .unwrap()
+                .contains(&Coord::new(3, 15))
+        );
+        assert_eq!(cache.key.as_ref().unwrap().revision, 1);
+
+        let rematch = MatchState::from_scenario(&scenario).unwrap();
+        assert_eq!(rematch.exploration, state.exploration);
+        assert_ne!(rematch.exploration, moved.exploration);
+    }
+
+    #[test]
+    fn exploration_changes_canonical_hash_but_not_repetition_identity() {
+        let mut scenario = scenario();
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let mut learned = state.clone();
+        learned
+            .exploration
+            .as_mut()
+            .unwrap()
+            .south
+            .insert(Coord::new(0, 0));
+        assert_ne!(
+            state.canonical_hash().unwrap(),
+            learned.canonical_hash().unwrap()
+        );
+        assert_eq!(
+            state.repetition_key().unwrap(),
+            learned.repetition_key().unwrap()
+        );
+    }
+
+    #[test]
+    fn exploration_validation_rejects_mode_bounds_and_missing_current_vision() {
+        let mut fog = scenario();
+        fog.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
+        let state = MatchState::from_scenario(&fog).unwrap();
+
+        let mut missing = state.clone();
+        missing.exploration.as_mut().unwrap().south.clear();
+        assert!(matches!(
+            validate_exploration(&fog, &missing),
+            Err(TransitionError::VisibleCoordinateNotExplored {
+                player: Player::South,
+                ..
+            })
+        ));
+
+        let mut outside = state.clone();
+        outside
+            .exploration
+            .as_mut()
+            .unwrap()
+            .north
+            .insert(Coord::new(16, 0));
+        assert!(matches!(
+            validate_exploration(&fog, &outside),
+            Err(TransitionError::ExploredCoordinateOutOfBounds {
+                player: Player::North,
+                at: Coord { x: 16, y: 0 }
+            })
+        ));
+
+        let mut perfect = MatchState::from_scenario(&scenario()).unwrap();
+        perfect.exploration = Some(ExplorationState::default());
+        assert!(matches!(
+            validate_exploration(&scenario(), &perfect),
+            Err(TransitionError::ExplorationModeMismatch)
+        ));
     }
 
     #[test]

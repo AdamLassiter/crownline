@@ -72,6 +72,15 @@ scenario hashes remain unchanged. Enabled fog currently requires nested schema
 1 and a board-compatible radius; later line-of-sight semantics must increment or
 replace that nested version rather than reinterpret existing scenario bytes.
 
+Fog-enabled canonical state stores each seat's explored-coordinate history;
+current visibility remains derived. The optional state field is omitted for
+perfect-information matches, preserving their legacy canonical state bytes and
+hashes. Scenario-aware save and snapshot readers reject a fog state with missing
+or invalid exploration. Format 1 saves/snapshots cannot be upgraded into fog
+matches because their prior exploration cannot be inferred from a final board,
+while format 1 journals can reconstruct exploration exactly by replaying every
+accepted action through the current deterministic transition boundary.
+
 ## Database upgrades and rollback
 
 Database migrations are ordered, forward-only, and transactional. Before

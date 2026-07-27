@@ -7,7 +7,7 @@ use crate::{
     state::{
         Action, EnPassantState, MandatoryChoice, MatchOutcome, MatchState, OutcomeReason, Piece,
         PieceId, PieceOrigin, PromotionEligibility, PromotionKind, RealmControlScore,
-        TransitionError, TurnPhase,
+        TransitionError, TurnPhase, update_exploration, validate_exploration,
     },
 };
 
@@ -520,6 +520,7 @@ pub fn apply_action(
         });
     }
     validate_promotion_eligibility(scenario, state)?;
+    validate_exploration(scenario, state)?;
     if state.outcome.is_some() {
         return Err(TransitionError::MatchFinished);
     }
@@ -565,6 +566,7 @@ pub fn apply_action(
         latch_settlement_interruptions(scenario, &mut next)?;
         record_repetition(&mut next)?;
     }
+    update_exploration(scenario, &mut next)?;
     let events = transition_events(state, &next, action);
     Ok(Transition {
         state: next,
@@ -2345,9 +2347,9 @@ mod tests {
 
     use crate::{
         scenario::{
-            BoardSize, CastlingRoute, Deployment, Edge, EdgeKind, Fortification, KeepDefinition,
-            PromotionSite, PromotionUnlockRules, SCENARIO_SCHEMA_VERSION, ScenarioMetadata,
-            ScenarioRules, SettlementSite, TileTerrain,
+            BoardSize, CastlingRoute, Deployment, Edge, EdgeKind, FOG_RULES_SCHEMA_VERSION,
+            FogRules, Fortification, KeepDefinition, PromotionSite, PromotionUnlockRules,
+            SCENARIO_SCHEMA_VERSION, ScenarioMetadata, ScenarioRules, SettlementSite, TileTerrain,
         },
         state::PieceOrigin,
     };
@@ -4962,8 +4964,14 @@ mod tests {
 
     #[test]
     fn promotion_replaces_the_pawn_and_reports_stable_id_change() {
-        let scenario = scenario_with(vec![deployment(Player::South, PieceKind::Pawn, 0, 1)]);
+        let mut scenario = scenario_with(vec![deployment(Player::South, PieceKind::Pawn, 0, 1)]);
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
         let mut state = MatchState::from_scenario(&scenario).unwrap();
+        let visible_before = crate::state::visible_coordinates(&scenario, &state, Player::South)
+            .expect("starting vision");
         let pawn = piece_id_at(&state, Coord::new(0, 1));
         let promoted = PieceId(state.next_piece_id);
         state.promotion_candidates.insert(pawn, 2);
@@ -4991,6 +4999,12 @@ mod tests {
         assert_eq!(transition.state.phase, TurnPhase::Command);
         assert_eq!(transition.state.revision, state.revision + 1);
         assert_eq!(
+            crate::state::visible_coordinates(&scenario, &transition.state, Player::South)
+                .expect("promoted vision"),
+            visible_before,
+            "promotion on one square must retain that piece's vision"
+        );
+        assert_eq!(
             transition.events,
             vec![TransitionEvent::PiecePromoted {
                 pawn,
@@ -4998,6 +5012,85 @@ mod tests {
                 kind: PieceKind::Knight,
                 at: Coord::new(0, 1),
             }]
+        );
+    }
+
+    #[test]
+    fn capture_removes_future_enemy_vision_but_preserves_exploration() {
+        let mut scenario = scenario_with(vec![
+            deployment(Player::South, PieceKind::Rook, 5, 5),
+            deployment(Player::North, PieceKind::Rook, 5, 3),
+        ]);
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let south_rook = piece_id_at(&state, Coord::new(5, 5));
+        let formerly_seen = Coord::new(6, 3);
+        assert_eq!(
+            crate::state::visibility_at(&scenario, &state, Player::North, formerly_seen).unwrap(),
+            crate::state::VisibilityState::Visible
+        );
+
+        let captured = apply_action(
+            &scenario,
+            &state,
+            &Action::Move {
+                player: Player::South,
+                piece: south_rook,
+                to: Coord::new(5, 3),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            crate::state::visibility_at(&scenario, &captured.state, Player::North, formerly_seen,)
+                .unwrap(),
+            crate::state::VisibilityState::Explored
+        );
+    }
+
+    #[test]
+    fn produced_pawn_adds_vision_at_the_accepted_placement_boundary() {
+        let mut scenario = scenario_with(Vec::new());
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
+        scenario.settlements.push(SettlementSite {
+            id: "fog-settlement".to_owned(),
+            at: Coord::new(2, 2),
+        });
+        let mut state = MatchState::from_scenario(&scenario).unwrap();
+        state.settlements[0].owner = Some(Player::South);
+        state.settlements[0].established = true;
+        let placement = Coord::new(2, 3);
+        let newly_seen = Coord::new(1, 2);
+        state.phase = TurnPhase::ResolvingChoices {
+            queue: vec![MandatoryChoice::PlacePawn {
+                settlement_index: 0,
+                legal_squares: BTreeSet::from([placement]),
+            }],
+        };
+        assert_eq!(
+            crate::state::visibility_at(&scenario, &state, Player::South, newly_seen).unwrap(),
+            crate::state::VisibilityState::Undiscovered
+        );
+
+        let placed = apply_action(
+            &scenario,
+            &state,
+            &Action::PlacePawn {
+                player: Player::South,
+                settlement_index: 0,
+                at: placement,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            crate::state::visibility_at(&scenario, &placed.state, Player::South, newly_seen)
+                .unwrap(),
+            crate::state::VisibilityState::Visible
         );
     }
 

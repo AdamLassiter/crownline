@@ -33,4 +33,8 @@ pub use scenario::{
     FOG_RULES_SCHEMA_VERSION, FogRules, PromotionUnlockRules, ScenarioDefinition, ScenarioError,
     ScenarioHashError,
 };
-pub use state::{Action, MatchState, PromotionEligibility, RealmControlScore, TransitionError};
+pub use state::{
+    Action, ExplorationState, MatchState, PromotionEligibility, RealmControlScore, TransitionError,
+    VisibilityCache, VisibilityState, update_exploration, validate_exploration, visibility_at,
+    visible_coordinates,
+};

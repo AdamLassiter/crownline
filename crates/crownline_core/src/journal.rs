@@ -509,7 +509,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::scenario::{
-        ArmySetup, BoardSize, Coord, Deployment, PieceKind, ScenarioMetadata, ScenarioRules,
+        ArmySetup, BoardSize, Coord, Deployment, FOG_RULES_SCHEMA_VERSION, FogRules, PieceKind,
+        ScenarioMetadata, ScenarioRules,
     };
 
     use super::*;
@@ -596,6 +597,53 @@ mod tests {
         assert_eq!(
             decoded.records.last().unwrap().state_hash,
             replayed.canonical_hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn fog_journal_replays_and_migrates_identical_exploration() {
+        let mut scenario = scenario();
+        scenario.rules.fog = Some(FogRules {
+            schema_version: FOG_RULES_SCHEMA_VERSION,
+            vision_radius: 1,
+        });
+        let state = MatchState::from_scenario(&scenario).unwrap();
+        let king = state
+            .pieces
+            .values()
+            .find(|piece| piece.owner == Player::South)
+            .unwrap()
+            .id;
+        let action = Action::Move {
+            player: Player::South,
+            piece: king,
+            to: Coord::new(4, 6),
+        };
+        let mut journal = ActionJournal::new("0.1.0-test", &scenario).unwrap();
+        let AppendOutcome::Accepted(transition) = journal
+            .append(&scenario, &state, IdempotencyKey([4; 16]), &action)
+            .unwrap()
+        else {
+            panic!("fog move must be accepted");
+        };
+        let expected = transition.state;
+        assert_eq!(journal.replay(&scenario).unwrap(), expected);
+
+        let mut legacy = serde_json::to_value(&journal).unwrap();
+        legacy["format_version"] = serde_json::Value::from(1);
+        legacy["scenario_schema_version"] = serde_json::Value::from(1);
+        legacy["initial_state_hash"] = serde_json::Value::from("legacy-initial-hash");
+        legacy["records"][0]["events"] = serde_json::json!([]);
+        legacy["records"][0]["state_hash"] = serde_json::Value::from("legacy-state-hash");
+        let migrated = ActionJournal::from_json_with_scenario(
+            &serde_json::to_vec(&legacy).unwrap(),
+            &scenario,
+        )
+        .unwrap();
+        assert_eq!(migrated.replay(&scenario).unwrap(), expected);
+        assert_eq!(
+            migrated.replay(&scenario).unwrap().exploration,
+            expected.exploration
         );
     }
 
